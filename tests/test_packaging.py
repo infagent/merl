@@ -38,3 +38,12 @@ def test_both_plugin_manifests_share_the_four_skills() -> None:
         "claim",
         "answer",
     }
+
+    codex_marketplace = json.loads(
+        (ROOT / ".agents" / "plugins" / "marketplace.json").read_text()
+    )
+    claude_marketplace = json.loads(
+        (ROOT / ".claude-plugin" / "marketplace.json").read_text()
+    )
+    assert codex_marketplace["plugins"][0]["name"] == "merl"
+    assert claude_marketplace["plugins"][0]["name"] == "merl"
