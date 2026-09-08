@@ -303,11 +303,13 @@ def test_direct_claim_cannot_bypass_routing(tmp_path: Path) -> None:
     assert "not routed" in denied.output.lower()
 
 
-def test_originating_project_cannot_claim_its_own_global_request(
+def test_sibling_session_can_claim_but_requester_cannot_claim_its_own_request(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "board"
     requester = initialized(home, tmp_path / "app")
+    sibling = initialized(home, tmp_path / "app")
+    initialized(home, tmp_path / "specialist", owns="unknown")
     asked = invoke(
         home,
         "ask",
@@ -326,16 +328,35 @@ def test_originating_project_cannot_claim_its_own_global_request(
         "--blocking",
         "--json",
     )
+    request_id = json.loads(asked.output)["request_id"]
+    requester_inbox = invoke(
+        home, "inbox", "--session", requester["session_id"], "--json"
+    )
+    sibling_inbox = invoke(home, "inbox", "--session", sibling["session_id"], "--json")
     denied = invoke(
         home,
         "claim",
         "--session",
         requester["session_id"],
         "--request",
-        json.loads(asked.output)["request_id"],
+        request_id,
     )
+    claimed = invoke(
+        home,
+        "claim",
+        "--session",
+        sibling["session_id"],
+        "--request",
+        request_id,
+        "--json",
+    )
+
+    assert json.loads(requester_inbox.output) == []
+    assert json.loads(sibling_inbox.output)[0]["request_id"] == request_id
+    assert json.loads(sibling_inbox.output)[0]["match"] == "project"
     assert denied.exit_code == 2
-    assert "originating project" in denied.output.lower()
+    assert "requesting session" in denied.output.lower()
+    assert json.loads(claimed.output)["claimed_by"] == sibling["session_id"]
 
 
 def test_unmatched_request_appears_in_global_inbox(tmp_path: Path) -> None:

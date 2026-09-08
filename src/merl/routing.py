@@ -19,4 +19,4 @@ def request_match(
 
 
 def inbox_rank(*, match: str) -> int:
-    return {"ownership": 0, "capability": 1, "global": 2}[match]
+    return {"project": 0, "ownership": 1, "capability": 2, "global": 3}[match]

@@ -2,4 +2,4 @@
 set -euo pipefail
 
 plugin_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec uv run --project "${plugin_root}" merl "$@"
+exec uv run --quiet --no-dev --project "${plugin_root}" merl "$@"

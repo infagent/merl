@@ -14,15 +14,24 @@ def test_release_please_keeps_package_and_plugin_versions_in_sync() -> None:
     manifest = json.loads((ROOT / ".release-please-manifest.json").read_text())
     configuration = json.loads((ROOT / "release-please-config.json").read_text())
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    lock = tomllib.loads((ROOT / "uv.lock").read_text())
     claude_plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
     claude_marketplace = json.loads(
         (ROOT / ".claude-plugin" / "marketplace.json").read_text()
     )
     codex_plugin = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text())
+    locked_project = next(
+        package for package in lock["package"] if package["name"] == "merl"
+    )
     paths = {
         extra_file["path"]
         for extra_file in configuration["packages"]["."]["extra-files"]
     }
+    lock_updater = next(
+        extra_file
+        for extra_file in configuration["packages"]["."]["extra-files"]
+        if extra_file["path"] == "uv.lock"
+    )
 
     assert {
         manifest["."],
@@ -30,10 +39,17 @@ def test_release_please_keeps_package_and_plugin_versions_in_sync() -> None:
         claude_plugin["version"],
         claude_marketplace["plugins"][0]["version"],
         codex_plugin["version"],
+        locked_project["version"],
     } == {project["project"]["version"]}
     assert paths == {
         ".claude-plugin/plugin.json",
         ".claude-plugin/marketplace.json",
         ".codex-plugin/plugin.json",
         "src/merl/__init__.py",
+        "uv.lock",
+    }
+    assert lock_updater == {
+        "type": "toml",
+        "path": "uv.lock",
+        "jsonpath": "$.package[?(@.name.value=='merl')].version",
     }
