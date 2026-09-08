@@ -25,6 +25,11 @@
         {
           "type": "generic",
           "path": "src/merl/__init__.py"
+        },
+        {
+          "type": "toml",
+          "path": "uv.lock",
+          "jsonpath": "$.package[?(@.name.value=='merl')].version"
         }
       ]
     }
