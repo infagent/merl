@@ -1,0 +1,13 @@
+# Changelog
+
+## 0.1.0 (2026-09-08)
+
+
+### Features
+
+* add cross-project agent help queue ([#2](https://github.com/infagent/merl/issues/2)) ([b878dd7](https://github.com/infagent/merl/commit/b878dd765ebce4ec9e8c5b837aac5d9d28e150b2))
+
+
+### Bug Fixes
+
+* **ci:** allow release version advancement ([#4](https://github.com/infagent/merl/issues/4)) ([43c3372](https://github.com/infagent/merl/commit/43c33729c08678330254233c953044fd34b1665d))
