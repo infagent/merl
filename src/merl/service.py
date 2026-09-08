@@ -131,9 +131,13 @@ def inbox_list(*, repository: Repository, session_id: str) -> list[dict]:
     ]
     matches = []
     for request, _ in repository.iterate(collection="requests", entity_type=Request):
-        if request.status != "open" or request.origin_project_id == project.project_id:
+        if request.status != "open" or request.requester_session_id == session_id:
             continue
-        match = request_match(request=request, project=project, projects=projects)
+        match = (
+            "project"
+            if request.origin_project_id == project.project_id
+            else request_match(request=request, project=project, projects=projects)
+        )
         if match:
             matches.append({**request.model_dump(mode="json"), "match": match})
     return sorted(
@@ -150,8 +154,8 @@ def request_claim(
         if request.status != "open":
             raise WorkflowError(f"request is already {request.status}")
         session = repository.session_get(session_id=session_id)
-        if request.origin_project_id == session.project_id:
-            raise WorkflowError("request cannot be claimed by its originating project")
+        if request.requester_session_id == session_id:
+            raise WorkflowError("request cannot be claimed by its requesting session")
         project = repository.project_get(project_id=session.project_id)
         projects = [
             entity
@@ -159,7 +163,12 @@ def request_claim(
                 collection="projects", entity_type=Project
             )
         ]
-        if request_match(request=request, project=project, projects=projects) is None:
+        same_project = request.origin_project_id == session.project_id
+        if (
+            not same_project
+            and request_match(request=request, project=project, projects=projects)
+            is None
+        ):
             raise WorkflowError("request is not routed to this project")
         request.status = "claimed"
         request.claimed_by = session_id
