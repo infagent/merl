@@ -4,3 +4,7 @@ __pycache__/
 .ruff_cache/
 *.py[cod]
 /docs/plans/
+
+# BEGIN Infagent managed repository ignores
+.drixti/*.lock
+# END Infagent managed repository ignores

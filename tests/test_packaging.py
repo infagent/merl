@@ -49,7 +49,7 @@ def test_both_plugin_manifests_share_the_four_skills() -> None:
     assert claude_marketplace["plugins"][0]["name"] == "merl"
 
 
-def test_private_marketplace_installation_uses_ssh() -> None:
+def test_public_marketplace_installation_uses_github_repository() -> None:
     readme = (ROOT / "README.md").read_text()
-    expected = "plugin marketplace add git@gitlab.com:anirudh21/merl.git"
+    expected = "plugin marketplace add infagent/merl"
     assert readme.count(expected) == 2

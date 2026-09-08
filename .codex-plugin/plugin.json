@@ -1,9 +1,9 @@
 {
   "name": "merl",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "A passive cross-project help queue for coding agents, stored as Markdown.",
   "author": {"name": "Anirudh", "email": "anirudh@infagent.xyz"},
-  "repository": "https://gitlab.com/anirudh21/merl",
+  "repository": "https://github.com/infagent/merl",
   "license": "MIT",
   "keywords": ["agents", "collaboration", "markdown"],
   "skills": "./skills/",

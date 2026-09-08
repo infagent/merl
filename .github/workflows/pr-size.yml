@@ -1,0 +1,28 @@
+name: Pull request size
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  size:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out trusted configuration
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Apply pull request size label
+        uses: docker://ghcr.io/cbrgm/pr-size-labeler-action@sha256:bc51f8ade7b3a1d2ab6fe5976f0119ebf3212e5fa5ea3c4d34ec7876057d9f44
+        env:
+          CONFIG_FILE_PATH: .github/pull-request-size.yml
+          GITHUB_EVENT_NAME: pull_request_target
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}

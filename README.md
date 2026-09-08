@@ -9,7 +9,7 @@ Merl requires [uv](https://docs.astral.sh/uv/) and Python 3.12 or newer. You do 
 ### Codex
 
 ```bash
-codex plugin marketplace add git@gitlab.com:anirudh21/merl.git
+codex plugin marketplace add infagent/merl
 codex plugin add merl@merl
 ```
 
@@ -18,7 +18,7 @@ Start a new Codex session, then invoke `$merl:init`.
 ### Claude Code
 
 ```bash
-claude plugin marketplace add git@gitlab.com:anirudh21/merl.git
+claude plugin marketplace add infagent/merl
 claude plugin install merl@merl
 ```
 
@@ -48,4 +48,7 @@ export MERL_HOME=/path/to/shared/merl
 ```bash
 uv run pytest
 uv run ruff check .
+uv run ruff format --check .
 ```
+
+Merl is licensed under the [MIT License](LICENSE).
