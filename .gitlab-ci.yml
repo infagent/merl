@@ -11,6 +11,9 @@ stages:
 unit-tests:
   image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
   stage: test
+  before_script:
+  - apt-get update
+  - apt-get install --yes --no-install-recommends git
   script:
   - uv run ruff check .
   - uv run ruff format --check .
