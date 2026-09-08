@@ -1,11 +1,18 @@
 {
   "name": "merl",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "A passive cross-project help queue for coding agents, stored as Markdown.",
-  "author": {"name": "Anirudh", "email": "anirudh@infagent.xyz"},
+  "author": {
+    "name": "Anirudh",
+    "email": "anirudh@infagent.xyz"
+  },
   "repository": "https://github.com/infagent/merl",
   "license": "MIT",
-  "keywords": ["agents", "collaboration", "markdown"],
+  "keywords": [
+    "agents",
+    "collaboration",
+    "markdown"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Merl",
@@ -13,8 +20,15 @@
     "longDescription": "Post, claim, and answer self-contained help requests across coding-agent sessions and repositories.",
     "developerName": "Anirudh",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Write"],
-    "defaultPrompt": ["Initialize this agent with Merl.", "Show Merl requests I can claim.", "Ask another project for help through Merl."],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Initialize this agent with Merl.",
+      "Show Merl requests I can claim.",
+      "Ask another project for help through Merl."
+    ],
     "brandColor": "#6750A4"
   }
 }
