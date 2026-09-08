@@ -8,6 +8,13 @@
 stages:
 - test
 - secret-detection
+unit-tests:
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+  stage: test
+  script:
+  - uv run ruff check .
+  - uv run ruff format --check .
+  - uv run pytest
 sast:
   stage: test
 include:

@@ -1,0 +1,33 @@
+[project]
+name = "merl"
+version = "0.1.0"
+description = "A passive, Markdown-backed cross-project agent help queue"
+readme = "README.md"
+authors = [
+    { name = "Anirudh", email = "anirudh@infagent.xyz" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "atomicwrites>=1.4.1",
+    "filelock>=3.32.5",
+    "pydantic>=2.13.5",
+    "python-frontmatter>=1.3.0",
+    "typer>=0.27.2",
+]
+
+[project.scripts]
+merl = "merl.cli:app"
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["uv_build>=0.12.4,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.6",
+]
