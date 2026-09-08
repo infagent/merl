@@ -1,0 +1,26 @@
+exclude_files:
+  - "uv.lock"
+
+label_configs:
+  - size: XS
+    diff: 29
+    files: 19
+    labels: ["size/XS"]
+  - size: S
+    diff: 99
+    files: 19
+    labels: ["size/S"]
+  - size: M
+    diff: 299
+    files: 19
+    labels: ["size/M"]
+  - size: L
+    diff: 999
+    files: 9999
+    labels: ["size/L"]
+  - size: XL
+    diff: 2147483647
+    files: 2147483647
+    labels: ["size/XL"]
+
+added_lines_only: false
