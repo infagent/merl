@@ -7,7 +7,10 @@ setup:
 	@uv sync
 
 check: test
+	@uv run ruff check .
+	@uv run ruff format --check .
+	@bash -n bin/merl
+	@shellcheck bin/merl
 
 test:
-	@uv run python -m compileall -q .
-	@find . -type f -not -path "./.venv/*" -not -path "./.git/*" -print0 | while IFS= read -r -d '' file; do case "$$file" in *.sh|*.bash) shellcheck "$$file" ;; *) IFS= read -r first <"$$file" || true; case "$$first" in "#!/usr/bin/env bash"|"#!/bin/bash") shellcheck "$$file" ;; esac ;; esac; done
+	@uv run pytest

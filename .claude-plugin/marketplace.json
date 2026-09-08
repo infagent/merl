@@ -1,0 +1,13 @@
+{
+  "name": "merl",
+  "description": "Cross-project help for coding agents.",
+  "owner": {"name": "Anirudh", "email": "anirudh@infagent.xyz"},
+  "plugins": [
+    {
+      "name": "merl",
+      "source": ".",
+      "description": "A passive cross-project help queue for coding agents, stored as Markdown.",
+      "version": "0.0.0"
+    }
+  ]
+}
