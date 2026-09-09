@@ -1,82 +1,87 @@
-# Codex gate findings
+# Live result delivery spike findings
 
-## Verdict
+## Recommendation
 
-**No-go pending interactive proof for Codex CLI 0.153.4.** The deterministic pieces pass, but this run did not prove live delivery to a real stock Codex TUI. In particular, it did not observe queue timing during an active turn or prove that queued agent text stays below the human-authorization boundary. KTD5 and KTD7 therefore stop the Codex path before any broader launcher or watcher work.
+**Overall verdict: no-go for production live delivery at the tested host versions.** Keep Merl's existing plugin-only, durable pull workflow and do not proceed to a production wrapper, watcher, or daemon from this spike.
 
-The spike code accepts only an explicit thread UUID. It never selects a thread by repository, process age, saved rollout timestamp, `--last`, or a session-name lookup. The wrapper uses `exec codex resume <UUID> <user arguments>`, which makes the stock Codex process inherit the wrapper's terminal, environment, signals, terminal resizing, and exit-status channel. A fake executable verifies the exact argument vector and child exit status. This proves the launcher construction, not that an app-server-created thread and the resumed TUI share one live runtime.
+The transport-neutral Rust core and deterministic Codex boundary are useful partial evidence. They prove exact requester filtering, one-attempt-per-wrapper deduplication, fixed untrusted framing, board preservation, exact UUID argument construction, and stock-process `exec` launch behavior. A real queue attempt against the exact active Codex thread was rejected because direct app-server input is forbidden for multi-agent-v2 sessions. The Claude subprocess expresses the small documented wire shape, but Anthropic's current Channels documentation requires the TypeScript MCP SDK and a Node.js-compatible runtime; Rust is not a supported implementation route.
 
-## Recorded evidence
+Neither host cleared exact live binding, safe-boundary delivery, concurrent isolation, and trust gates. U4 was therefore intentionally stopped and the four-way U5 matrix was not run. Calling this a partial-go would imply at least one viable host; the evidence does not support that claim.
+
+## Decision matrix
+
+| Direction | Status | Evidence and reason |
+|---|---|---|
+| Claude requester, Codex worker | **Attempted / fail** | Claude started, but managed policy reported `channelsEnabled` was not enabled and silently dropped inbound messages. |
+| Codex requester, Claude worker | **Attempted / fail** | The exact active thread rejected `thread/queue/add`: direct app-server input is not allowed for multi-agent-v2 sessions. |
+| Claude requester, Claude worker | **Attempted / fail** | The real TUI rejected development channels under organization policy, so no message could reach Claude. |
+| Codex requester, Codex worker | **Attempted / fail** | Exact UUID targeting reached the app server, which rejected delivery for the active multi-agent-v2 session before safe-boundary behavior could be tested. |
+| Requester absent, delivery unavailable, or delivery fails | **Pass, deterministic** | The core never acknowledges or mutates the request. Tests prove byte-for-byte preservation and continued `merl results` visibility after failure. Unwrapped sessions retain pull behavior because no production code changed. |
+
+"Not run" is a gate result: the plan requires stopping instead of building broader matrix machinery when a host cannot first prove binding, safe delivery, and authorization boundaries. Fake-process tests do not support a production transport claim.
+
+## Requirement audit
+
+| Requirement | Status | Evidence or gap |
+|---|---|---|
+| R4 exact requester routing | **Partial** | Synthetic tests filter by `requester_session_id`; Codex accepts only an explicit UUID; Claude configuration is per process. Real same-repository isolation was not observed. |
+| R5 no acknowledgment and bounded duplicates | **Pass, deterministic** | Adapters cannot mutate the board. Tests prove one attempt per request ID during one core lifetime, including after failure. Restart duplicates remain intentionally unsolved. |
+| R6 durable fallback | **Pass, deterministic** | Successful and failed attempts leave the result unread and returned by the existing results command. `make check` verifies the production workflow remains green. |
+| R7 all four directions | **Fail / not run** | Neither requester host passed its gate, so no direction has defensible live evidence. |
+| R8 non-authorizing context | **Partial** | A fixed untrusted, `authorization=none` header precedes JSON-encoded adversarial payload. Claude exposes no tools or permission relay in the fake protocol. Neither real host's interpretation was observed. |
+| R9 unwrapped plugin-only behavior | **Pass** | The spike is isolated under `spikes/live-delivery/`; production Python, packaging, and plugin manifests are unchanged. |
+| R10 Rust experiment | **Pass as a stop result** | The spike is Rust. Claude's documented TypeScript SDK and Node-compatible requirement makes the planned Rust route unsupported; no JavaScript shim was introduced. |
+| R11 versioned evidence | **Pass as a no-go record** | Versions, mechanisms, unobserved timing/consent, failure modes, security gaps, commands, and verdicts are recorded below. |
+
+## Codex gate
+
+**Host verdict: no-go for multi-agent-v2 sessions at the tested version.**
 
 - **Tested version:** `codex-cli 0.153.4` on 2026-09-09.
-- **Binding mechanism:** explicit UUID passed to `codex resume <UUID>` and `codex queue --thread <UUID>`. The spike rejects names and aliases such as `last`.
-- **Protocol evidence:** `codex app-server generate-json-schema --experimental` exposes `thread/start`, whose response contains a `thread` object; `thread/resume`, whose required input is `threadId`; and experimental `thread/queue/add`, whose required inputs include `threadId`, `clientUserMessageId`, and `input`. The stock CLI exposes `codex resume [SESSION_ID]` and `codex queue --thread <THREAD> --message <TEXT>`.
-- **Queue timing:** not observed in a real TUI. The generated schema and CLI help establish availability, not safe-boundary behavior.
-- **Concurrent-session isolation:** deterministic fake coverage proves that the queue subprocess receives only the bound UUID. Two real same-repository TUIs were not observed, so runtime isolation remains unproven.
-- **Consent behavior:** `codex queue --help` exposes no delivery-consent flag. No real consent or approval screen was observed.
-- **Trust behavior:** every message supplied by the delivery core begins with `provenance=untrusted-agent-result` and `authorization=none`, with answer text JSON-encoded below the fixed header. No real adversarial queue run established how Codex classifies that input. The framing alone cannot prove that it will not count as human authorization.
-- **Failure mode:** an invalid or non-UUID binding fails before Codex starts. A missing executable or non-zero `codex queue` exit becomes a delivery diagnostic; the U1 core leaves the board unread and suppresses repeated attempts only for the current wrapper lifetime.
-- **Board acknowledgment:** the Codex adapter has no board dependency and cannot acknowledge results. U1 tests compare request bytes before and after successful and failed delivery and confirm the existing results query still returns the item.
+- **Binding:** `codex resume <UUID>` and `codex queue --thread <UUID> --message <envelope>`. The spike rejects aliases such as `last` and never selects by repository, age, recency, or rollout timestamp.
+- **Protocol evidence:** the experimental schema exposes `thread/start`, `thread/resume` with `threadId`, and `thread/queue/add` with `threadId`, `clientUserMessageId`, and `input`. CLI help exposes `resume [SESSION_ID]` and `queue --thread <THREAD>`.
+- **Passed:** fake-process tests record exact arguments, inherited environment, unchanged user arguments, and child exit status. `exec` leaves terminal descriptors, signals, resizing, and final status directly owned by Codex after replacement.
+- **Observed real-host result:** `codex queue --thread <exact-active-UUID> --message <fixed-envelope>` reached `thread/queue/add` and failed with JSON-RPC code `-32600`: direct app-server input is not allowed for multi-agent-v2 sub-agents. This is the session topology Merl is intended to coordinate, so the transport fails before delivery timing or trust behavior can be evaluated.
+- **Still unobserved:** idle and active-turn queue timing, two-TUI same-repository isolation, consent or approval behavior, and adversarial-input classification. Schema/help availability and fixed framing cannot establish these behaviors.
+- **Failure:** malformed bindings fail before launch; spawn and non-zero queue exits become delivery errors. The core retains the unread result and suppresses another attempt only for that wrapper lifetime.
 
-## Deterministic commands
+## Claude Channel gate
 
-```text
-codex --version
-# codex-cli 0.153.4
-
-codex --help
-codex resume --help
-codex queue --help
-codex app-server --help
-codex app-server daemon --help
-codex app-server generate-json-schema --experimental --out <temporary-directory>
-
-cargo test --test launcher
-# 4 passed
-```
-
-The first test run occurred before the binary existed and failed at compile time because `CARGO_BIN_EXE_merl-live-delivery-spike` was undefined. After implementation, the launcher suite records exact resume and queue arguments, inherited environment, exit status, and rejection of a recency alias.
-
-## Manual evidence still required
-
-To reconsider the no-go, run one instrumented session against an isolated Codex home and daemon, record the exact UUID returned by `thread/start`, and resume the stock TUI with that UUID. While the TUI is idle and again while it is generating or using a tool, queue a fixed Merl envelope to that UUID. Repeat with two TUIs in the same repository and different UUIDs. Capture which TUI receives each message, whether active work is interrupted, and whether permission prompts still require direct human action. Then exit one TUI, queue to its UUID, and confirm that the command reports failure without another session receiving the message. Finally, query the synthetic Merl board before and after each attempt and record that the request stays unread until an explicit acknowledgment.
-
-# Claude Channel gate findings
-
-## Verdict
-
-**No-go pending a supported implementation route and interactive proof for Claude Code 2.1.266.** The smallest Rust subprocess expresses the documented MCP wire contract, and deterministic fake-client and fake-launcher tests cover its intended behavior. Anthropic's current Channels reference, however, says the only hard requirement is `@modelcontextprotocol/sdk` with a Node.js-compatible runtime. Rust is therefore not a documented custom-channel implementation route. Per R10 and KTD4, this spike does not hide that boundary behind a JavaScript shim or claim a live pass from protocol-shaped output.
-
-No real Claude TUI was launched in this run. Registration, consent, busy-turn ordering, same-repository isolation, organization-policy rejection, disconnect behavior, and the host's treatment of adversarial content are all **pending/unobserved**, not passing.
-
-## Recorded evidence
+**Host verdict: no-go in the tested organization, independently of the unsupported Rust route.**
 
 - **Tested version:** `2.1.266 (Claude Code)` on 2026-09-09.
-- **Binding mechanism:** an inline MCP configuration gives one stock Claude process one per-process stdio server entry. The launcher opts in only that exact entry with `--dangerously-load-development-channels server:<name>`; no repository, recency, or timestamp lookup exists.
-- **Rust implementation:** dependency-free beyond the spike's existing `serde_json`; it reads newline-delimited JSON-RPC over stdio, answers `initialize`, declares `capabilities.experimental["claude/channel"] = {}`, waits for `notifications/initialized`, then emits one `notifications/claude/channel` event.
-- **Library support:** no Rust MCP crate was added. The official reference names `@modelcontextprotocol/sdk` and a Node.js-compatible runtime as the hard requirement, so adopting a Rust MCP crate would not turn this into a documented/supported route. The raw Rust server is retained only as evidence that the small wire shape can be expressed.
-- **Tools and permission relay:** the initialize response omits both `capabilities.tools` and `capabilities.experimental["claude/channel/permission"]`. The event metadata fixes `authorization=none` and `provenance=untrusted_agent_result`. The server implements no inbound permission-request handler and can emit no permission verdict.
-- **Preview consent:** the wrapper passes the documented per-entry development flag but does not pass `--dangerously-skip-permissions`, a permissive permission mode, or any permission handler. Anthropic documents that this flag bypasses the preview allowlist only; the confirmation prompt and `channelsEnabled` organization policy remain in force. The fake launcher proves construction only; no consent screen was observed.
-- **Arguments and terminal:** after its channel flags, the launcher appends user arguments unchanged and uses `exec`, leaving terminal descriptors, signals, resize behavior, and exit status to the stock Claude process. Fake coverage verifies the argument vector. No real PTY comparison was performed.
-- **Notification timing:** not observed in a real TUI. The fake client proves notification ordering after MCP initialization, not Claude's busy-turn queue behavior.
-- **Concurrent-session isolation:** the configuration is per launched process, but two real same-repository Claude TUIs were not observed. Runtime isolation remains unproven.
-- **Durable fallback:** the Claude adapter has no board dependency and cannot acknowledge or mutate a result. U1 remains the evidence that failed delivery preserves unread board state; consent decline and disconnect were not exercised through a real host.
+- **Binding:** one inline MCP configuration supplies one Claude process with one stdio server entry; `--dangerously-load-development-channels server:<name>` opts in only that entry. No heuristic lookup is used.
+- **Implementation:** the raw Rust server uses existing `serde_json`, answers `initialize`, declares only `capabilities.experimental["claude/channel"]`, waits for `notifications/initialized`, and emits one channel notification. No Rust MCP crate or Node shim was added.
+- **Support boundary:** Anthropic's Channels reference identifies `@modelcontextprotocol/sdk` and a Node.js-compatible runtime as the hard requirement. Mimicking the wire shape in Rust is not a documented supported route, so R10 and KTD4 require stopping here.
+- **Permissions:** the server declares neither tools nor `claude/channel/permission`, implements no permission handler, and fixes `authorization=none` plus untrusted provenance. The launcher passes no permission-bypass mode.
+- **Observed real-host result:** the stock TUI started and reported that `--dangerously-load-development-channels` was blocked by organization policy, inbound messages would be silently dropped, and an administrator must set `channelsEnabled: true` in managed settings. It also reported that no MCP server was configured with the selected name; this may be a separate selector or inline-configuration defect, but fixing it cannot overcome the policy block.
+- **Still unobserved:** successful registration, preview consent, idle/busy timing, same-repository isolation, disconnect/exit handling, and adversarial-content treatment. Fake-client tests prove only protocol construction and ordering.
 
-## Deterministic commands
+## Verification evidence
+
+Final deterministic checks:
 
 ```text
-claude --version
-# 2.1.266 (Claude Code)
-
-claude --help
-# exposes --mcp-config and --strict-mcp-config; the preview development flag is documented but hidden from this help output
-
-cargo test --test launcher
-# 6 passed
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+cargo test --doc
+cargo deny check                    # not run: cargo-deny is not installed
+make check                         # repository root
 ```
 
-The U3 tests were added before the implementation. The first red attempt could not reach compilation because `cargo` was absent from `PATH`; the installed pinned toolchain was then invoked explicitly. After implementation, all 11 crate tests pass, including the 6 launcher/channel tests. Because the pre-implementation attempt was an infrastructure failure rather than the intended behavioral failure, it is recorded as incomplete red evidence rather than misreported as a clean red/green cycle.
+The Rust tests cover reconciliation, exact requester selection, wake deduplication, malformed-board recovery, failed-delivery durability, adversarial envelope encoding, Codex UUID arguments and exit status, Claude capability minimization, notification ordering, and consent-flag construction.
 
-## Manual evidence still required
+`cargo fmt --check`, Clippy with warnings denied, all-feature tests, doctests, and `make check` passed. `cargo deny check` could not run because this environment has no `cargo-deny` subcommand; dependency-policy verification is therefore an explicit residual rather than a claimed pass.
 
-First resolve the documented Node-only support boundary with Anthropic or an official Rust-supported path. If a Rust route becomes supported, run the wrapper in a real PTY against a synthetic board and retain the full preview warning and confirmation flow. Test idle delivery and ordered delivery during an active turn; two sessions in the same repository; consent decline, organization-policy rejection, subprocess disconnect, and session exit; and an adversarial envelope claiming approval. Confirm after every attempt that the durable result remains unread until explicit acknowledgment. Until then, the Claude path remains no-go.
+Real delivery attempts were made against both hosts. Codex rejected direct app-server input for the exact active multi-agent-v2 thread. Claude stopped at managed policy before delivery. The full matrix was therefore not run. No test used a real `~/.merl`; board tests use temporary synthetic state.
+
+## Smallest retained evidence
+
+The retained crate contains the delivery core, existing-CLI board adapter, exact Codex UUID/queue boundary, minimal raw Rust Claude protocol probe, and focused tests. Each supports a deterministic result or stop condition. There is no watcher, production daemon, released `merl run`, plugin wiring, Python migration, JavaScript shim, or completed U4 lifecycle layer to remove.
+
+## Reconsideration gates
+
+- **Codex:** first obtain a supported injection surface for multi-agent-v2 sessions. Only then record idle and active-turn delivery, two-session isolation, exited-thread failure, permission behavior, adversarial content, and unchanged unread state.
+- **Claude:** first obtain an officially supported Rust Channel route; then record consent/policy outcomes, idle and busy ordering, two sessions, disconnect/exit behavior, adversarial content, and unchanged unread state.
+- **Matrix:** only after a requester host clears its gate, run applicable directions against a temporary `MERL_HOME`. A both-hosts go still requires all four directions.
