@@ -6,15 +6,15 @@
 
 The transport-neutral Rust core and deterministic Codex boundary prove exact requester filtering, one-attempt-per-wrapper deduplication, fixed untrusted framing, board preservation, exact UUID argument construction, and stock-process launch behavior. A real queue attempt reached the exact top-level Codex TUI, while the nested multi-agent-v2 thread correctly rejected direct input. The delivered envelope appeared as an ordinary user message, however, so its `authorization=none` text is not host-enforced provenance and fails the authorization boundary. In contrast, the real Claude TUI labeled the message with its channel source and retained structured `authorization=none` and `provenance=untrusted_agent_result` attributes.
 
-Claude cleared the initial registration and trust gate despite Rust not being a documented implementation route. U4 must now test delivery after startup, lifecycle behavior, and exact session binding before a production recommendation. The four-way U5 matrix remains incomplete.
+Claude cleared registration, trust, and real post-startup delivery despite Rust not being a documented implementation route. The U4 wrapper delivered an answer written after launch to the exact per-process channel and left it unread on the board. The four-way U5 matrix and production plugin identity reuse remain incomplete.
 
 ## Decision matrix
 
 | Direction | Status | Evidence and reason |
 |---|---|---|
-| Claude requester, Codex worker | **Partial pass** | A real Rust channel message reached Claude with host-visible source and non-authorizing provenance; post-startup delivery remains untested. |
+| Claude requester, Codex worker | **Pass for idle delivery** | An answer written after startup reached the exact wrapped Claude channel with host-visible non-authorizing provenance and remained unread. |
 | Codex requester, Claude worker | **Delivered / security fail** | Exact top-level routing worked, but the result arrived as an ordinary user message; nested multi-agent-v2 delivery was rejected. |
-| Claude requester, Claude worker | **Partial pass** | Registration and one startup delivery worked after `channelsEnabled` was enabled; isolation and busy-turn timing remain untested. |
+| Claude requester, Claude worker | **Pass** | Registration, post-startup delivery, busy-turn queuing, and two-session same-repository isolation worked with exact per-process bindings. |
 | Codex requester, Codex worker | **Delivered / security fail** | Exact top-level routing worked, but the host provided no trusted distinction between queued agent context and human input. |
 | Requester absent, delivery unavailable, or delivery fails | **Pass, deterministic** | The core never acknowledges or mutates the request. Tests prove byte-for-byte preservation and continued `merl results` visibility after failure. Unwrapped sessions retain pull behavior because no production code changed. |
 
@@ -56,7 +56,14 @@ Claude cleared the initial registration and trust gate despite Rust not being a 
 - **Support boundary:** Anthropic's Channels reference identifies `@modelcontextprotocol/sdk` and a Node.js-compatible runtime as the hard requirement. Mimicking the wire shape in Rust is not a documented supported route, so R10 and KTD4 require stopping here.
 - **Permissions:** the server declares neither tools nor `claude/channel/permission`, implements no permission handler, and fixes `authorization=none` plus untrusted provenance. The launcher passes no permission-bypass mode.
 - **Observed real-host result:** after `channelsEnabled` was enabled in managed policy, the stock TUI registered the Rust subprocess and delivered its message. Claude displayed the channel source and treated the structured `authorization=none` and untrusted provenance as data rather than a user request. The TUI also printed `no MCP server configured with that name`, but that warning did not prevent registration or delivery.
-- **Still unobserved:** post-startup delivery, idle/busy timing, same-repository isolation, disconnect/exit handling, consent behavior, and adversarial-content treatment. The undocumented Rust support status is a compatibility risk, not an observed blocker.
+- **Observed post-startup result:** against a fresh synthetic `MERL_HOME`, a second Merl session claimed and answered a request after the wrapped Claude TUI was already open. The polling watcher reconciled the canonical results view and Claude received the expected request ID, requester ID, answer, evidence, source, and non-authorizing provenance without a pull command. A subsequent `merl results` query returned the same unacknowledged result.
+- **Observed busy-turn result:** a second answer was written at 12:11:23 local time while Claude was running an unrelated foreground command from 12:11:15 through 12:11:45. The channel event queued visibly, did not interrupt the command or turn, and was processed only after the turn completed normally.
+- **Observed isolation result:** two wrapped Claude sessions in the same repository used separate synthetic boards and exact session bindings. The first received only `ISOLATION-B`; the second received only `ISOLATION-C`. Neither result crossed channels.
+- **Identity presentation fix:** both Claude agents initially called their own result foreign because the opaque Merl session ID was not explained in model-visible context. The IDs exactly matched their wrapper-created bindings. The live channel now includes its bound Merl session ID in trusted server instructions so the model can compare it with each result instead of guessing.
+- **Still unobserved on a real host:** disconnect/exit handling, explicit consent behavior, and a stronger adversarial-content probe. The undocumented Rust support status is a compatibility risk, not an observed blocker.
+- **U4 deterministic lifecycle evidence:** the wrapper invokes exactly one existing CLI `init --json` against the selected synthetic home, passes the returned session ID and `MERL_HOME` into both the stock TUI environment and its private channel command, then replaces itself with Claude via `exec`. The channel performs startup reconciliation and uses `notify` 8.2.0 (CC0-1.0/Artistic-2.0) filesystem events only as wake hints before rereading the canonical CLI results view. Duplicate wakeups inject a request only once per channel lifetime.
+- **Transparency and fallback:** fake-host tests preserve user argument order, working directory, inherited descriptors/environment, normal and abnormal exit status, and the operating system's direct signal/PTY/resize ownership after `exec`. If initialization fails, the wrapper prints pull guidance and still `exec`s the unmodified stock host without a channel. Closing channel stdin exits the bridge; Claude owns the only bridge subprocess, so no independent supervisor remains.
+- **R3 blocker:** `MERL_SESSION_ID=ses-wrapper` is demonstrably inherited by the stock TUI and the exact identity is embedded in its per-process channel configuration. The production `merl init` command always creates a fresh session and plugin instructions explicitly invoke it; they do not consume `MERL_SESSION_ID`. KTD1 forbids changing production Python or plugin manifests/instructions in this spike. Therefore repeated plugin `init` cannot yet reuse the wrapper identity, and R3 is unresolved rather than simulated.
 
 ## Verification evidence
 
@@ -71,18 +78,18 @@ cargo deny check                    # not run: cargo-deny is not installed
 make check                         # repository root
 ```
 
-The Rust tests cover reconciliation, exact requester selection, wake deduplication, malformed-board recovery, failed-delivery durability, adversarial envelope encoding, Codex UUID arguments and exit status, Claude capability minimization, notification ordering, and consent-flag construction.
+The Rust tests cover reconciliation, exact requester selection, wake deduplication, malformed-board recovery, failed-delivery durability, adversarial envelope encoding, Codex UUID arguments and exit status, Claude capability minimization, notification ordering, consent-flag construction, wrapper initialization/identity propagation, post-startup filesystem reconciliation, transparent abnormal exit, and pull-only fallback.
 
 `cargo fmt --check`, Clippy with warnings denied, all-feature tests, doctests, and `make check` passed. `cargo deny check` could not run because this environment has no `cargo-deny` subcommand; dependency-policy verification is therefore an explicit residual rather than a claimed pass.
 
-Real delivery attempts were made against both hosts. Codex delivered to the exact top-level TUI but represented the result as ordinary user input. After managed policy was enabled, Claude registered the raw Rust channel and preserved its non-user provenance. The full matrix is not yet complete. No board test used a real `~/.merl`; synthetic tests use temporary state.
+Real delivery attempts were made against both hosts. Codex delivered to the exact top-level TUI but represented the result as ordinary user input. After managed policy was enabled, Claude registered the raw Rust channel, preserved its non-user provenance, and received an answer created after startup while the durable result stayed unread. The full matrix is not yet complete. No board test used a real `~/.merl`; synthetic tests use temporary state.
 
 ## Smallest retained evidence
 
-The retained crate contains the delivery core, existing-CLI board adapter, exact Codex UUID/queue boundary, minimal raw Rust Claude protocol probe, and focused tests. Each supports a deterministic result or stop condition. There is no watcher, production daemon, released `merl run`, plugin wiring, Python migration, JavaScript shim, or completed U4 lifecycle layer to remove.
+The retained crate contains the delivery core, existing-CLI board adapter, exact Codex UUID/queue boundary, minimal raw Rust Claude protocol, a per-session `notify` watcher, transparent wrapper, and focused tests. Each supports a deterministic result or stop condition. There is no production daemon, released `merl run`, plugin wiring, Python migration, or JavaScript shim.
 
 ## Reconsideration gates
 
 - **Codex:** first obtain a host-enforced non-user provenance or authorization boundary for queued input. Direct delivery to nested workers is unnecessary if the owning TUI can route work through native agent messaging, but advisory envelope text is insufficient.
-- **Claude:** first obtain an officially supported Rust Channel route; then record consent/policy outcomes, idle and busy ordering, two sessions, disconnect/exit behavior, adversarial content, and unchanged unread state.
+- **Claude:** first resolve R3 by defining a production-authorized way for plugin `init` to reuse the inherited wrapper session, and obtain an officially supported Rust Channel route; then record consent/policy outcomes, idle and busy ordering, two sessions, disconnect/exit behavior, adversarial content, and unchanged unread state.
 - **Matrix:** only after a requester host clears its gate, run applicable directions against a temporary `MERL_HOME`. A both-hosts go still requires all four directions.
