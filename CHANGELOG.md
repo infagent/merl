@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/infagent/merl/compare/v0.1.1...v0.1.2) (2026-09-09)
+
+
+### Documentation
+
+* add Rust engineering guidance ([#7](https://github.com/infagent/merl/issues/7)) ([0d3fe54](https://github.com/infagent/merl/commit/0d3fe54b7678f889cd08fafd12992ea3cf1b654c))
+
 ## [0.1.1](https://github.com/infagent/merl/compare/v0.1.0...v0.1.1) (2026-09-08)
 
 
