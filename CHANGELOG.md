@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/infagent/merl/compare/v0.1.0...v0.1.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* support same-project agent delegation ([#5](https://github.com/infagent/merl/issues/5)) ([49bae11](https://github.com/infagent/merl/commit/49bae1152b0fedbf030f90f2d3b3535e62843c75))
+
 ## 0.1.0 (2026-09-08)
 
 
