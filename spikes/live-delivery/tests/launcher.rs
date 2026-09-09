@@ -10,7 +10,13 @@ use tempfile::TempDir;
 
 const THREAD_ID: &str = "0199aaaa-bbbb-4ccc-8ddd-dddddddddddd";
 
-fn fake_codex() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+struct FakeCodex {
+    _directory: TempDir,
+    executable: std::path::PathBuf,
+    recording: std::path::PathBuf,
+}
+
+fn fake_codex() -> FakeCodex {
     let directory = tempfile::tempdir().expect("temporary fake directory");
     let executable = directory.path().join("codex");
     let recording = executable.with_extension("recording");
@@ -24,17 +30,21 @@ fn fake_codex() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
         .permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&executable, permissions).expect("make fake executable");
-    (directory, executable, recording)
+    FakeCodex {
+        _directory: directory,
+        executable,
+        recording,
+    }
 }
 
 #[test]
 fn exact_thread_launcher_resumes_stock_codex_with_unchanged_arguments_and_environment() {
-    let (_directory, executable, recording) = fake_codex();
+    let fake = fake_codex();
     let status = Command::new(env!("CARGO_BIN_EXE_merl-live-delivery-spike"))
         .args([
             "codex",
             "--program",
-            executable.to_str().expect("UTF-8 path"),
+            fake.executable.to_str().expect("UTF-8 path"),
             "--thread",
             THREAD_ID,
             "--",
@@ -42,30 +52,30 @@ fn exact_thread_launcher_resumes_stock_codex_with_unchanged_arguments_and_enviro
             "test-model",
             "--no-alt-screen",
         ])
-        .env("MERL_TEST_RECORDING", &recording)
+        .env("MERL_TEST_RECORDING", &fake.recording)
         .env("MERL_TEST_INHERITED", "inherited-marker")
         .status()
         .expect("run launcher");
 
     assert!(status.success());
     assert_eq!(
-        fs::read_to_string(recording).expect("read recording"),
+        fs::read_to_string(fake.recording).expect("read recording"),
         format!("resume\n{THREAD_ID}\n--model\ntest-model\n--no-alt-screen\ninherited-marker")
     );
 }
 
 #[test]
 fn exact_thread_launcher_returns_the_stock_codex_exit_status() {
-    let (_directory, executable, recording) = fake_codex();
+    let fake = fake_codex();
     let status = Command::new(env!("CARGO_BIN_EXE_merl-live-delivery-spike"))
         .args([
             "codex",
             "--program",
-            executable.to_str().expect("UTF-8 path"),
+            fake.executable.to_str().expect("UTF-8 path"),
             "--thread",
             THREAD_ID,
         ])
-        .env("MERL_TEST_RECORDING", recording)
+        .env("MERL_TEST_RECORDING", fake.recording)
         .env("MERL_TEST_EXIT_STATUS", "23")
         .status()
         .expect("run launcher");
@@ -75,15 +85,15 @@ fn exact_thread_launcher_returns_the_stock_codex_exit_status() {
 
 #[test]
 fn queue_delivery_targets_only_the_bound_uuid_with_the_complete_envelope() {
-    let (_directory, executable, recording) = fake_codex();
+    let fake = fake_codex();
     let thread = ExactThread::parse(THREAD_ID).expect("exact UUID");
     let message = "MERL_LIVE_RESULT_V1\nauthorization=none\n\nuntrusted payload";
-    let mut delivery = QueueDelivery::new(executable, thread);
+    let mut delivery = QueueDelivery::new(&fake.executable, thread);
 
     delivery.deliver(message).expect("queue delivery");
 
     assert_eq!(
-        fs::read_to_string(recording).expect("read recording"),
+        fs::read_to_string(fake.recording).expect("read recording"),
         format!("queue\n--thread\n{THREAD_ID}\n--message\n{message}\n")
     );
 }
@@ -155,12 +165,12 @@ fn claude_channel_declares_only_the_channel_capability_and_emits_one_notificatio
 
 #[test]
 fn claude_launcher_preserves_arguments_and_preview_consent() {
-    let (_directory, executable, recording) = fake_codex();
+    let fake = fake_codex();
     let status = Command::new(env!("CARGO_BIN_EXE_merl-live-delivery-spike"))
         .args([
             "claude",
             "--program",
-            executable.to_str().expect("UTF-8 path"),
+            fake.executable.to_str().expect("UTF-8 path"),
             "--server-name",
             "merl-test",
             "--message",
@@ -169,12 +179,12 @@ fn claude_launcher_preserves_arguments_and_preview_consent() {
             "--model",
             "test-model",
         ])
-        .env("MERL_TEST_RECORDING", &recording)
+        .env("MERL_TEST_RECORDING", &fake.recording)
         .status()
         .expect("run Claude launcher");
     assert!(status.success());
 
-    let arguments = fs::read_to_string(recording).expect("read recording");
+    let arguments = fs::read_to_string(fake.recording).expect("read recording");
     assert!(arguments.contains("--mcp-config\n"));
     assert!(arguments.contains("--strict-mcp-config\n"));
     assert!(arguments.contains("--dangerously-load-development-channels\nserver:merl-test\n"));

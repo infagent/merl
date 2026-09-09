@@ -1,7 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::os::unix::process::CommandExt;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use uuid::Uuid;
 
@@ -57,6 +57,7 @@ impl HostDelivery for QueueDelivery {
                 "--message",
                 message,
             ])
+            .stdout(Stdio::null())
             .output()
             .map_err(|error| DeliveryError::Unavailable(error.to_string()))?;
         if output.status.success() {

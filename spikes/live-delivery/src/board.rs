@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -21,17 +21,6 @@ pub struct ResultItem {
     pub request_id: String,
     pub requester_session_id: String,
     pub answer: Value,
-}
-
-impl ResultItem {
-    #[must_use]
-    pub fn synthetic(request_id: &str, requester_session_id: &str, summary: &str) -> Self {
-        Self {
-            request_id: request_id.to_owned(),
-            requester_session_id: requester_session_id.to_owned(),
-            answer: json!({"summary": summary}),
-        }
-    }
 }
 
 pub trait Board {
@@ -91,23 +80,5 @@ impl Board for CliBoard {
         }
         serde_json::from_slice(&output.stdout)
             .map_err(|error| BoardError::Malformed(error.to_string()))
-    }
-}
-
-#[derive(Debug)]
-pub struct MemoryBoard {
-    results: Vec<ResultItem>,
-}
-
-impl MemoryBoard {
-    #[must_use]
-    pub fn new(results: Vec<ResultItem>) -> Self {
-        Self { results }
-    }
-}
-
-impl Board for MemoryBoard {
-    fn unread_results(&mut self, _session_id: &str) -> Result<Vec<ResultItem>, BoardError> {
-        Ok(self.results.clone())
     }
 }

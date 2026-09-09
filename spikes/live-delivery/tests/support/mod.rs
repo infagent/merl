@@ -4,6 +4,32 @@ use std::process::Command;
 use serde_json::Value;
 use tempfile::TempDir;
 
+use merl_live_delivery_spike::board::{Board, BoardError, ResultItem};
+
+pub struct MemoryBoard {
+    results: Vec<ResultItem>,
+}
+
+impl MemoryBoard {
+    pub fn new(results: Vec<ResultItem>) -> Self {
+        Self { results }
+    }
+}
+
+impl Board for MemoryBoard {
+    fn unread_results(&mut self, _session_id: &str) -> Result<Vec<ResultItem>, BoardError> {
+        Ok(self.results.clone())
+    }
+}
+
+pub fn result_item(request_id: &str, requester_session_id: &str, summary: &str) -> ResultItem {
+    ResultItem {
+        request_id: request_id.to_owned(),
+        requester_session_id: requester_session_id.to_owned(),
+        answer: serde_json::json!({"summary": summary}),
+    }
+}
+
 pub struct SyntheticBoard {
     root: TempDir,
     home: PathBuf,
