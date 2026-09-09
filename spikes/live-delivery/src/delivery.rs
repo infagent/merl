@@ -5,6 +5,7 @@ pub mod host;
 use std::collections::HashSet;
 
 use board::{Board, BoardError, ResultItem};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
 
@@ -66,13 +67,13 @@ impl<B: Board> DeliveryCore<B> {
     /// durable pull path.
     pub fn reconcile<H: HostDelivery>(
         &mut self,
-        bound_session_id: &str,
+        bound_session_id: &SessionId,
         host: &mut H,
     ) -> Result<Reconciliation, ReconcileError> {
         let results = self.board.unread_results(bound_session_id)?;
         let mut reconciliation = Reconciliation::default();
         for result in results {
-            if result.requester_session_id != bound_session_id
+            if &result.requester_session_id != bound_session_id
                 || !self.attempted_request_ids.insert(result.request_id.clone())
             {
                 continue;
@@ -103,4 +104,25 @@ fn envelope_render(result: &ResultItem) -> String {
         result.requester_session_id,
         payload.len()
     )
+}
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct SessionId(String);
+
+impl SessionId {
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SessionId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
 }

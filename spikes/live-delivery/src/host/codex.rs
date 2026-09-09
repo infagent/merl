@@ -2,9 +2,11 @@ use std::ffi::{OsStr, OsString};
 use std::io;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use uuid::Uuid;
 
+use crate::board::output_with_timeout;
 use crate::{DeliveryError, HostDelivery};
 
 #[derive(Debug)]
@@ -36,6 +38,7 @@ impl ExactThread {
 pub struct QueueDelivery {
     program: OsString,
     thread: ExactThread,
+    timeout: Duration,
 }
 
 impl QueueDelivery {
@@ -43,13 +46,27 @@ impl QueueDelivery {
         Self {
             program: program.as_ref().to_owned(),
             thread,
+            timeout: Duration::from_secs(10),
+        }
+    }
+
+    pub fn with_timeout(
+        program: impl AsRef<OsStr>,
+        thread: ExactThread,
+        timeout: Duration,
+    ) -> Self {
+        Self {
+            program: program.as_ref().to_owned(),
+            thread,
+            timeout,
         }
     }
 }
 
 impl HostDelivery for QueueDelivery {
     fn deliver(&mut self, message: &str) -> Result<(), DeliveryError> {
-        let output = Command::new(&self.program)
+        let mut command = Command::new(&self.program);
+        command
             .args([
                 "queue",
                 "--thread",
@@ -57,9 +74,15 @@ impl HostDelivery for QueueDelivery {
                 "--message",
                 message,
             ])
-            .stdout(Stdio::null())
-            .output()
+            .stdout(Stdio::null());
+        let output = output_with_timeout(&mut command, self.timeout)
             .map_err(|error| DeliveryError::Unavailable(error.to_string()))?;
+        let Some(output) = output else {
+            return Err(DeliveryError::Unavailable(format!(
+                "Codex queue timed out after {:?}",
+                self.timeout
+            )));
+        };
         if output.status.success() {
             return Ok(());
         }

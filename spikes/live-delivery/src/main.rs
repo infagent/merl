@@ -1,10 +1,12 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
 use merl_live_delivery_spike::host::claude::{
-    SessionBinding, session_initialize, stdio_live_serve, stdio_serve, tui_exec as claude_tui_exec,
+    SessionBinding, TuiLaunch, session_initialize, stdio_live_serve, stdio_serve,
+    tui_exec as claude_tui_exec,
 };
 use merl_live_delivery_spike::host::codex::{ExactThread, tui_exec};
 
@@ -34,6 +36,8 @@ struct ClaudeArguments {
     merl_home: Option<PathBuf>,
     #[arg(long)]
     message: Option<String>,
+    #[arg(long, default_value_t = 10_000)]
+    child_timeout_ms: u64,
     #[arg(last = true, allow_hyphen_values = true)]
     arguments: Vec<OsString>,
 }
@@ -48,6 +52,8 @@ struct ClaudeChannelArguments {
     merl_program: Option<OsString>,
     #[arg(long)]
     merl_home: Option<PathBuf>,
+    #[arg(long, default_value_t = 10_000)]
+    child_timeout_ms: u64,
 }
 
 #[derive(Debug, Args)]
@@ -87,7 +93,8 @@ fn main() -> ExitCode {
                 );
                 return ExitCode::from(2);
             };
-            let binding = match session_initialize(&arguments.merl_program, &home) {
+            let timeout = Duration::from_millis(arguments.child_timeout_ms);
+            let binding = match session_initialize(&arguments.merl_program, &home, timeout) {
                 Ok(binding) => binding,
                 Err(error) => {
                     eprintln!(
@@ -103,11 +110,14 @@ fn main() -> ExitCode {
             };
             let error = claude_tui_exec(
                 arguments.program,
-                &executable,
-                &arguments.server_name,
-                &binding,
-                &arguments.merl_program,
-                &home,
+                &TuiLaunch {
+                    channel_program: &executable,
+                    server_name: &arguments.server_name,
+                    binding: &binding,
+                    merl_program: &arguments.merl_program,
+                    home: &home,
+                    child_timeout: timeout,
+                },
                 &arguments.arguments,
             );
             eprintln!("could not launch stock Claude TUI with channel: {error}");
@@ -135,7 +145,10 @@ fn main() -> ExitCode {
     }
 }
 
-fn channel_serve(arguments: ClaudeChannelArguments) -> Result<(), String> {
+fn channel_serve(
+    arguments: ClaudeChannelArguments,
+) -> Result<(), merl_live_delivery_spike::host::claude::ClaudeError> {
+    let timeout = Duration::from_millis(arguments.child_timeout_ms);
     match (
         arguments.message,
         arguments.session,
@@ -145,14 +158,12 @@ fn channel_serve(arguments: ClaudeChannelArguments) -> Result<(), String> {
         (Some(message), None, None, None) => stdio_serve(&message),
         (None, Some(session), Some(program), Some(home)) => stdio_live_serve(
             &SessionBinding {
-                session_id: session,
+                session_id: merl_live_delivery_spike::SessionId::new(session),
             },
             &program,
             &home,
+            timeout,
         ),
-        _ => Err(
-            "provide either --message or all of --session, --merl-program, and --merl-home"
-                .to_owned(),
-        ),
+        _ => Err(merl_live_delivery_spike::host::claude::ClaudeError::Arguments),
     }
 }

@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 use merl_live_delivery_spike::HostDelivery;
 use merl_live_delivery_spike::host::codex::{ExactThread, QueueDelivery};
@@ -100,6 +101,23 @@ fn queue_delivery_targets_only_the_bound_uuid_with_the_complete_envelope() {
 }
 
 #[test]
+fn queue_delivery_times_out_a_hanging_codex_process() {
+    let directory = tempfile::tempdir().expect("temporary fake directory");
+    let executable = directory.path().join("codex");
+    executable_write(&executable, "#!/usr/bin/env bash\nsleep 60\n");
+    let thread = ExactThread::parse(THREAD_ID).expect("exact UUID");
+    let mut delivery = QueueDelivery::with_timeout(&executable, thread, Duration::from_millis(50));
+    let started = Instant::now();
+
+    let error = delivery
+        .deliver("untrusted result")
+        .expect_err("hanging queue must time out");
+
+    assert!(error.to_string().contains("timed out"));
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
 fn non_uuid_binding_is_rejected_instead_of_using_a_name_or_inference() {
     let error = ExactThread::parse("last").expect_err("recency alias must fail");
 
@@ -162,6 +180,45 @@ fn claude_channel_declares_only_the_channel_capability_and_emits_one_notificatio
     assert_eq!(messages[1]["method"], "notifications/claude/channel");
     assert_eq!(messages[1]["params"]["content"], "untrusted result");
     assert_eq!(messages[1]["params"]["meta"]["authorization"], "none");
+}
+
+#[test]
+fn fixed_claude_channel_reports_a_notification_write_failure() {
+    let message = "x".repeat(100_000);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_merl-live-delivery-spike"))
+        .args(["claude-channel", "--message", &message])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start channel server");
+    let mut stdin = child.stdin.take().expect("channel stdin");
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {}}
+        })
+    )
+    .expect("send initialize");
+    let mut output = BufReader::new(child.stdout.take().expect("channel stdout"));
+    let mut response = String::new();
+    output
+        .read_line(&mut response)
+        .expect("initialize response");
+    drop(output);
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::json!({
+            "jsonrpc": "2.0", "method": "notifications/initialized"
+        })
+    )
+    .expect("send initialized");
+    drop(stdin);
+
+    let status = child.wait().expect("channel exits");
+    assert!(!status.success(), "lost notification must fail the server");
 }
 
 #[test]
@@ -257,10 +314,11 @@ fn claude_channel_reconciles_after_a_board_wakeup_and_deduplicates() {
     let merl = directory.path().join("merl");
     let home = directory.path().join("board");
     let ready = directory.path().join("ready");
+    let queries = directory.path().join("queries");
     fs::create_dir_all(home.join("requests")).expect("create synthetic board");
     executable_write(
         &merl,
-        "#!/usr/bin/env bash\nset -euo pipefail\nif [[ -e \"$MERL_TEST_READY\" ]]; then\n  printf '[{\"request_id\":\"req-1\",\"requester_session_id\":\"ses-wrapper\",\"answer\":{\"summary\":\"done\"}}]\\n'\nelse\n  printf '[]\\n'\nfi\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'query\\n' >>\"$MERL_TEST_QUERIES\"\nif [[ -e \"$MERL_TEST_READY\" ]]; then\n  printf '[{\"request_id\":\"req-1\",\"requester_session_id\":\"ses-wrapper\",\"answer\":{\"summary\":\"done\"}}]\\n'\nelse\n  printf '[]\\n'\nfi\n",
     );
     let mut child = Command::new(env!("CARGO_BIN_EXE_merl-live-delivery-spike"))
         .args([
@@ -273,6 +331,7 @@ fn claude_channel_reconciles_after_a_board_wakeup_and_deduplicates() {
         .args(["--merl-home"])
         .arg(&home)
         .env("MERL_TEST_READY", &ready)
+        .env("MERL_TEST_QUERIES", &queries)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -319,7 +378,11 @@ fn claude_channel_reconciles_after_a_board_wakeup_and_deduplicates() {
             .contains("request_id=req-1")
     );
 
-    fs::write(home.join("requests/wake"), "two").expect("duplicate wakeup");
+    let queries_before_duplicate = query_count(&queries);
+    fs::write(home.join("requests/wake-two"), "two").expect("duplicate wakeup");
+    wait_until(Duration::from_secs(2), || {
+        query_count(&queries) > queries_before_duplicate
+    });
     drop(stdin);
     let status = child.wait().expect("channel exits");
     assert!(status.success());
@@ -328,6 +391,43 @@ fn claude_channel_reconciles_after_a_board_wakeup_and_deduplicates() {
         .read_to_string(&mut remainder)
         .expect("remaining output");
     assert!(remainder.is_empty(), "duplicate notification: {remainder}");
+}
+
+#[test]
+fn claude_wrapper_times_out_hanging_init_then_launches_pull_only_host() {
+    let directory = tempfile::tempdir().expect("temporary timeout directory");
+    let merl = directory.path().join("merl");
+    let host = directory.path().join("claude");
+    let recording = directory.path().join("host-recording");
+    let home = directory.path().join("board");
+    fs::create_dir(&home).expect("create synthetic board");
+    executable_write(&merl, "#!/usr/bin/env bash\nsleep 60\n");
+    executable_write(
+        &host,
+        "#!/usr/bin/env bash\nprintf 'launched\\n' >\"$MERL_TEST_RECORDING\"\nexit 0\n",
+    );
+
+    let started = Instant::now();
+    let output = Command::new(env!("CARGO_BIN_EXE_merl-live-delivery-spike"))
+        .args(["claude", "--program"])
+        .arg(&host)
+        .args(["--merl-program"])
+        .arg(&merl)
+        .args(["--merl-home"])
+        .arg(&home)
+        .args(["--child-timeout-ms", "50"])
+        .env("MERL_TEST_RECORDING", &recording)
+        .output()
+        .expect("run timeout wrapper");
+
+    assert!(output.status.success());
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(fs::read_to_string(recording).unwrap(), "launched\n");
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("timed out")
+    );
 }
 
 #[test]
@@ -373,4 +473,18 @@ fn executable_write(path: &std::path::Path, contents: &str) {
     let mut permissions = fs::metadata(path).expect("fake metadata").permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions).expect("make fake executable");
+}
+
+fn wait_until(timeout: Duration, predicate: impl Fn() -> bool) {
+    let deadline = Instant::now() + timeout;
+    while !predicate() {
+        assert!(Instant::now() < deadline, "condition timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn query_count(path: &std::path::Path) -> usize {
+    fs::read_to_string(path)
+        .map(|contents| contents.lines().count())
+        .unwrap_or(0)
 }

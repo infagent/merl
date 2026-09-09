@@ -4,6 +4,7 @@ use std::process::Command;
 use serde_json::Value;
 use tempfile::TempDir;
 
+use merl_live_delivery_spike::SessionId;
 use merl_live_delivery_spike::board::{Board, BoardError, ResultItem};
 
 pub struct MemoryBoard {
@@ -17,7 +18,7 @@ impl MemoryBoard {
 }
 
 impl Board for MemoryBoard {
-    fn unread_results(&mut self, _session_id: &str) -> Result<Vec<ResultItem>, BoardError> {
+    fn unread_results(&mut self, _session_id: &SessionId) -> Result<Vec<ResultItem>, BoardError> {
         Ok(self.results.clone())
     }
 }
@@ -25,7 +26,7 @@ impl Board for MemoryBoard {
 pub fn result_item(request_id: &str, requester_session_id: &str, summary: &str) -> ResultItem {
     ResultItem {
         request_id: request_id.to_owned(),
-        requester_session_id: requester_session_id.to_owned(),
+        requester_session_id: SessionId::new(requester_session_id),
         answer: serde_json::json!({"summary": summary}),
     }
 }
@@ -69,29 +70,36 @@ impl SyntheticBoard {
         serde_json::from_slice(&output.stdout).expect("structured Merl output")
     }
 
-    pub fn initialize(&self, project: &Path) -> String {
-        self.merl(&[
-            "init",
-            "--cwd",
-            project.to_str().expect("UTF-8 project path"),
-            "--json",
-        ])["session_id"]
-            .as_str()
-            .expect("session id")
-            .to_owned()
+    pub fn initialize(&self, project: &Path) -> SessionId {
+        SessionId::new(
+            self.merl(&[
+                "init",
+                "--cwd",
+                project.to_str().expect("UTF-8 project path"),
+                "--json",
+            ])["session_id"]
+                .as_str()
+                .expect("session id")
+                .to_owned(),
+        )
     }
 
-    pub fn answered_request(&self, requester: &str, worker: &str, summary: &str) -> String {
+    pub fn answered_request(
+        &self,
+        requester: &SessionId,
+        worker: &SessionId,
+        summary: &str,
+    ) -> String {
         let request_id = self.claimed_request(requester, worker);
         self.answer_request(worker, &request_id, summary);
         request_id
     }
 
-    pub fn claimed_request(&self, requester: &str, worker: &str) -> String {
+    pub fn claimed_request(&self, requester: &SessionId, worker: &SessionId) -> String {
         let request = self.merl(&[
             "ask",
             "--session",
-            requester,
+            requester.as_str(),
             "--title",
             "Synthetic live delivery",
             "--outcome",
@@ -109,7 +117,7 @@ impl SyntheticBoard {
         self.merl(&[
             "claim",
             "--session",
-            worker,
+            worker.as_str(),
             "--request",
             request_id,
             "--json",
@@ -117,11 +125,11 @@ impl SyntheticBoard {
         request_id.to_owned()
     }
 
-    pub fn answer_request(&self, worker: &str, request_id: &str, summary: &str) {
+    pub fn answer_request(&self, worker: &SessionId, request_id: &str, summary: &str) {
         self.merl(&[
             "answer",
             "--session",
-            worker,
+            worker.as_str(),
             "--request",
             request_id,
             "--summary",
@@ -132,8 +140,8 @@ impl SyntheticBoard {
         ]);
     }
 
-    pub fn results(&self, session: &str) -> Value {
-        self.merl(&["results", "--session", session, "--json"])
+    pub fn results(&self, session: &SessionId) -> Value {
+        self.merl(&["results", "--session", session.as_str(), "--json"])
     }
 
     pub fn request_bytes(&self, request_id: &str) -> Vec<u8> {
