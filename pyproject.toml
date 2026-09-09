@@ -1,6 +1,6 @@
 [project]
 name = "merl"
-version = "0.1.0"
+version = "0.1.1"
 description = "A passive, Markdown-backed cross-project agent help queue"
 readme = "README.md"
 authors = [
