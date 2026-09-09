@@ -1,0 +1,124 @@
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use serde_json::Value;
+use tempfile::TempDir;
+
+pub struct SyntheticBoard {
+    root: TempDir,
+    home: PathBuf,
+}
+
+impl SyntheticBoard {
+    pub fn new() -> Self {
+        let root = tempfile::tempdir().expect("synthetic root");
+        let home = root.path().join("merl-home");
+        Self { root, home }
+    }
+
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
+    pub fn project(&self, name: &str) -> PathBuf {
+        let path = self.root.path().join(name);
+        std::fs::create_dir_all(&path).expect("synthetic project");
+        path
+    }
+
+    pub fn merl(&self, arguments: &[&str]) -> Value {
+        let output = Command::new("uv")
+            .current_dir(repository_root())
+            .env("UV_CACHE_DIR", self.root.path().join("uv-cache"))
+            .args(["run", "merl", "--home"])
+            .arg(&self.home)
+            .args(arguments)
+            .output()
+            .expect("run existing Merl CLI");
+        assert!(
+            output.status.success(),
+            "Merl CLI failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("structured Merl output")
+    }
+
+    pub fn initialize(&self, project: &Path) -> String {
+        self.merl(&[
+            "init",
+            "--cwd",
+            project.to_str().expect("UTF-8 project path"),
+            "--json",
+        ])["session_id"]
+            .as_str()
+            .expect("session id")
+            .to_owned()
+    }
+
+    pub fn answered_request(&self, requester: &str, worker: &str, summary: &str) -> String {
+        let request_id = self.claimed_request(requester, worker);
+        self.answer_request(worker, &request_id, summary);
+        request_id
+    }
+
+    pub fn claimed_request(&self, requester: &str, worker: &str) -> String {
+        let request = self.merl(&[
+            "ask",
+            "--session",
+            requester,
+            "--title",
+            "Synthetic live delivery",
+            "--outcome",
+            "The exact requester sees the answer",
+            "--evidence",
+            "Synthetic evidence",
+            "--artifact",
+            "synthetic.txt",
+            "--needs",
+            "testing",
+            "--blocking",
+            "--json",
+        ]);
+        let request_id = request["request_id"].as_str().expect("request id");
+        self.merl(&[
+            "claim",
+            "--session",
+            worker,
+            "--request",
+            request_id,
+            "--json",
+        ]);
+        request_id.to_owned()
+    }
+
+    pub fn answer_request(&self, worker: &str, request_id: &str, summary: &str) {
+        self.merl(&[
+            "answer",
+            "--session",
+            worker,
+            "--request",
+            request_id,
+            "--summary",
+            summary,
+            "--evidence",
+            "Synthetic verification passed",
+            "--json",
+        ]);
+    }
+
+    pub fn results(&self, session: &str) -> Value {
+        self.merl(&["results", "--session", session, "--json"])
+    }
+
+    pub fn request_bytes(&self, request_id: &str) -> Vec<u8> {
+        std::fs::read(self.home.join("requests").join(format!("{request_id}.md")))
+            .expect("request document")
+    }
+}
+
+pub fn repository_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("repository root")
+}
