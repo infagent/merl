@@ -21,6 +21,19 @@
 - Enforce keyword-only arguments with a leading bare `*`, including short two-parameter functions, so call sites remain self-documenting.
 - Apply these defaults to new modules and functions. When adapting existing code, update every call site in the same pass, including source, tests, documentation examples, nested calls, and executed snippets.
 
+## Rust coding style
+
+- Use stable Rust through `rustup` and Cargo. Pin the toolchain in `rust-toolchain.toml`, declare the minimum supported Rust version in `Cargo.toml`, use `cargo add` and `cargo remove` for dependencies, and commit `Cargo.lock` for applications and binaries.
+- Name modules after the noun or type their functions operate on, not a gerund or broad domain. Prefer `image::write(...)` to `imaging::write_image(...)`. Methods should omit the receiver noun already implied by their type.
+- Follow standard Rust naming and conversion conventions. Use `as_`, `to_`, and `into_` according to ownership, implement standard conversion traits where they fit, and derive common traits such as `Debug`, `Clone`, `Eq`, and `Hash` when their semantics are sound.
+- Borrow by default and take ownership when a value must be retained or consumed. Do not add `clone()` only to silence the borrow checker; make the ownership boundary explicit instead.
+- Replace unclear positional arguments, especially multiple booleans or values of the same type, with named structs, enums, or builders. Use newtypes for identifiers and values that must not be mixed accidentally.
+- Return `Result` for recoverable failures and reserve panics for bugs or violated internal invariants. Give library and domain code typed errors; add operational context at command, process, filesystem, and network boundaries. Do not use `unwrap()` or `expect()` outside tests unless the invariant is local and explained.
+- Keep async tasks owned and cancellable. Do not hold a synchronous lock or perform blocking filesystem or process work on an async executor. Track spawned tasks, propagate their failures, and define how shutdown drains or cancels them.
+- Avoid `unsafe`. When it is required, keep it behind a small safe API, document each safety invariant with a `SAFETY` comment, and add targeted tests. Do not weaken an `unsafe_code` lint to make a dependency or implementation convenient.
+- Format with `cargo fmt`. Before committing, run `cargo clippy --all-targets --all-features -- -D warnings` and `cargo test --all-features`; run doctests separately when another test runner is configured. Use `cargo-deny` in CI to enforce allowed licenses, advisories, duplicate-version policy, and trusted dependency sources.
+- Apply these defaults to new modules and functions. When changing a public type or function, update every call site in the same pass, including source, tests, examples, documentation, and executed snippets.
+
 ## Bash coding style
 
 - Use Bash for repository automation only when a small, dependency-free script is clearer than another project language.
