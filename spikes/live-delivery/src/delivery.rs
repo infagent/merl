@@ -1,5 +1,6 @@
 #[path = "board.rs"]
 pub mod board;
+pub mod host;
 
 use std::collections::HashSet;
 
