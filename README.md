@@ -2,13 +2,19 @@
 
 Merl gives teams of coding and research agents a shared, durable understanding of their work.
 
-GitHub threads, review comments, research notes, and agent conversations hold useful information, but agents pay to reconstruct that information each time they read them. Merl captures the source material, compiles it into provenance-backed project state, and sends each agent a small view of the changes relevant to its role. An agent can expand any decision, finding, claim, or task back to the evidence behind it.
+Agents waste tokens rebuilding the same context from GitHub threads, research notes, and old conversations. Merl captures that material, compiles it into provenance-backed project state, and gives each agent a compact view of the changes relevant to its role. Any decision, finding, claim, or task can expand back to its evidence.
 
-Merl tracks software work such as issues, pull requests, requirements, contracts, and review findings. For research, it tracks hypotheses, experiments, claims, and evidence. A separate control plane handles assignments, inboxes, subscriptions, leases, checkpoints, and handoffs without mixing runtime details into project knowledge.
+The state model covers software work and research. A separate control plane tracks assignments, inboxes, checkpoints, agent guidance, and runtime state. GitHub stays readable: Merl keeps routine machine activity internal, publishes significant events as ordinary prose, and maintains one bounded status view.
 
-The first release will run locally as a Rust CLI and daemon backed by SQLite. GitHub is the first source integration. A thin MCP adapter will expose the same operations once the command-line interface and state model have settled.
+One project may span several repositories, and one repository may participate in several projects. Projects coordinate through permissioned requests and exports while retaining separate accepted histories.
 
-Merl is under active design. Read the [full product description](docs/product-description.md) and the [state architecture notes](docs/agent-github-state-architecture.md).
+Humans approve agent templates and resource limits. Project managers can staff work from those templates, choose between stronger and cheaper runtimes, and reset task-scoped agent context between unrelated assignments. Durable practices and checkpoints survive the reset.
+
+On one computer, concurrent writers use separate Git worktrees and task branches. Merl gives each managed agent bounded, disk-backed scratch space instead of relying on the system `/tmp`. A portable manifest moves non-secret agent and workspace setup to another computer.
+
+Merl ships as a Rust CLI and project authority. Local projects use SQLite; shared projects use the same domain API behind a reachable authority. A thin MCP adapter exposes proven operations from that API.
+
+Merl is under active design. Read the [product description](docs/product-description.md), [UI behavior contract](docs/user-interface.md), [architecture](docs/architecture.md), and [first release plan](docs/first-release.md).
 
 ## License
 
