@@ -259,6 +259,8 @@ merl compilation context CR42 --rendered
 Run: CR42
 Trigger: SE771
 Basis: atlas@482
+Source cutoff: observation 771
+Mode: live
 Objects: D18@4 Q32@2 E37@5
 Recent source: SE768 SE769 SE771
 Selector: issue-context/v1, budget 6000 chars
@@ -267,6 +269,8 @@ Input digest: sha256:...
 ```
 
 The compiler can return `context_required` with a relation, object, or source range it needs. Policy limits the expansion and records a new context. Merl reports unresolved ambiguity when it cannot satisfy the request; it does not load the full thread without recording that choice.
+
+Historical imports display `replay` only when the recorded context excludes all later observations. If provider history is incomplete, Merl displays `hindsight`; that run cannot enter accepted state unless an authorized user promotes its outputs through policy.
 
 ## Changing project state
 
@@ -345,6 +349,8 @@ The preview lists the payload, compilation runs, assertions, events, projections
 
 After purge, `merl show D18 --source` returns `source_content_unavailable` with the tombstone reference. Derived state remains visible in redacted form unless a separate policy action invalidates it.
 
+The preview and result name the retention scopes covered by the operation. Merl promises removal only from the active store and those named Merl-managed copies. It lists provider systems, unmanaged backups, and prior exports as out of scope.
+
 ### Offline commands and synchronization
 
 Queued commands remain visible and controllable:
@@ -413,11 +419,14 @@ Agents and people read durable inbox entries:
 ```bash
 merl inbox list
 merl inbox show IN123
+merl inbox claim IN123 --session S18
 merl inbox ack IN123
 merl inbox watch
 ```
 
 `inbox watch` talks to the Merl daemon. The invoking agent does not maintain a fragile shell watcher. If wake-up fails, the entry remains pending and appears in `merl project status`.
+
+One active session owns a logical agent's actionable inbox cursor. Other sessions may inspect entries but cannot claim them or advance the cursor. An acknowledgement records receipt and cursor progress; it does not mean agreement, understanding, task acceptance, question resolution, or completion.
 
 Before ending a session, an agent records a checkpoint:
 
@@ -607,6 +616,16 @@ merl agent stop atlas-dev-4
 
 Draining prevents new assignments and lets active work checkpoint. Stopping releases workspace and storage reservations only after the host confirms process exit. Attempts to exceed concurrency, select another model, grant a permission, or use an unapproved credential fail with `delegation_exceeded`.
 
+An urgent stop does not bypass durable state:
+
+```text
+CANCELLATION REQUESTED T53
+INTERRUPT REQUESTED S18
+HOST ACTION HA91 pending
+```
+
+Merl attempts `HA91` immediately after commit. The UI reports interrupt requested, host delivery, confirmed process exit, and task cancellation separately. A delivery failure leaves the host action pending and retryable.
+
 A human may attach a process started elsewhere:
 
 ```bash
@@ -625,7 +644,7 @@ Retirement preserves provenance and audit history. Erasing retained project reco
 
 ### Direct coordination
 
-Most collaboration changes project state. A request that may be accepted, prioritized, or delayed must be a task. A direct note may provide context, but it does not become schedulable work:
+Most collaboration changes project state. A request that may be accepted, prioritized, or delayed must be a task. Direct prose is source evidence, not schedulable work:
 
 ```bash
 merl task request --team software \
@@ -639,7 +658,11 @@ merl message send \
   --ref github:acme/atlas/pull/229
 ```
 
-The note becomes a durable inbox entry with delivery and acknowledgement state. It does not become accepted project knowledge. A PM defers `T45`, not the message. Cross-project work uses versioned requests and exports, not direct messages.
+The authored note becomes an immutable source event with one or more delivery records. Compilation may derive several assertions from precise spans of the note; delivery itself accepts none of them. Policy handles each assertion independently. A PM defers `T45`, not the message.
+
+`in_reply_to` preserves conversation history but does not close a question, finding, or task. Those objects change only through semantic commands or accepted assertions such as `answers Q41`, `updates T45`, or `disputes C9`. One note may address several objects, and several notes may address one object.
+
+Merl-generated inbox text carries its originating command or domain-event batch ID and never enters semantic compilation. One origin may create several recipient deliveries. Manually similar notes are not merged unless they share strong lineage. Cross-project work uses versioned requests and exports, not direct messages.
 
 ## Workspace safety
 
@@ -882,6 +905,22 @@ merl projection show github:acme/atlas#204/merl-status
 merl projection restore github:acme/atlas#204/merl-status
 ```
 
+## Evaluation
+
+The benchmark runner compares Merl with practical alternatives under one recorded model configuration:
+
+```bash
+merl eval run held-out \
+  --baseline raw \
+  --baseline rolling-summary \
+  --baseline recent-retrieval \
+  --baseline summary-retrieval \
+  --baseline merl \
+  --trials 5
+```
+
+The report records model and version, reasoning effort, prompts, available tools, sampling controls, per-trial answers, correctness, total token cost, and variance. It identifies the read count where each approach becomes cheaper than repeated raw-history consumption. A hindsight compilation is labeled and excluded from causal replay results.
+
 ## Errors and non-interactive use
 
 Human errors state what happened, what remained unchanged, and the next safe action. Machine errors have stable codes and structured details.
@@ -990,6 +1029,21 @@ Feature: Read compact project state
     Then I receive the captured source and provenance
 ```
 
+### Evaluation compares practical alternatives
+
+```gherkin
+@first_release
+Feature: Measure the value of compiled state
+
+  Scenario: A held-out run reports paired baseline results
+    Given a frozen held-out corpus
+    And one recorded model, effort, prompt, tool, and sampling configuration
+    When I run five paired trials for raw history, rolling summary, recent retrieval, summary plus retrieval, and Merl
+    Then the report shows correctness, total token cost, and variance for each method
+    And it shows the measured break-even read count
+    And it labels hindsight runs and excludes them from causal replay results
+```
+
 ### A new comment produces a pollable delta
 
 ```gherkin
@@ -1004,6 +1058,46 @@ Feature: Read an incremental project change
     And the entry does not contain the full Issue history
     When the agent acknowledges the entry
     Then its durable cursor advances through revision 482
+```
+
+### Inbox receipt does not imply semantic acceptance
+
+```gherkin
+Feature: Consume one logical agent inbox safely
+
+  Scenario: One session owns the actionable cursor
+    Given logical agent "atlas-dev" has active sessions "S18" and "S19"
+    And session "S18" holds the inbox lease
+    When session "S19" tries to claim entry "IN123"
+    Then the command fails with code "inbox_lease_not_owned"
+    And the agent cursor does not advance
+
+  Scenario: Acknowledgement records receipt only
+    Given inbox entry "IN123" refers to open task "T45" and question "Q41"
+    When the consuming session acknowledges "IN123"
+    Then the inbox records the acknowledgement
+    And task "T45" remains open
+    And question "Q41" remains unresolved
+```
+
+### Direct prose is compiled, not trusted
+
+```gherkin
+Feature: Derive state from an authored note
+
+  Scenario: A note addresses several project objects
+    Given an agent sends one note that reports evidence, answers "Q41", and requests work on "T45"
+    When Merl captures and compiles the note
+    Then the immutable source event has separate delivery records
+    And its reply link records conversation provenance only
+    And separate assertions address the evidence, question, and task
+    And delivery accepts none of those assertions
+
+  Scenario: Generated fan-out does not feed the compiler
+    Given one accepted project change creates inbox entries for three subscribers
+    When Merl renders the three notifications
+    Then every notification references the same semantic origin
+    And none becomes a new semantic source event
 ```
 
 ### Compiler context is bounded and reproducible
@@ -1032,6 +1126,43 @@ Feature: Compile an incremental Issue comment
     Given compilation run "CR42" has available source content
     When I rebuild its rendered compiler input
     Then the rebuilt bytes match the recorded input digest
+
+  Scenario: Historical replay cannot see the future
+    Given comment "SE10" says "Keep gain fixed"
+    And later comment "SE12" says "Correction: sweep gain"
+    When Merl replays comment "SE11" between them
+    Then its context cutoff ends at "SE11"
+    And its basis state does not contain information derived from "SE12"
+
+  Scenario: Missing provider history is labeled as hindsight
+    Given an edited comment has no retrievable prior version or observation order
+    When Merl compiles the historical thread with the current comment body
+    Then the run mode is "hindsight"
+    And the run is excluded from causal replay results
+    And its assertions cannot enter accepted state without promotion
+
+  Scenario: One comment contains several semantic acts
+    Given a comment reports an experiment failure, infers that a hypothesis weakened, and requests a software task
+    When Merl compiles the comment
+    Then it emits separate assertions for the report, inference, and request
+    And each assertion records its speech act, epistemic basis, polarity, confidence, and source span
+    And policy may give the assertions different dispositions
+
+  Scenario: A relay does not transfer authority
+    Given an agent comment attributes a destructive instruction to an authorized human
+    And no authenticated source contains the human's instruction
+    When Merl evaluates the extracted assertion
+    Then the agent is the message author
+    And the human attribution is unverified
+    And policy does not treat the comment as the human's authorized command
+
+  Scenario: Relative time preserves its basis
+    Given a comment authored at a recorded time and timezone says "tomorrow"
+    And the same comment says "after PR 229 merges"
+    When Merl compiles the comment
+    Then the date resolves from the recorded author context
+    And the original expression remains in provenance
+    And the pull request phrase becomes an event predicate rather than a guessed date
 ```
 
 ### Policy provenance matches the input
@@ -1052,6 +1183,35 @@ Feature: Explain accepted state
     And I do not see a fabricated assertion, compilation run, or source event
 ```
 
+### Changed evidence triggers reconsideration
+
+```gherkin
+@first_release
+Feature: Maintain truth after source changes
+
+  Scenario: An edited source requires support revalidation
+    Given active decision "D18" derives from source event "SE10"
+    And "D18" has support status "current"
+    When source event "SE11" supersedes "SE10"
+    Then observed assertions from "SE10" remain unchanged
+    And Merl appends an evidence-impact record
+    And decision "D18" remains active
+    And its support status becomes "revalidation_pending"
+
+  Scenario: A cosmetic edit preserves support
+    Given decision "D18" is active with support awaiting revalidation
+    When recompilation finds no material semantic change
+    Then decision "D18" remains active
+    And its support status becomes "current"
+
+  Scenario: A material correction supersedes the old decision
+    Given decision "D18" says to keep gain fixed
+    And its supporting source is corrected to require a gain sweep
+    When policy accepts the new assertion
+    Then a new decision supersedes "D18"
+    And the old source, assertion, evidence impact, and policy decision remain auditable
+```
+
 ### Provider facts remain provider-owned
 
 ```gherkin
@@ -1065,6 +1225,8 @@ Feature: Separate external facts from Merl semantics
     And the provider mirror remains open
     When GitHub reports issue "204" as closed
     Then the provider mirror becomes closed
+    And the deterministic provider observation advances the project revision
+    And subscribed agents can read the change through the normal delta and inbox cursor
 
   Scenario: Merl derives a blocker without changing GitHub facts
     Given GitHub reports issue "204" as open
@@ -1087,6 +1249,14 @@ Feature: Remove retained sensitive content
     And the source event keeps an audit tombstone, digest, actor, time, and reason
     And decision "D18" reports that its evidence is unavailable
     And replay reports that it cannot reproduce the affected compiler input
+    And the result names every covered Merl-managed retention scope
+    And the result excludes provider systems, unmanaged backups, and prior exports from its erasure claim
+
+  Scenario: Equal payloads in separate scopes remain independently erasable
+    Given two retention scopes store the same protected bytes
+    When an administrator purges the first scope
+    Then the first payload becomes unavailable
+    And the second payload remains available
 ```
 
 ### Unrelated changes do not invalidate policy
@@ -1143,10 +1313,11 @@ Feature: Publish accepted state for humans
   Scenario: Another authority recognizes Merl output
     Given project "atlas" published a verified Merl comment to issue "204"
     And project "core" also ingests issue "204"
+    And Core has a trusted mapping from Atlas to its publication key or authority
     When Core captures the comment
     Then Core records the stable publication and publishing-project identities
     And Core does not compile the generated prose as ordinary source
-    And a hidden marker by itself would not be sufficient verification
+    And a shared provider actor or hidden marker by itself would not be sufficient verification
 ```
 
 ### Cross-project work preserves authority
@@ -1380,6 +1551,15 @@ Feature: Delegate agent provisioning
     When provisioning retries after a lost response
     Then Merl reconciles using provisioning identity "SP19"
     And at most one host agent belongs to the request
+
+  Scenario: An urgent stop survives host failure
+    Given session "S18" is executing task "T53"
+    When an authorized PM urgently stops the agent
+    Then cancellation and interrupt requests commit with a durable host action
+    And host interruption begins only after commit
+    When host delivery fails
+    Then the interrupt remains pending and retryable
+    And Merl does not report the process stopped or task cancelled
 ```
 
 ### Agent scratch stays bounded
