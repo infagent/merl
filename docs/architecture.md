@@ -4,8 +4,6 @@ Status: draft for implementation
 
 This document defines Merl's implementation architecture. The [product description](product-description.md) explains the product and its intended use. The [user interface and behavior contract](user-interface.md) defines what callers can observe. This document fixes the boundaries, consistency model, and failure behavior that the code must preserve.
 
-Examples use two fictional projects: Atlas develops a product, while Core owns shared infrastructure and developer tooling that Atlas may request.
-
 ## Decision summary
 
 | Area | Decision |
@@ -131,7 +129,7 @@ A `ProjectSourceBinding` connects one source to one project. This many-to-many r
 
 ```yaml
 selection:
-  labels: [atlas]
+  labels: [project-a]
 
 capabilities:
   ingest: true
@@ -609,8 +607,8 @@ constraints:
   needed_by: 2026-10-01
   impact_payload: PL82
 refs:
-  - snapshot: atlas:D18@4
-  - live: atlas:T42
+  - snapshot: project-a:D18@4
+  - live: project-a:T42
 ```
 
 The target advertises supported kinds and versions. It rejects an unknown version with a durable compatibility outcome rather than guessing at its meaning.
@@ -657,7 +655,7 @@ Merl handles duplicates at distinct layers:
 - Repeated origin transition ID means the transition was already imported.
 - Similar request content is a policy question and may represent legitimate new work.
 
-Correlation and causation IDs retain the exchange lineage through requests, tasks, GitHub issues, and updates. Repeated project identity in a lineage is valid. A path such as Atlas to Core to Platform and back to Atlas may carry a needed question and answer.
+Correlation and causation IDs retain the exchange lineage through requests, tasks, GitHub issues, and updates. Repeated project identity in a lineage is valid. A path such as Project A to Project B to Project C and back to Project A may carry a needed question and answer.
 
 Merl detects duplicate work from the same correlation, request kind, semantic transition, and processed origin transition. It may flag suspected semantic recursion for policy. A configurable maximum hop count provides a safety valve without treating every graph cycle as an error.
 

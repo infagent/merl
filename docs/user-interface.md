@@ -4,8 +4,6 @@ Status: draft behavior contract
 
 This document describes how people and agents use Merl. It defines observable behavior before command parsing, storage, networking, or database design. The examples use a CLI because it is concrete and easy to test. MCP tools, agent skills, and future graphical interfaces should expose the same actions and outcomes.
 
-Examples use two fictional projects: Atlas develops a product, while Core owns shared infrastructure and developer tooling that Atlas may request.
-
 The command names are the first proposed interface. We may refine spelling during implementation, but the behavioral distinctions in this document are requirements.
 
 ## Interface principles
@@ -47,10 +45,10 @@ Examples:
 
 ```bash
 merl project view
-merl issue view github:acme/atlas#204
+merl issue view github:acme/project-a#204
 merl question resolve Q32 --decision D18
 merl experiment record --hypothesis H4 --artifact capture:S1
-merl request create --to core --kind infrastructure.change
+merl request create --to project-b --kind infrastructure.change
 merl inbox list
 ```
 
@@ -75,7 +73,7 @@ With `--format json`, every command returns one result envelope. The envelope id
   "schema": "merl.result/v1",
   "action": "question.resolve",
   "outcome": "accepted",
-  "project": "atlas",
+  "project": "project-a",
   "revision": 482,
   "objects": ["Q32", "D18"],
   "warnings": []
@@ -98,7 +96,7 @@ If several bindings remain, an interactive terminal asks the user to choose. A n
 Users can set a local workspace preference without modifying the repository:
 
 ```bash
-merl context set atlas
+merl context set project-a
 merl context show
 merl context clear
 ```
@@ -118,8 +116,8 @@ It creates private local directories, starts no network service, and does not cr
 A user creates a local project and attaches the current repository:
 
 ```bash
-merl project create atlas --local
-merl source attach . --project atlas
+merl project create project-a --local
+merl source attach . --project project-a
 ```
 
 For a provider-backed repository, Merl resolves the Git remote through the provider and stores the immutable provider repository ID. For a local source without a provider identity, Merl creates a node-local source identity.
@@ -127,13 +125,13 @@ For a provider-backed repository, Merl resolves the Git remote through the provi
 The same source can attach to another project:
 
 ```bash
-merl source attach . --project core \
-  --select 'label=core' \
+merl source attach . --project project-b \
+  --select 'label=project-b' \
   --capability ingest \
   --capability compile
 ```
 
-Selection and capabilities remain separate. Adding `--select 'label=core'` cannot grant publication or issue-creation authority.
+Selection and capabilities remain separate. Adding `--select 'label=project-b'` cannot grant publication or issue-creation authority.
 
 Useful inspection commands include:
 
@@ -142,10 +140,10 @@ merl project list
 merl project status
 merl project coverage [--role researcher]
 merl source list
-merl source show github:acme/atlas
-merl source bindings github:acme/atlas
-merl source compilation-policy github:acme/atlas
-merl source compilation-policy set github:acme/atlas \
+merl source show github:acme/project-a
+merl source bindings github:acme/project-a
+merl source compilation-policy github:acme/project-a
+merl source compilation-policy set github:acme/project-a \
   --kind issue_comment \
   --mode eager
 ```
@@ -155,7 +153,7 @@ Compilation policy is part of the project-source binding. Modes are `capture_onl
 `merl project status` makes authority and freshness visible:
 
 ```text
-Project: atlas (P17)
+Project: project-a (P17)
 Authority: local, reachable
 Accepted revision: 482
 Source observation head: 771
@@ -204,7 +202,7 @@ Missing credential references:
 - github-work
 
 Workspace warnings:
-- atlas-dev had dirty or unpushed work; files were not exported
+- project-a-dev had dirty or unpushed work; files were not exported
 ```
 
 The default bundle includes agent profiles, personal guidance, project and authority references, node-local delivery preferences, workspace recipes, local context choices, adapter declarations, and pending commands with their IDs.
@@ -217,10 +215,10 @@ Shared projects synchronize from their authority. Moving a local project authori
 
 ```bash
 # Old computer: create the archive and freeze this authority generation
-merl project export atlas --for-transfer --output atlas.merl-project
+merl project export project-a --for-transfer --output project-a.merl-project
 
 # New computer
-merl project import atlas.merl-project --take-authority
+merl project import project-a.merl-project --take-authority
 ```
 
 Import verifies the archive and advances the authority generation before enabling writes. A node manifest never copies a live local authority or claims to preserve dirty Git files.
@@ -233,9 +231,9 @@ The main read commands are:
 merl project view [--role researcher]
 merl project coverage [--role researcher]
 merl project delta --since 481 [--role engineer]
-merl issue view github:acme/atlas#204 [--role researcher]
-merl issue coverage github:acme/atlas#204 [--role researcher]
-merl pr view github:acme/atlas/pull/229 [--role reviewer]
+merl issue view github:acme/project-a#204 [--role researcher]
+merl issue coverage github:acme/project-a#204 [--role researcher]
+merl pr view github:acme/project-a/pull/229 [--role reviewer]
 merl show D18
 merl show D18 --history
 merl show D18 --source
@@ -251,11 +249,11 @@ For provider-backed work, views label the source of each field. GitHub-owned fac
 Example compact output:
 
 ```text
-atlas@482  source_head=771  semantic_coverage=eager:771 gaps=0
+project-a@482  source_head=771  semantic_coverage=eager:771 gaps=0
 
 Keep receive gain and LO fixed for baseline captures. (D18)
 Open question: choose storage location for session two. (Q41)
-Blocked: session two capture waits on core request X17. (B9)
+Blocked: session two capture waits on project-b request X17. (B9)
 ```
 
 When coverage is incomplete, the same field is explicit:
@@ -279,7 +277,7 @@ merl compilation context CR42 --rendered
 ```text
 Run: CR42
 Trigger: SE771
-Basis: atlas@482
+Basis: project-a@482
 Source cutoff: observation 771
 Mode: live
 Objects: D18@4 Q32@2 E37@5
@@ -305,7 +303,7 @@ Mutations use domain language:
 merl decision create --summary 'Keep receive gain fixed' --scope baseline
 merl decision supersede D11 --with D18
 merl question resolve Q32 --decision D18
-merl finding open --pr github:acme/atlas/pull/229 --severity high
+merl finding open --pr github:acme/project-a/pull/229 --severity high
 merl finding resolve F22 --commit a83c1
 merl hypothesis create --statement 'DC impairment dominates baseline errors'
 merl experiment record --hypothesis H4 --artifact capture:S1
@@ -316,7 +314,7 @@ merl task block T42 --on B9
 The result names the authority outcome:
 
 ```text
-ACCEPTED  D18 at atlas@482
+ACCEPTED  D18 at project-a@482
 ```
 
 ```text
@@ -324,7 +322,7 @@ CANDIDATE C81 awaiting research-owner approval
 ```
 
 ```text
-QUEUED CMD91 against atlas@481; authority is offline
+QUEUED CMD91 against project-a@481; authority is offline
 ```
 
 ```text
@@ -460,7 +458,7 @@ Before ending a session, an agent records a checkpoint:
 
 ```bash
 merl session checkpoint \
-  --agent atlas-tech-lead \
+  --agent project-a-tech-lead \
   --summary 'Session two planning is blocked on X17' \
   --ref T42 --ref X17 --ref D18
 ```
@@ -468,7 +466,7 @@ merl session checkpoint \
 A later session resumes from accepted project state plus the checkpoint's references:
 
 ```bash
-merl session resume --agent atlas-tech-lead
+merl session resume --agent project-a-tech-lead
 ```
 
 The checkpoint does not copy full decisions, tasks, or artifacts. `resume` expands current versions and reports anything that changed after the checkpoint revision.
@@ -477,17 +475,17 @@ Agent guidance survives process shutdown, restart, and model-context clearing:
 
 ```bash
 merl agent practice add \
-  --agent atlas-dev \
-  --scope project:atlas \
+  --agent project-a-dev \
+  --scope project:project-a \
   --statement 'Write a failing behavioral test before implementation'
 
 merl agent lesson propose \
-  --agent atlas-dev \
-  --scope project:atlas \
+  --agent project-a-dev \
+  --scope project:project-a \
   --statement 'Run capture compatibility tests before changing reader framing' \
   --evidence T44
 
-merl agent guidance list --agent atlas-dev
+merl agent guidance list --agent project-a-dev
 merl agent guidance show AG18
 merl agent guidance activate AG18
 merl agent guidance retire AG18 --reason 'Superseded by project test policy'
@@ -495,33 +493,33 @@ merl agent guidance retire AG18 --reason 'Superseded by project test policy'
 
 Instructions record behavior required by an authorized human or project policy. Practices record adopted working methods. Lessons record observations proposed for reuse and may require approval. Each item has scope, provenance, priority, and lifecycle. Guidance changes how an agent works; it is not project knowledge and cannot override accepted requirements or safety policy.
 
-`merl session resume --agent atlas-dev` assembles a bounded view from identity and role, relevant active guidance, actionable assignments, the latest checkpoint, changes since its cursor, and current referenced project state. Current state wins over stale checkpoint prose.
+`merl session resume --agent project-a-dev` assembles a bounded view from identity and role, relevant active guidance, actionable assignments, the latest checkpoint, changes since its cursor, and current referenced project state. Current state wins over stale checkpoint prose.
 
 Context lifetime is configurable per agent:
 
 ```bash
-merl agent context-policy set atlas-pm --mode continuous
-merl agent context-policy set atlas-dev --mode task-scoped
-merl agent context-policy set atlas-researcher --mode manual
-merl agent context-policy show atlas-dev
+merl agent context-policy set project-a-pm --mode continuous
+merl agent context-policy set project-a-dev --mode task-scoped
+merl agent context-policy set project-a-researcher --mode manual
+merl agent context-policy show project-a-dev
 ```
 
 With `task-scoped`, Merl closes the session after its bound task becomes completed, cancelled, deferred, or otherwise non-actionable. Before asking the host to clear context, it commits a final checkpoint, result references, cursor, proposed lessons, assignment state, and lease release.
 
 ```bash
 merl session close \
-  --agent atlas-dev \
+  --agent project-a-dev \
   --task T44 \
   --outcome completed \
-  --ref github:acme/atlas/pull/229 \
+  --ref github:acme/project-a/pull/229 \
   --propose-lesson 'Run compatibility tests before changing reader framing'
 ```
 
 The result separates durable closure from the host side effect:
 
 ```text
-SESSION CLOSED atlas-dev generation 18
-CHECKPOINT CP91 committed at atlas@512
+SESSION CLOSED project-a-dev generation 18
+CHECKPOINT CP91 committed at project-a@512
 CONTEXT CLEAR pending through host adapter
 ```
 
@@ -530,7 +528,7 @@ If the adapter cannot reset context, Merl reports `context_reset_unsupported` an
 An agent with `continuous` policy stays in the same generation after completing a task. It still receives compact deltas and bounded views. A manual clear uses the same safe closure path:
 
 ```bash
-merl session close --agent atlas-pm --checkpoint --clear-context
+merl session close --agent project-a-pm --checkpoint --clear-context
 ```
 
 ### Advertising runtime and choosing an agent
@@ -539,7 +537,7 @@ The host adapter should publish runtime information when a session starts. A man
 
 ```bash
 merl agent advertise \
-  --agent atlas-senior-dev \
+  --agent project-a-senior-dev \
   --model anthropic:opus \
   --effort high \
   --cost-class high \
@@ -548,7 +546,7 @@ merl agent advertise \
   --available
 
 merl agent advertise \
-  --agent atlas-dev \
+  --agent project-a-dev \
   --model anthropic:sonnet \
   --effort medium \
   --cost-class medium \
@@ -575,12 +573,12 @@ Example output:
 
 ```text
 Eligible
-1. atlas-senior-dev
+1. project-a-senior-dev
    model=anthropic:opus effort=high cost=high
    matches: rust, high reasoning; extra: architecture-review
 
 Ineligible
-- atlas-dev
+- project-a-dev
   model=anthropic:sonnet effort=medium cost=medium
   missing: high reasoning
 ```
@@ -588,7 +586,7 @@ Ineligible
 For a routine task with medium reasoning demand and `--budget prefer-cost`, both agents may be eligible and the Sonnet-backed developer ranks first. Ranking is advisory and gives reasons. The PM or another authorized actor commits the choice:
 
 ```bash
-merl task assign T52 --to atlas-senior-dev \
+merl task assign T52 --to project-a-senior-dev \
   --reason 'High-risk parser change needs reasoning headroom'
 ```
 
@@ -609,10 +607,10 @@ merl agent template create software-dev-medium \
   --workspace worktree \
   --scratch-limit 10GiB \
   --max-concurrency 2 \
-  --project atlas
+  --project project-a
 
 merl delegation grant \
-  --to atlas-pm \
+  --to project-a-pm \
   --template software-dev-medium \
   --max-active 2
 ```
@@ -627,7 +625,7 @@ merl agent spawn \
 
 ```text
 SPAWN ACCEPTED SP19
-Agent: atlas-dev-4
+Agent: project-a-dev-4
 Workspace reservation: 10 GiB
 Provisioning: pending through host adapter
 ```
@@ -638,8 +636,8 @@ The PM can inspect, drain, or stop agents covered by its delegation:
 
 ```bash
 merl agent provisioning show SP19
-merl agent drain atlas-dev-4
-merl agent stop atlas-dev-4
+merl agent drain project-a-dev-4
+merl agent stop project-a-dev-4
 ```
 
 Draining prevents new assignments and lets active work checkpoint. Stopping releases workspace and storage reservations only after the host confirms process exit. Attempts to exceed concurrency, select another model, grant a permission, or use an unapproved credential fail with `delegation_exceeded`.
@@ -680,10 +678,10 @@ merl task request --team software \
   --needed-by 2026-10-01
 
 merl message send \
-  --to atlas-reviewer \
+  --to project-a-reviewer \
   --summary 'Please look at the unsafe block in the parser' \
   --ref T45 \
-  --ref github:acme/atlas/pull/229
+  --ref github:acme/project-a/pull/229
 ```
 
 The structured task is the state change. It does not need an extraction model. The authored note becomes an immutable source event with one or more delivery records and follows the binding's compilation policy. Delivery itself accepts nothing. A PM defers `T45`, not the message.
@@ -691,7 +689,7 @@ The structured task is the state change. It does not need an extraction model. T
 Cold notes appear without their body in ordinary inbox and role views:
 
 ```text
-M91 from atlas-researcher
+M91 from project-a-researcher
 refs: H4 E37
 payload: 3.8k chars, not loaded
 compilation: on_demand, not compiled
@@ -715,14 +713,14 @@ Merl-generated inbox text carries its originating command or domain-event batch 
 Merl treats agent workspaces as local operational state. Assignment can create one automatically:
 
 ```bash
-merl task assign T52 --to atlas-dev --workspace auto
+merl task assign T52 --to project-a-dev --workspace auto
 
-merl agent register atlas-reviewer --role reviewer
+merl agent register project-a-reviewer --role reviewer
 merl workspace check
 merl workspace create \
-  --agent atlas-dev \
+  --agent project-a-dev \
   --task T52 \
-  --source github:acme/atlas \
+  --source github:acme/project-a \
   --strategy worktree
 merl workspace list
 ```
@@ -731,8 +729,8 @@ The default layout uses sibling worktrees under `MERL_HOME`:
 
 ```text
 ~/.merl/git/R1.git/
-~/.merl/workspaces/atlas/T52-atlas-dev/
-~/.merl/workspaces/atlas/T53-atlas-senior-dev/
+~/.merl/workspaces/project-a/T52-project-a-dev/
+~/.merl/workspaces/project-a/T53-project-a-senior-dev/
 ```
 
 The two worktrees share Git objects. They have different files, indexes, task branches, and current working directories. Merl does not create one agent's worktree inside another checkout.
@@ -743,9 +741,9 @@ Read-only review uses a detached worktree at a pinned commit:
 
 ```bash
 merl workspace create \
-  --agent atlas-reviewer \
+  --agent project-a-reviewer \
   --task T52 \
-  --source github:acme/atlas \
+  --source github:acme/project-a \
   --at a83c1 \
   --read-only
 ```
@@ -756,9 +754,9 @@ Worktree is the default because it avoids duplicate Git objects. A full clone is
 
 ```bash
 merl workspace create \
-  --agent atlas-dev \
+  --agent project-a-dev \
   --task T52 \
-  --source github:acme/atlas \
+  --source github:acme/project-a \
   --strategy clone
 ```
 
@@ -821,7 +819,7 @@ An origin project creates a request from its own context:
 
 ```bash
 merl request create \
-  --to core \
+  --to project-b \
   --kind infrastructure.change/v1 \
   --summary 'Provision storage for session two captures' \
   --needed-by 2026-10-01 \
@@ -833,65 +831,65 @@ merl request create \
 The result distinguishes local acceptance from remote delivery:
 
 ```text
-ACCEPTED atlas:X17 at atlas@813
-DELIVERY PENDING envelope XE52 to core
+ACCEPTED project-a:X17 at project-a@813
+DELIVERY PENDING envelope XE52 to project-b
 ```
 
-The target sees its own imported aggregate. Core can defer triage without accepting responsibility:
+The target sees its own imported aggregate. Project B can defer triage without accepting responsibility:
 
 ```bash
-merl request inbox --project core
-merl request show core:XR91
-merl request defer core:XR91 \
+merl request inbox --project project-b
+merl request show project-b:XR91
+merl request defer project-b:XR91 \
   --reason 'Higher-priority infrastructure work' \
   --review-at 2026-10-01
-merl request need-info core:XR91 --question 'Required retention period?'
+merl request need-info project-b:XR91 --question 'Required retention period?'
 ```
 
-Alternatively, Core can accept the request and schedule its work:
+Alternatively, Project B can accept the request and schedule its work:
 
 ```bash
-merl request accept core:XR91
-merl request schedule core:XR91 --target-start 2026-10-15
-merl request start core:XR91 --work T91
-merl request fulfill core:XR91 --ref github:acme/infra#412
+merl request accept project-b:XR91
+merl request schedule project-b:XR91 --target-start 2026-10-15
+merl request start project-b:XR91 --work T91
+merl request fulfill project-b:XR91 --ref github:acme/infra#412
 ```
 
-The origin observes those updates without gaining authority over Core's work:
+The origin observes those updates without gaining authority over Project B's work:
 
 ```text
-atlas:X17
+project-a:X17
   local: submitted
   requested need: 2026-10-01
-  Core commitment: pending
-  Core scheduling: deferred; review 2026-10-01
-  Core reason: higher-priority infrastructure work
-  Core delivery commitment: none
+  Project B commitment: pending
+  Project B scheduling: deferred; review 2026-10-01
+  Project B reason: higher-priority infrastructure work
+  Project B delivery commitment: none
 ```
 
-If Core accepts the request but schedules it later, the view says `commitment: accepted` and shows Core's target dates. Transport receipt, acknowledgement, and a review date never render as acceptance or a delivery promise.
+If Project B accepts the request but schedules it later, the view says `commitment: accepted` and shows Project B's target dates. Transport receipt, acknowledgement, and a review date never render as acceptance or a delivery promise.
 
 The origin can amend or withdraw its request:
 
 ```bash
-merl request amend atlas:X17 --summary 'Need 30-day retention'
-merl request withdraw atlas:X17 --reason 'Experiment cancelled'
+merl request amend project-a:X17 --summary 'Need 30-day retention'
+merl request withdraw project-a:X17 --reason 'Experiment cancelled'
 ```
 
-Withdrawal asks the target to stop. It does not mark Core's work cancelled.
+Withdrawal asks the target to stop. It does not mark Project B's work cancelled.
 
 Project administrators manage directional links:
 
 ```bash
 merl link grant \
-  --from atlas \
-  --to core \
+  --from project-a \
+  --to project-b \
   --contract infrastructure.change/v1 \
   --export 'artifact:A81' \
   --export 'decision:D18'
 
-merl link show atlas --to core
-merl link revoke atlas --to core --contract infrastructure.change/v1
+merl link show project-a --to project-b
+merl link revoke project-a --to project-b --contract infrastructure.change/v1
 ```
 
 A target rejects unsupported contract versions and unauthorized exports without trying to infer their meaning.
@@ -904,10 +902,10 @@ Several projects may ingest one Issue, but a project administrator assigns each 
 
 ```bash
 merl publication slot assign \
-  github:acme/atlas#204/merl \
-  --project atlas
+  github:acme/project-a#204/merl \
+  --project project-a
 
-merl publication slot show github:acme/atlas#204/merl
+merl publication slot show github:acme/project-a#204/merl
 ```
 
 Other bindings remain ingest-only and fail with `publication_slot_not_owned` if they try to write. Published output carries a stable publication and project identity. Receiving authorities verify that identity against the provider actor and content hash; they do not trust a hidden marker by itself.
@@ -929,7 +927,7 @@ Current through project revision 482
 
 Phase: session 2
 Goal: complete baseline capture
-Blocked: waiting on Core infrastructure request X17
+Blocked: waiting on Project B infrastructure request X17
 
 Open
 - Choose capture storage location. (Q41)
@@ -947,8 +945,8 @@ Publication diagnostics are available through:
 merl publication list --failed
 merl publication show PP42
 merl publication retry PP42
-merl projection show github:acme/atlas#204/merl-status
-merl projection restore github:acme/atlas#204/merl-status
+merl projection show github:acme/project-a#204/merl-status
+merl projection restore github:acme/project-a#204/merl-status
 ```
 
 ## Evaluation
@@ -996,17 +994,17 @@ Useful tags include `@first_release`, `@local`, `@shared`, `@offline`, `@github`
 Feature: Select project context
 
   Scenario: One repository is attached to two projects
-    Given repository "acme/atlas" is attached to projects "atlas" and "core"
+    Given repository "acme/project-a" is attached to projects "project-a" and "project-b"
     And no local workspace context is selected
     When I run "merl project view" without an interactive terminal
     Then the command fails with code "project_context_ambiguous"
-    And the result lists projects "atlas" and "core"
+    And the result lists projects "project-a" and "project-b"
     And neither project is read or changed
 
   Scenario: An explicit project resolves the ambiguity
-    Given repository "acme/atlas" is attached to projects "atlas" and "core"
-    When I run "merl project view --project atlas"
-    Then I see the accepted Atlas project revision
+    Given repository "acme/project-a" is attached to projects "project-a" and "project-b"
+    When I run "merl project view --project project-a"
+    Then I see Project A's accepted revision
 ```
 
 ### Local mode states its trust boundary
@@ -1016,7 +1014,7 @@ Feature: Select project context
 Feature: Explain the local trust boundary
 
   Scenario: Local mode does not claim to sandbox same-user processes
-    Given project "atlas" uses a local authority
+    Given project "project-a" uses a local authority
     When I inspect its security model
     Then Merl reports that unrestricted same-user processes are trusted
     And it identifies local policy as governance and audit
@@ -1029,7 +1027,7 @@ Feature: Explain the local trust boundary
 Feature: Submit a command while offline
 
   Scenario: A disconnected client queues a mutation
-    Given shared project "atlas" is accepted through revision 481
+    Given shared project "project-a" is accepted through revision 481
     And its authority is unavailable
     When I resolve question "Q32" with decision "D18"
     Then the result is "queued"
@@ -1037,7 +1035,7 @@ Feature: Submit a command while offline
     And project revision 481 remains the latest accepted revision
 
   Scenario: Automation requires immediate acceptance
-    Given shared project "atlas" is accepted through revision 481
+    Given shared project "project-a" is accepted through revision 481
     And its authority is unavailable
     When I resolve question "Q32" with decision "D18" requiring acceptance
     Then the command fails with code "authority_unavailable"
@@ -1051,7 +1049,7 @@ Feature: Submit a command while offline
 Feature: Consume Merl from an automated client
 
   Scenario: JSON reports a queued command without implying acceptance
-    Given project "atlas" is accepted through revision 481
+    Given project "project-a" is accepted through revision 481
     And its authority is unavailable
     When I resolve question "Q32" with decision "D18" as JSON
     Then the result schema is "merl.result/v1"
@@ -1067,15 +1065,15 @@ Feature: Consume Merl from an automated client
 Feature: Read compact project state
 
   Scenario: A researcher expands a decision to its evidence
-    Given project "atlas" has accepted decision "D18"
-    When I view issue "github:acme/atlas#204" as a researcher
+    Given project "project-a" has accepted decision "D18"
+    When I view issue "github:acme/project-a#204" as a researcher
     Then the view contains the meaning of decision "D18"
     And the view does not contain the full source thread
     When I expand decision "D18" to its source
     Then I receive the captured source and provenance
 
   Scenario: A negative answer exposes incomplete semantic coverage
-    Given issue "github:acme/atlas#204" has no accepted blocker
+    Given issue "github:acme/project-a#204" has no accepted blocker
     And relevant source "SE804" is captured but uncompiled
     And unrelated source "SE900" is also cold
     When I view the issue as a researcher
@@ -1134,7 +1132,7 @@ Feature: Measure the value of compiled state
 Feature: Read an incremental project change
 
   Scenario: An agent receives references instead of the full thread
-    Given agent "atlas-dev" has read project revision 481
+    Given agent "project-a-dev" has read project revision 481
     And a new Issue comment produces accepted revision 482
     When the agent polls its inbox
     Then one entry identifies revision 482 and the changed object references
@@ -1149,7 +1147,7 @@ Feature: Read an incremental project change
 Feature: Consume one logical agent inbox safely
 
   Scenario: One session owns the actionable cursor
-    Given logical agent "atlas-dev" has active sessions "S18" and "S19"
+    Given logical agent "project-a-dev" has active sessions "S18" and "S19"
     And session "S18" holds the inbox lease
     When session "S19" tries to claim entry "IN123"
     Then the command fails with code "inbox_lease_not_owned"
@@ -1205,14 +1203,14 @@ Feature: Derive state from an authored note
 Feature: Compile an incremental Issue comment
 
   Scenario: Binding policy chooses eager compilation
-    Given Issue comments on source "github:acme/atlas" use compilation mode "eager"
+    Given Issue comments on source "github:acme/project-a" use compilation mode "eager"
     When Merl captures a new human Issue comment
     Then the source event records the effective compilation policy
     And Merl schedules one project-scoped compilation run
     And no recipient-specific compilation run is created
 
   Scenario: Capture-only prose stays cold
-    Given bot comments on source "github:acme/atlas" use compilation mode "capture_only"
+    Given bot comments on source "github:acme/project-a" use compilation mode "capture_only"
     When Merl captures a bot comment
     Then Merl retains its payload without scheduling compilation
     And ordinary project and inbox views omit the payload body
@@ -1421,19 +1419,19 @@ Feature: Publish accepted state for humans
     And no observed assertion is created from it
 
   Scenario: One project owns a shared publication slot
-    Given projects "atlas" and "core" both ingest issue "204"
-    And project "atlas" owns its Merl publication slot
-    When project "core" attempts to publish to that slot
+    Given projects "project-a" and "project-b" both ingest issue "204"
+    And project "project-a" owns its Merl publication slot
+    When project "project-b" attempts to publish to that slot
     Then the command fails with code "publication_slot_not_owned"
     And no GitHub write is attempted
 
   Scenario: Another authority recognizes Merl output
-    Given project "atlas" published a verified Merl comment to issue "204"
-    And project "core" also ingests issue "204"
-    And Core has a trusted mapping from Atlas to its publication key or authority
-    When Core captures the comment
-    Then Core records the stable publication and publishing-project identities
-    And Core does not compile the generated prose as ordinary source
+    Given project "project-a" published a verified Merl comment to issue "204"
+    And project "project-b" also ingests issue "204"
+    And Project B has a trusted mapping from Project A to its publication key or authority
+    When Project B captures the comment
+    Then Project B records the stable publication and publishing-project identities
+    And Project B does not compile the generated prose as ordinary source
     And a shared provider actor or hidden marker by itself would not be sufficient verification
 ```
 
@@ -1443,40 +1441,40 @@ Feature: Publish accepted state for humans
 Feature: Request work from another project
 
   Scenario: Origin state and envelope commit together
-    Given project "atlas" may send "infrastructure.change/v1" to project "core"
-    When Atlas submits an infrastructure request
-    Then Atlas accepts an OutboundRequest
+    Given project "project-a" may send "infrastructure.change/v1" to project "project-b"
+    When Project A submits an infrastructure request
+    Then Project A accepts an OutboundRequest
     And a pending envelope exists for the same origin transition
-    And both appear in one Atlas project revision
+    And both appear in one Project A revision
 
   Scenario: The target owns its work
-    Given Core durably received Atlas request "X17"
-    When Core accepts the request and creates task "T91"
-    Then task "T91" belongs to Core
-    And Atlas observes a reference to "T91"
-    And Atlas cannot change the task owner or priority
+    Given Project B durably received Project A's request "X17"
+    When Project B accepts the request and creates task "T91"
+    Then task "T91" belongs to Project B
+    And Project A observes a reference to "T91"
+    And Project A cannot change the task owner or priority
 
   Scenario: The target defers without making a commitment
-    Given Atlas needs request "X17" by 2026-10-01
-    And Core has not accepted responsibility for its inbound request
-    When Core defers the request until review on 2026-10-15
-    Then Atlas sees Core commitment as "pending"
-    And Atlas sees Core scheduling as "deferred"
-    And Atlas sees the reason and review date
-    And Atlas does not see a delivery commitment
-    And Atlas sees that the current plan cannot meet its requested date
+    Given Project A needs request "X17" by 2026-10-01
+    And Project B has not accepted responsibility for its inbound request
+    When Project B defers the request until review on 2026-10-15
+    Then Project A sees Project B's commitment as "pending"
+    And Project A sees Project B's scheduling as "deferred"
+    And Project A sees the reason and review date
+    And Project A does not see a delivery commitment
+    And Project A sees that the current plan cannot meet its requested date
 
   Scenario: A repeated envelope does not duplicate work
-    Given Core processed envelope "XE52" into inbound request "XR91"
-    When Core receives envelope "XE52" again
-    Then Core returns the stored receipt
+    Given Project B processed envelope "XE52" into inbound request "XR91"
+    When Project B receives envelope "XE52" again
+    Then Project B returns the stored receipt
     And no second inbound request or task is created
 
   Scenario: A legitimate causal loop is allowed
-    Given correlation "X17" traveled from Atlas to Core to Platform
-    When Platform asks Atlas a new question in correlation "X17"
-    Then Atlas accepts the question envelope
-    And Merl does not reject it because Atlas appears earlier in the lineage
+    Given correlation "X17" traveled from Project A to Project B to Project C
+    When Project C asks Project A a new question in correlation "X17"
+    Then Project A accepts the question envelope
+    And Merl does not reject it because Project A appears earlier in the lineage
 ```
 
 ### Delayed work remains unambiguous
@@ -1503,7 +1501,7 @@ Feature: Plan work requested by another agent
     And Merl does not report an owner delivery date
 
   Scenario: Scheduling does not silently stop active work
-    Given software agent "atlas-dev" is executing task "T44"
+    Given software agent "project-a-dev" is executing task "T44"
     When the project manager defers task "T44" without pausing it
     Then the command fails with code "task_in_progress"
     And task "T44" remains "in_progress"
@@ -1515,7 +1513,7 @@ Feature: Plan work requested by another agent
 Feature: Resume an agent session
 
   Scenario: Referenced state changed after checkpoint
-    Given agent "atlas-tech-lead" checkpointed at revision 481 with reference "D18"
+    Given agent "project-a-tech-lead" checkpointed at revision 481 with reference "D18"
     And decision "D18" changed at revision 484
     When the agent resumes
     Then the resume view uses decision "D18" at revision 484
@@ -1529,22 +1527,22 @@ Feature: Resume an agent session
 Feature: Protect agent workspaces
 
   Scenario: Two active writers share a directory
-    Given agents "atlas-dev" and "atlas-reviewer" use the same writable directory
+    Given agents "project-a-dev" and "project-a-reviewer" use the same writable directory
     When Merl checks workspace safety
     Then it reports a writable workspace collision
     And Merl refuses a concurrent write assignment
     And it offers to create a separate workspace
 
   Scenario: Two writers receive separate worktrees
-    Given agents "atlas-dev" and "atlas-senior-dev" have writable assignments in repository "acme/atlas"
+    Given agents "project-a-dev" and "project-a-senior-dev" have writable assignments in repository "acme/project-a"
     When Merl creates their workspaces
     Then each agent receives a different working directory and index
     And each agent receives a unique task branch
     And both worktrees may share the same Git object store
 
   Scenario: A reviewer does not share a writer's live checkout
-    Given agent "atlas-dev" holds a writable workspace
-    When agent "atlas-reviewer" requests a read-only review at its current commit
+    Given agent "project-a-dev" holds a writable workspace
+    When agent "project-a-reviewer" requests a read-only review at its current commit
     Then Merl creates or reuses an enforced read-only checkout pinned to that commit
     And the reviewer does not use the writer's working tree
 
@@ -1561,10 +1559,10 @@ Feature: Protect agent workspaces
 Feature: Move Merl setup to another computer
 
   Scenario: Import portable setup without copying machine identity
-    Given node "old" has agent "atlas-dev" with active TDD practice "AG18"
+    Given node "old" has agent "project-a-dev" with active TDD practice "AG18"
     And node "old" has a pending command "CMD91"
     When I export node "old" and import it on a new computer
-    Then agent "atlas-dev" keeps its logical identity
+    Then agent "project-a-dev" keeps its logical identity
     And guidance "AG18" remains active
     And pending command "CMD91" keeps its idempotency identity
     And the imported node has a different node identity
@@ -1577,7 +1575,7 @@ Feature: Move Merl setup to another computer
     And the result warns that the dirty work was not preserved
 
   Scenario: Clearing model context preserves agent guidance
-    Given agent "atlas-dev" has an active practice to use TDD
+    Given agent "project-a-dev" has an active practice to use TDD
     And the agent has a checkpoint that references task "T44"
     When its model context is cleared and the agent resumes
     Then the resume view contains the active TDD practice
@@ -1591,7 +1589,7 @@ Feature: Move Merl setup to another computer
 Feature: Control agent context lifetime
 
   Scenario: A developer gets a clean context after completing a task
-    Given agent "atlas-dev" uses "task-scoped" context policy
+    Given agent "project-a-dev" uses "task-scoped" context policy
     And generation 18 is bound to task "T44"
     And the agent has an active TDD practice
     When task "T44" is completed with its result references
@@ -1603,7 +1601,7 @@ Feature: Control agent context lifetime
     And generation 19 does not contain the transcript from generation 18
 
   Scenario: A project manager keeps continuous context
-    Given agent "atlas-pm" uses "continuous" context policy
+    Given agent "project-a-pm" uses "continuous" context policy
     When one assigned task is completed
     Then Merl does not request a context reset
     And the agent continues to receive bounded project deltas
@@ -1622,26 +1620,26 @@ Feature: Control agent context lifetime
 Feature: Choose an agent for a task
 
   Scenario: Difficult work favors the stronger eligible runtime
-    Given "atlas-senior-dev" advertises model "anthropic:opus" at high effort and high cost
-    And "atlas-dev" advertises model "anthropic:sonnet" at medium effort and medium cost
+    Given "project-a-senior-dev" advertises model "anthropic:opus" at high effort and high cost
+    And "project-a-dev" advertises model "anthropic:sonnet" at medium effort and medium cost
     And task "T52" requires Rust and high reasoning for a high-risk change
     When the project manager lists candidates for task "T52"
-    Then "atlas-senior-dev" is eligible
-    And "atlas-dev" is ineligible because it misses the reasoning requirement
+    Then "project-a-senior-dev" is eligible
+    And "project-a-dev" is ineligible because it misses the reasoning requirement
     And neither advertisement grants new source access
 
   Scenario: Routine work favors the cheaper eligible runtime
     Given both developer sessions meet task "T53" requirements
     And task "T53" prefers lower cost
     When the project manager lists candidates for task "T53"
-    Then "atlas-dev" ranks before "atlas-senior-dev"
+    Then "project-a-dev" ranks before "project-a-senior-dev"
     And the result explains the cost tradeoff
     And no assignment exists until an authorized actor chooses one
 
   Scenario: A stale advertisement is not eligible
-    Given "atlas-senior-dev" last advertised availability before its current session
+    Given "project-a-senior-dev" last advertised availability before its current session
     When the project manager lists candidates for a new task
-    Then "atlas-senior-dev" is excluded as stale
+    Then "project-a-senior-dev" is excluded as stale
 ```
 
 ### A PM can provision only approved agents
@@ -1650,15 +1648,15 @@ Feature: Choose an agent for a task
 Feature: Delegate agent provisioning
 
   Scenario: A PM spawns an approved developer
-    Given a human delegated template "software-dev-medium" to "atlas-pm"
+    Given a human delegated template "software-dev-medium" to "project-a-pm"
     And the template allows two active agents with 10 GiB each
-    When "atlas-pm" spawns an agent for task "T53"
+    When "project-a-pm" spawns an agent for task "T53"
     Then Merl durably accepts one spawn request
     And Merl reserves the workspace and scratch allowance before calling the host
     And the agent is unavailable until the host reports a ready session
 
   Scenario: A PM cannot widen its delegation
-    Given "atlas-pm" may spawn only template "software-dev-medium"
+    Given "project-a-pm" may spawn only template "software-dev-medium"
     When it requests another model or a third active agent
     Then the request fails with code "delegation_exceeded"
     And no host provisioning call occurs

@@ -116,22 +116,20 @@ Separate worktrees prevent filesystem races; they do not prevent two tasks from 
 
 Multi-repository work stays inside one accepted project history. Cross-project work connects independently authoritative histories through requests and exports.
 
-The examples below use two fictional projects: Atlas develops a product, while Core owns shared infrastructure and developer tooling that Atlas may request.
-
-Each side owns a separate request aggregate. If Atlas asks Core for infrastructure, Atlas owns an `OutboundRequest` describing its need and constraints. Core imports that request as an `InboundRequest`, then decides whether to accept it and how to represent the work. Atlas cannot assign Core's owner, priority, or implementation.
+Each side owns a separate request aggregate. If Project A asks Project B for infrastructure, Project A owns an `OutboundRequest` describing its need and constraints. Project B imports that request as an `InboundRequest`, then decides whether to accept it and how to represent the work. Project A cannot assign Project B's owner, priority, or implementation.
 
 ```mermaid
 flowchart LR
-    L[Project Atlas<br/>OutboundRequest X17] --> E[Durable cross-project envelope]
-    E --> P[Core policy]
-    P --> C[Project Core<br/>InboundRequest XR91]
+    L[Project A<br/>OutboundRequest X17] --> E[Durable cross-project envelope]
+    E --> P[Project B policy]
+    P --> C[Project B<br/>InboundRequest XR91]
     C --> U[Durable lifecycle update]
     U --> L
 ```
 
 Requests evolve through updates rather than one response. The target may ask a question, accept or decline responsibility, defer reconsideration, schedule accepted work, publish a task or pull request reference, report progress, and declare fulfillment. Each transition belongs to the project that made it. The other project records an observed remote state.
 
-Cross-project requests use the same commitment, scheduling, and execution facets as work inside one project. If Core defers Atlas's infrastructure request, Atlas sees whether Core accepted responsibility, why the work was deferred, and when or under what condition Core will reconsider it. Receipt and acknowledgement do not imply commitment.
+Cross-project requests use the same commitment, scheduling, and execution facets as work inside one project. If Project B defers Project A's infrastructure request, Project A sees whether Project B accepted responsibility, why the work was deferred, and when or under what condition Project B will reconsider it. Receipt and acknowledgement do not imply commitment.
 
 When an origin project commits an outbound transition, it creates the delivery envelope in the same transaction. A transport worker sends the envelope afterward. The target authority authenticates the origin, persists the envelope idempotently, then acknowledges delivery and applies its own policy. No transaction spans both projects or an external provider.
 
