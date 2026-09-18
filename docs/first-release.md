@@ -2,212 +2,134 @@
 
 Status: draft
 
-This document owns the scope and acceptance criteria for Merl's first release. The [product description](product-description.md), [user interface and behavior contract](user-interface.md), and [architecture](architecture.md) should remain useful after this release ships.
+This document owns the scope and acceptance criteria for Merl's first release. The [product description](product-description.md), [user interface and behavior contract](user-interface.md), and [architecture](architecture.md) describe the larger product.
 
 ## Goal
 
-The first release must prove that Merl can reconstruct useful project state from a difficult GitHub history, preserve the evidence behind that state, and deliver one new change to an agent without sending the full thread again.
+The first release tests Merl's central claim: after repeated reads, agents can use compact state as accurately as the original GitHub thread and spend fewer tokens overall.
 
-The proof uses one historical GitHub Issue with research discussion, stale claims, decisions, open questions, and linked artifacts. A second fixture exercises pull request findings and review rounds. The evaluation corpus also includes research traces with conflicting evidence.
+The proof starts with a historical Issue that contains stale claims, corrections, decisions, open questions, research discussion, and linked artifacts. Merl reconstructs its current state, ingests one new comment, and gives two agent roles only the resulting delta. Every rendered fact remains traceable to its derivation input.
 
-The release runs one local project authority backed by SQLite. Its IDs, commands, and storage interfaces must preserve the path to shared and multi-repository projects without making remote deployment part of this release.
+One local Rust authority and SQLite database are enough. This release does not try to operate an agent team or coordinate several projects.
 
 ## Evaluation corpus
 
-Before compiler implementation, maintainers will freeze 10 to 30 representative Issues, pull requests, and research traces. The corpus should contain:
+Before compiler work begins, maintainers freeze 10 to 30 complete Issue histories and divide them into three sets:
 
-- long discussions with stale or superseded statements
-- explicit human decisions and later corrections
-- review findings that close and reopen
-- hypotheses tested by experiments
-- conflicting evidence and ambiguous source text
+- a development set for ontology, prompt, rule, and policy work;
+- a held-out set that remains unseen until a release candidate is ready;
+- an adversarial set with edits, deletions, contradictions, quotations, ambiguous references, agent-generated prose, and sensitive-content removal.
 
-Each fixture includes a human-reviewed expected state: active decisions, requirements, questions, facts, blockers, findings, hypotheses, claims, and next actions. Fixtures retain the captured source so every compiler version runs against the same input.
+The split happens by complete thread or project. Comments from one thread never appear in both development and held-out sets. Held-out and adversarial results may guide the release decision, but they do not become tuning data. If maintainers tune against a revealed case, they move it into development and replace it before the next claimed held-out result.
+
+Each fixture has a human-reviewed expected state covering active decisions, requirements, questions, facts, blockers, findings, hypotheses, claims, and next actions. Two people independently label part of the held-out set. The corpus retains disagreements instead of forcing false certainty, then records an adjudicated result where the benchmark needs one expected answer.
+
+Evaluation reports task correctness, provenance accuracy, stale-state errors, missed blockers, context expansion, clarification, and total token cost. Token accounting includes compilation, context construction, views, source expansion, corrections, and retries.
+
+Reports lead with the break-even point, not the compression ratio. They cover one agent reading once, two agents revisiting the Issue, and a larger team returning many times. Merl may cost more for a single read and still prove useful for repeated work.
 
 ## End-to-end slice
 
 ```mermaid
 flowchart TB
-    H[Captured Issue history] --> C[Compile assertions]
-    C --> P[Evaluate policy]
-    P --> S[Accepted project state]
-    S --> V[Materialized role views]
-    V --> N[Ingest one new comment]
-    N --> E[Compile and evaluate the change]
-    E --> R[Commit one revision and compact delta]
-    R --> I[Create durable inbox entry]
-    I --> W[Wake subscribed agent]
-    R --> PD[Evaluate publication policy]
-    PD --> G[Update managed status or append comment]
+    H[Captured Issue history] --> X[Build bounded CompilationContext]
+    X --> C[Compile ObservedAssertions]
+    C --> P[Evaluate typed policy inputs]
+    P --> S[Commit accepted DomainEvents]
+    S --> V[Materialize Issue mirror and semantic state]
+    V --> R[Render researcher and engineer views]
+    R --> N[Capture one new comment]
+    N --> X2[Build new bounded context]
+    X2 --> D[Commit one revision and compact delta]
+    D --> I[Create pollable InboxEntry]
 ```
 
-The slice exercises every authoritative layer:
+The slice performs these actions:
 
-1. Capture the Issue description and comments as immutable source events.
-2. Run a versioned compiler and store its assertions.
-3. Evaluate those assertions against a recorded project revision.
-4. Commit accepted decisions, questions, facts, and research objects.
-5. Render distinct researcher and engineer views.
-6. Ingest one new comment and advance the project by one revision.
-7. Create a durable inbox entry and deliver the compact delta after wake-up.
-8. Apply deterministic publication policy after commit and update GitHub without reingesting the projection as new meaning.
+1. Capture one Issue description, its comments, and edits as immutable source metadata with separately erasable content.
+2. Build a bounded compiler context from current Issue state, relevant unresolved objects, a small conversational window, and the new source event.
+3. Record the exact context manifest, renderer version, selection policy, object revisions, and rendered-input hash.
+4. Store the compiler's assertions without granting them authority.
+5. Evaluate assertions or explicit semantic commands as typed policy inputs.
+6. Commit accepted events, the next project revision, materialized objects, and inbox entries atomically.
+7. Render compact researcher and engineer views with expansion to available evidence.
+8. Ingest one new comment and expose only its accepted delta through a pollable inbox.
+9. Rebuild the same state from an empty database.
+10. Run the held-out benchmark and publish the correctness and break-even results.
 
-The same fixture must run from an empty database to prove replayability.
-
-## Local cross-project proof
-
-The release also hosts two local projects under one Merl process while preserving their authority boundary:
-
-```mermaid
-flowchart LR
-    A[Project A<br/>OutboundRequest] --> E[Atomic pending envelope]
-    E --> L[Loopback cross-project transport]
-    L --> R[Durable target receipt]
-    R --> B[Project B<br/>InboundRequest]
-    B --> U[Lifecycle update envelope]
-    U --> A
-```
-
-The proof attaches one provider repository to both projects through separate source bindings. Each binding has its own selectors, capabilities, and cursor. Project A then submits a versioned request to Project B with a pinned export. Project B accepts it, creates target-owned work, and reports progress without either project writing the other's state.
+The compiler may ask for more context when a phrase such as "the issue above" remains ambiguous. It must not guess or silently fall back to the whole thread.
 
 ## Deliverables
 
-The Issue is the first vertical slice. The full release also applies the pipeline to pull request descriptions, comments, reviews, findings, and status changes.
-
 The release includes:
 
-- a Rust workspace and SQLite schema
-- explicit Project, ProjectSource, Repository, and ProjectSourceBinding identities
-- automatic provider repository discovery with no committed Merl marker
-- forward-only migrations and projection rebuild support
-- immutable source capture for GitHub Issues, pull requests, comments, and reviews
-- versioned compilation runs and stored assertions
-- batch policy evaluation against a basis revision
-- accepted domain events and materialized objects
-- idempotent semantic commands processed by the local authority
-- compact researcher and engineer views
-- project deltas and object expansion
-- durable inbox entries, acknowledgement, and wake-up retry
-- durable agent profiles, scoped guidance, checkpoints, and bounded resume views
-- configurable continuous, task-scoped, and manual context policies
-- durable session closure followed by retryable host-context reset
-- session-scoped model, effort, capability, availability, and relative-cost advertisements
-- task requirements and explainable manual candidate ranking
-- human-approved agent templates and bounded PM provisioning
-- durable spawn requests, host attempts, readiness, drain, and stop state
-- secret-free node export and import with stable logical agent and command IDs
-- verified local-project export and exclusive authority takeover
-- workspace recipes with dirty and unpushed work warnings
-- managed Git worktrees with one writable workspace and task branch per assignment
-- full-clone fallback and enforced read-only review workspaces
-- owned scratch that is disk-backed by default, workspace storage reservations, and safe cleanup
-- node and workspace storage accounting with configurable watermarks
-- deterministic `none`, `status`, and `comment` publication decisions
-- one bounded managed status projection per tracked Issue or pull request
-- append-only comment publications and retryable publication attempts
-- projection loop prevention and drift detection
-- directional ProjectLinks and small versioned request contracts
-- separate OutboundRequest and InboundRequest aggregates
-- independent commitment, scheduling, and execution state for tasks and inbound requests
-- deferral reasons and review triggers without implied delivery promises
-- atomic cross-project envelopes and idempotent durable receipts
-- live, revision-pinned, and snapshot export references
-- loopback cross-project delivery between local projects
-- a CLI for ingestion, replay, views, deltas, and inbox operations
-- executable Gherkin scenarios for the first-release behaviors
-- a behavior driver that tests public actions and results without reading storage internals
-- evaluation reports for correctness and total token cost
+- a Rust workspace with automated formatting, linting, tests, and SQLite migrations;
+- one local project authority with serialized accepted writes;
+- GitHub Issue identity and immutable capture of descriptions, comments, and edits;
+- separate provider-owned Issue facts and Merl-owned semantic state;
+- content-addressed protected payloads with audited administrative purge and tombstones;
+- versioned `CompilationContext`, `CompilationRun`, and `ObservedAssertion` records;
+- typed policy inputs for assertions and direct semantic commands;
+- deterministic policy evaluation with recorded read dependencies and write sets;
+- append-only domain events, project revisions, and rebuildable projections;
+- compact researcher and engineer views;
+- object and source expansion, including an explicit unavailable result after purge;
+- project deltas and a minimal pollable inbox with acknowledgement;
+- CLI commands for capture, compilation, review, correction, views, expansion, replay, purge, and evaluation;
+- development, held-out, and adversarial evaluation sets;
+- a benchmark report covering correctness and token break-even;
+- executable behavior tests that use public interfaces rather than database tables.
+
+Processes with unrestricted access as the same OS user can bypass Merl's policy API and read its files. The first release treats them as trusted at that boundary. Merl permissions provide governance and audit inside the application; they are not a sandbox.
 
 ## Acceptance criteria
 
 The release is ready when:
 
-- repeated ingestion produces no duplicate source or domain events;
-- retrying one command ID never applies its operation twice;
-- a command ID reused with another payload is rejected;
-- one repository can feed two projects through independent bindings;
-- binding selectors do not grant source or publication capabilities;
-- a repository rename preserves its provider-backed identity;
-- an outbound request transition cannot commit without its pending envelope;
-- a target persists an authenticated envelope before acknowledging delivery;
-- duplicate envelopes or origin transitions do not duplicate target work;
-- target acceptance, priority, ownership, and implementation remain target-owned;
-- receipt, acknowledgement, deferral, and review dates never imply accepted responsibility;
-- accepted-but-deferred work remains distinct from pending-and-deferred work;
-- requester need dates remain distinct from owner target dates;
-- deferred work leaves an agent's actionable queue without disappearing from project state;
-- active work cannot be deferred without an explicit pause transition;
-- clearing an agent process or model context preserves active guidance and checkpoints;
-- session resume combines relevant guidance with current accepted project state rather than restoring stale prose;
-- a task-scoped reset occurs only after session outcome, checkpoint, cursor, assignment, and lease transitions commit;
-- an unrelated task starts in a new context generation with active guidance but no prior task transcript;
-- continuous policy does not reset context merely because one task completed;
-- unsupported or failed host reset remains visible and never reports success;
-- evaluation reports token use and task correctness for sequential unrelated tasks with and without task-scoped reset;
-- model and effort changes create new session advertisements without changing logical agent identity;
-- every advertised field exposes its source and observation time;
-- stale or unavailable sessions are excluded from new task candidates;
-- candidate ranking never selects an agent that misses a hard task requirement;
-- cost preference ranks the cheaper runtime only when all hard requirements are met;
-- committing an assignment records the requirements, advertisement, policy, and rationale used;
-- runtime advertisement grants no membership, repository access, or task authority;
-- a PM can spawn only templates, runtimes, permissions, and concurrency allowed by human delegation;
-- Merl reserves workspace and scratch capacity before invoking the host;
-- host failure or an ambiguous response cannot produce a duplicate or falsely available agent;
-- draining an agent prevents new assignments while preserving active work for checkpoint;
-- concurrent writers in one repository receive different working trees, indexes, and branches;
-- path aliases and symbolic links cannot bypass writable-workspace collision checks;
-- a reviewer does not share a writer's live checkout;
-- read-only agents share an immutable checkout only when the host enforces read-only access;
-- worktree cleanup refuses dirty, untracked, or unpreserved work;
-- two worktrees may share one Git object store without sharing workspace ownership;
-- managed agent processes use Merl-owned scratch instead of the system `/tmp`;
-- memory-backed scratch is reported and may be rejected by policy;
-- storage exhaustion rejects provisioning before a host process starts;
-- cleanup waits for processes and leases, stays inside owned roots, and preserves protected data;
-- a default node export contains no credential values, caches, logs, source bodies, or workspace contents;
-- node export and import preserve logical agent and pending command IDs while creating a new node ID;
-- dirty or unpushed workspace content is reported as not preserved;
-- a local-project archive reproduces its accepted revision and pending outboxes before the new authority accepts writes;
-- importing a local project cannot leave two authority generations able to accept mutations;
-- a repeated project in correlation lineage does not by itself fail delivery;
-- ingesting a derived target artifact does not create another origin request;
-- projection rebuild produces the same accepted state;
-- a crash cannot expose domain events without the matching revision and inbox entries;
-- a failed wake-up leaves a pending inbox entry that the dispatcher retries;
-- duplicate delivery does not make an agent process an inbox entry twice;
-- routine state changes produce no GitHub comment;
-- one significant accepted batch produces at most one readable comment per target;
-- removing Merl IDs from generated prose leaves its meaning intact;
-- repeated status changes stay within configured character and item limits;
-- a GitHub failure leaves accepted state intact and a retryable publication record;
-- an ambiguous publication failure reconciles before retry;
-- reingesting or manually editing a managed projection creates no semantic assertion;
-- every rendered object can expand to its assertion, compilation run, and captured source;
-- replay or evaluation runs cannot change accepted state without promotion;
-- first-release scenarios in the UI behavior contract pass through the CLI driver;
-- those scenarios make no assertions against private Rust APIs or SQLite tables;
-- researcher and engineer views answer the corpus questions at least as accurately as raw history;
-- the measured token report includes compilation, views, expansions, clarification, and correction costs.
+- repeated ingestion creates no duplicate source records or accepted effects;
+- an edit creates a new source capture linked to the prior version;
+- a compilation run records every source event, object revision, recent-event window, selection rule, renderer version, and input hash it used;
+- rebuilding a recorded compiler input produces the same bytes;
+- an ambiguous reference produces an explicit context request or unresolved assertion instead of an invented meaning;
+- the compiler does not need the full Issue history to process the selected incremental fixtures;
+- direct commands reach policy evaluation without fabricated source events or compilation runs;
+- every accepted object expands to its policy evaluation and typed derivation inputs;
+- extracted objects also expand through their assertions and compilation runs to available source content;
+- GitHub owns mirrored fields such as open or closed state, labels, and provider timestamps;
+- Merl owns derived fields such as requirements, blockers, decisions, and research claims;
+- a Merl command cannot report a provider-owned field changed until GitHub reports that change;
+- policy evaluation records object, relation, collection, or predicate dependencies that affected its decision;
+- an unrelated project revision does not require recompilation and does not invalidate an evaluation whose dependencies remain unchanged;
+- a changed dependency or write conflict forces reevaluation or returns a conflict;
+- accepted events, projections, the project revision, and inbox entries commit atomically;
+- replay from an empty database produces the same accepted state and role views;
+- a source-content purge removes retained source bytes and protected derived copies within its authorized scope, preserves audit tombstones and digests, and marks dependent evidence unavailable;
+- purge never claims that affected state remains fully replayable;
+- the local CLI states that same-user filesystem access lies outside Merl's enforcement boundary;
+- researcher and engineer views answer held-out questions at least as accurately as raw history;
+- benchmark results report disagreements and failures rather than scoring ambiguous cases as automatic successes;
+- token reports include context selection, compilation, views, expansions, retries, clarification, and correction;
+- benchmark results show the measured read count at which Merl costs fewer tokens than repeated raw-history consumption;
+- behavior scenarios pass through the CLI driver without reading private Rust APIs or SQLite tables.
 
-A compact view only counts as an improvement when agents still reach the right conclusion.
+A smaller view counts as an improvement only when agents still reach the right conclusion.
 
 ## Deferred work
 
-The first release does not require:
+The first release excludes:
 
-- remote or multi-host authority deployment
-- network transport between separate project authorities
-- a distributed database or event broker
-- a learned symbolic communication codec
-- a broad MCP tool surface
-- webhook hosting
-- model-backed publication classification or rendering
-- automatic authority for consequential agent interpretations
-- interactive login and remote identity enrollment
-- encrypted credential or secret migration
-- automatic assignment optimization or learned competence scoring
-- live provider pricing and billing integration
-- portable hard quotas or cgroup-based resource enforcement
+- pull request semantic compilation;
+- live GitHub publication, managed status comments, and publication-slot ownership;
+- background wake-up and host activation;
+- agent profiles, durable guidance, context reset, advertisements, ranking, spawning, drain, and stop;
+- managed worktrees, scratch quotas, and workspace cleanup;
+- node export, project transfer, and interactive login;
+- shared or remote authorities;
+- repositories bound to several active projects;
+- cross-project links, requests, exports, and transport;
+- model-backed publication or policy classification;
+- automatic authority for consequential model interpretations;
+- MCP and graphical interfaces;
+- release automation and curl installation.
 
-These exclusions reduce implementation scope without changing the architecture.
+These capabilities remain part of the product architecture. They enter release planning only after the Issue benchmark supports Merl's central claim.

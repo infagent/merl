@@ -24,17 +24,22 @@ Each binding separates relevance, permission, and provider access. Selectors dec
 
 Merl discovers provider-backed repositories from their Git remotes and provider APIs. It keeps immutable provider identities separately from human-readable names. If a GitHub repository moves from `acme/api` to `acme/platform-api`, its provider repository ID still resolves to the same Merl `Repository`. Local sources can receive node-local identities through explicit attachment. Code repositories do not need committed Merl markers.
 
+Provider facts and Merl interpretations stay separate. GitHub owns whether an Issue is open, which labels it carries, and whether a pull request merged. Merl owns derived requirements, blockers, decisions, findings, and research claims. Merl may request a provider action, but it waits for the provider to confirm the result.
+
 ## How it works
 
-One project authority serializes accepted changes for each project. Merl processes activity through that authority in five layers.
+One project authority serializes accepted changes for each project. Merl processes activity through that authority in six layers.
 
-1. A `SourceEvent` records what Merl observed, including an immutable copy of the source content. An edited GitHub comment creates another source event instead of rewriting the first one.
-2. A versioned `CompilationRun` interprets one or more source events and emits `ObservedAssertion` records. These records describe what that compiler believed the source meant.
-3. A `PolicyEvaluation` considers assertions together with accepted state at a specific project revision. It applies authority rules, detects conflicts, and records why each assertion was accepted, rejected, or held for review.
-4. Accepted evaluations produce an atomic batch of `DomainEvent` records. The authority updates materialized state, advances the project revision once, and creates inbox entries for subscribed agents in the same transaction.
-5. Merl renders the new state as role-specific views and deltas. Wake-up is best effort; the durable inbox remains correct if a process crashes or a host integration fails.
+1. A `SourceEvent` records what Merl observed. Its append-only metadata points to retained source content. An edited GitHub comment creates another source event instead of rewriting the first one.
+2. A `CompilationContext` records the bounded state and recent conversation needed to understand the new source. It preserves the selector, object revisions, renderer, and exact input digest.
+3. A versioned `CompilationRun` interprets that context and emits `ObservedAssertion` records. These records describe what that compiler believed the source meant.
+4. A `PolicyEvaluation` considers typed inputs, including assertions and direct commands, together with accepted state. It applies authority rules, detects conflicts, and records why each input was accepted, rejected, or held for review.
+5. Accepted evaluations produce an atomic batch of `DomainEvent` records. The authority updates materialized state, advances the project revision once, and creates inbox entries for subscribed agents in the same transaction.
+6. Merl renders the new state as role-specific views and deltas. Wake-up is best effort; the durable inbox remains correct if a process crashes or a host integration fails.
 
-Every derived record points back to its source, compiler, and policy version. Merl can replay old sources through a new compiler without changing the live project. A user can compare the results and promote selected assertions through a fresh policy evaluation.
+Every accepted object points back to its policy evaluation and derivation inputs. Extracted state also links through its assertion and compilation run to the source. Merl can replay available source content through a new compiler without changing the live project.
+
+The compiler does not read one comment in isolation or reload the full thread each time. It receives current Issue state, relevant unresolved objects, a small recent window, and the triggering event. When that context cannot resolve a phrase such as "the issue above," the compiler asks for expansion or records ambiguity instead of guessing.
 
 ## Project knowledge and agent operations
 
@@ -154,7 +159,7 @@ Project-scoped guidance and subscriptions resynchronize from the project authori
 
 Shared projects synchronize from their authority. A local-authority project moves through a separate verified project export and exclusive authority takeover. Merl warns about dirty or unpushed workspaces because a workspace recipe cannot preserve those files.
 
-The first release has no login flow. Import reports unresolved credential references, and affected provider operations remain unavailable until the user configures those credentials through the provider adapter. Encrypted secret migration and interactive login can arrive later.
+Portable setup does not require a Merl login. Import reports unresolved credential references, and affected provider operations remain unavailable until the user configures those credentials through the provider adapter. Encrypted secret migration and interactive login can arrive later.
 
 ## What agents receive
 
@@ -195,7 +200,9 @@ Human prose carries the meaning; Merl IDs provide navigation. Removing `(D18)` f
 
 Publication runs after the accepted-state transaction. GitHub failure cannot roll back project state. Merl records each desired publication and every external attempt so it can retry or reconcile an ambiguous provider response.
 
-Merl recognizes its own GitHub output when that output returns through ingestion. It captures the provider event for audit but skips semantic compilation. A manual edit to a managed status surface creates a drift warning; it never becomes accepted-state input.
+Several projects may read the same Issue, but one project owns each publication slot. Other bindings remain ingest-only. Merl output carries a stable publication identity and verified provider provenance so another authority can recognize it without trusting a hidden marker.
+
+Merl captures its own GitHub output for audit but skips ordinary semantic compilation. Cross-project meaning moves through explicit exports and requests, not by recompiling generated prose. A manual edit to a managed status surface creates a drift warning; it never becomes accepted-state input.
 
 ## Authority and safety
 
@@ -203,13 +210,17 @@ Extraction does not grant authority. Merl distinguishes what a compiler observed
 
 A deterministic fact read from a machine artifact may pass policy without review. An explicit decision from an authorized project owner may also become active at once. An agent's interpretation of research direction, a conflicting requirement, or a request to approve a merge may remain a candidate until the right person or policy accepts it.
 
-Policy evaluations record the assertions they considered and the project revision they used as their basis. Before Merl commits the resulting domain events, it checks that the project has not advanced. If another transaction changed the state, Merl reevaluates the policy rather than applying a decision made against stale assumptions.
+Policy evaluations record their typed inputs, basis revision, state dependencies, predicate guards, and proposed writes. An unrelated project revision does not invalidate the result. A change to something the policy read, or a conflict with its writes, requires reevaluation.
 
 People and agents ask the authority to act by submitting idempotent commands. A disconnected client may queue a command with its basis revision, but it cannot create an accepted domain event. When the client reconnects, the authority authenticates the actor, checks project membership and current state, then evaluates the command through policy.
 
 Actors have stable Merl identities linked to provider identities such as a GitHub user ID. The authority derives the command actor from authenticated credentials rather than trusting a client-supplied name.
 
 The project authority captures source content because external comments can change or disappear. That content may include private code and research data, so Merl restricts access, redacts logs, and sends no telemetry by default.
+
+Append-only history does not make retained bytes immortal. An authorized purge can remove source content or destroy its encryption key while preserving a tombstone, digest, actor, time, and reason. Merl marks dependent evidence unavailable and admits that exact replay is no longer possible.
+
+Local mode trusts processes with unrestricted access as the same OS user. Those processes can bypass Merl and read its files. Local permissions therefore provide governance and audit for cooperating clients, not protection from a malicious local agent. Deployments that need that protection must add OS identities, sandboxing, containers, restricted IPC, or a credential broker.
 
 ## Interfaces and deployment
 

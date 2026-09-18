@@ -157,6 +157,15 @@ Sources: 3
 
 For a shared project with an unavailable authority, it says `offline` and shows the cache revision. It does not describe the cache as current accepted state.
 
+Local status also states the enforcement boundary:
+
+```text
+Local security: trusted same-user processes
+Merl policy protects cooperating clients; unrestricted local processes can read node files.
+```
+
+`merl security explain` prints the files and credentials at risk, the host controls in effect, and the isolation options available to the operator. Merl never describes same-user local policy as a sandbox.
+
 ## Moving setup between computers
 
 A node manifest recreates non-secret local setup:
@@ -222,6 +231,8 @@ merl artifact read A81 [--section protocol]
 
 Views show current accepted state by default. Superseded objects stay hidden unless the user asks for history. Every compact object can expand to detail and captured evidence.
 
+For provider-backed work, views label the source of each field. GitHub-owned facts such as open or closed state, labels, assignees, timestamps, and merge state appear separately from Merl-owned requirements, blockers, decisions, and findings. A pending provider action appears as a request until GitHub confirms it.
+
 Example compact output:
 
 ```text
@@ -233,6 +244,29 @@ Blocked: session two capture waits on core request X17. (B9)
 ```
 
 JSON output includes the same meanings, IDs, revision, provenance links, and expansion references. It does not include decorative human prose that changes the semantics.
+
+### Inspecting compiler context
+
+Compiler diagnostics show the bounded input used for one run:
+
+```bash
+merl compilation show CR42
+merl compilation context CR42
+merl compilation context CR42 --rendered
+```
+
+```text
+Run: CR42
+Trigger: SE771
+Basis: atlas@482
+Objects: D18@4 Q32@2 E37@5
+Recent source: SE768 SE769 SE771
+Selector: issue-context/v1, budget 6000 chars
+Renderer: issue-compiler-context/v1
+Input digest: sha256:...
+```
+
+The compiler can return `context_required` with a relation, object, or source range it needs. Policy limits the expansion and records a new context. Merl reports unresolved ambiguity when it cannot satisfy the request; it does not load the full thread without recording that choice.
 
 ## Changing project state
 
@@ -265,14 +299,16 @@ QUEUED CMD91 against atlas@481; authority is offline
 ```
 
 ```text
-CONFLICT CMD91 was evaluated against revision 481; current revision is 486
+CONFLICT CMD91 dependency D18 changed from object revision 4 to 5
 ```
 
 ```text
 REJECTED actor lacks decision.supersede permission
 ```
 
-`--dry-run` shows the proposed assertions, policy outcome, affected objects, publications, inbox deliveries, and cross-project envelopes without committing them.
+`--dry-run` shows the typed policy inputs, policy outcome, affected objects, publications, inbox deliveries, and cross-project envelopes without committing them.
+
+Direct commands are policy inputs in their own right. `merl show D18 --derivation` may lead to a command and policy evaluation without claiming that a compiler or source event created the decision.
 
 `--require-accepted` is useful in CI and automation. It prevents local queuing and treats candidate, rejected, and conflicted outcomes as failures.
 
@@ -290,6 +326,24 @@ merl candidate reject C81 --reason 'Capture S1 does not measure this effect'
 ```
 
 Accepting a candidate runs a new policy evaluation against current project state. It does not rewrite the old evaluation or force its proposed events through a stale basis revision.
+
+### Purging retained source content
+
+An authorized administrator can remove source bytes that Merl must no longer retain:
+
+```bash
+merl source purge SE771 \
+  --reason 'Credential posted in comment' \
+  --dry-run
+
+merl source purge SE771 \
+  --reason 'Credential posted in comment' \
+  --confirm-digest sha256:...
+```
+
+The preview lists the payload, compilation runs, assertions, events, projections, and accepted objects whose evidence will become unavailable. It also identifies protected derived payloads that copied the sensitive material. Purge removes the authorized bytes or encryption keys, then records tombstones with their digests, actor, time, and reason. It does not delete record identities, rewrite structural history, or claim that exact replay still works.
+
+After purge, `merl show D18 --source` returns `source_content_unavailable` with the tombstone reference. Derived state remains visible in redacted form unless a separate policy action invalidates it.
 
 ### Offline commands and synchronization
 
@@ -777,6 +831,18 @@ A target rejects unsupported contract versions and unauthorized exports without 
 
 Merl publishes little to GitHub.
 
+Several projects may ingest one Issue, but a project administrator assigns each publication slot to one project:
+
+```bash
+merl publication slot assign \
+  github:acme/atlas#204/merl \
+  --project atlas
+
+merl publication slot show github:acme/atlas#204/merl
+```
+
+Other bindings remain ingest-only and fail with `publication_slot_not_owned` if they try to write. Published output carries a stable publication and project identity. Receiving authorities verify that identity against the provider actor and content hash; they do not trust a hidden marker by itself.
+
 Routine machine changes produce no comment. A significant accepted batch may produce one readable comment:
 
 ```text
@@ -837,7 +903,7 @@ Scenarios interact through public actions and observable results. They do not qu
 
 Provider scenarios use controlled GitHub and artifact-store fakes at the external boundary. The runner supplies deterministic time and aliases for generated IDs while assertions use public output.
 
-Useful tags include `@local`, `@shared`, `@offline`, `@github`, `@cross_project`, and `@recovery`.
+Useful tags include `@first_release`, `@local`, `@shared`, `@offline`, `@github`, `@cross_project`, and `@recovery`. The [first release plan](first-release.md) owns which scenarios carry `@first_release`; this larger contract also describes deferred behavior.
 
 ### Project context is never guessed
 
@@ -856,6 +922,20 @@ Feature: Select project context
     Given repository "acme/atlas" is attached to projects "atlas" and "core"
     When I run "merl project view --project atlas"
     Then I see the accepted Atlas project revision
+```
+
+### Local mode states its trust boundary
+
+```gherkin
+@first_release
+Feature: Explain the local trust boundary
+
+  Scenario: Local mode does not claim to sandbox same-user processes
+    Given project "atlas" uses a local authority
+    When I inspect its security model
+    Then Merl reports that unrestricted same-user processes are trusted
+    And it identifies local policy as governance and audit
+    And it does not claim that local files are protected from those processes
 ```
 
 ### Offline work reports queued state
@@ -898,6 +978,7 @@ Feature: Consume Merl from an automated client
 ### Compact views remain expandable
 
 ```gherkin
+@first_release
 Feature: Read compact project state
 
   Scenario: A researcher expands a decision to its evidence
@@ -907,6 +988,126 @@ Feature: Read compact project state
     And the view does not contain the full source thread
     When I expand decision "D18" to its source
     Then I receive the captured source and provenance
+```
+
+### A new comment produces a pollable delta
+
+```gherkin
+@first_release
+Feature: Read an incremental project change
+
+  Scenario: An agent receives references instead of the full thread
+    Given agent "atlas-dev" has read project revision 481
+    And a new Issue comment produces accepted revision 482
+    When the agent polls its inbox
+    Then one entry identifies revision 482 and the changed object references
+    And the entry does not contain the full Issue history
+    When the agent acknowledges the entry
+    Then its durable cursor advances through revision 482
+```
+
+### Compiler context is bounded and reproducible
+
+```gherkin
+@first_release
+Feature: Compile an incremental Issue comment
+
+  Scenario: A comment uses earlier context
+    Given issue "204" has current decision "D18" and open question "Q32"
+    And comment "SE771" says "Do that after session two"
+    When Merl builds a compilation context for "SE771"
+    Then the context records its basis revision
+    And it records the selected object revisions and recent source events
+    And it records the selector, renderer, budget, and rendered-input digest
+    And it does not contain the full Issue history
+
+  Scenario: Bounded context cannot resolve a reference
+    Given a new comment says "The frame issue above is fixed"
+    And the selected context contains two possible frame issues
+    When Merl compiles the comment
+    Then the result requests more context or records unresolved ambiguity
+    And it does not invent which issue the author meant
+
+  Scenario: Recorded input is reproducible
+    Given compilation run "CR42" has available source content
+    When I rebuild its rendered compiler input
+    Then the rebuilt bytes match the recorded input digest
+```
+
+### Policy provenance matches the input
+
+```gherkin
+@first_release
+Feature: Explain accepted state
+
+  Scenario: An extracted decision expands to its source
+    Given decision "D18" came from observed assertion "OA91"
+    When I inspect the derivation of "D18"
+    Then I see its policy evaluation, assertion, compilation run, context, and source event
+
+  Scenario: A direct command has no fabricated compiler provenance
+    Given an authorized human created decision "D19" through a command
+    When I inspect the derivation of "D19"
+    Then I see its command and policy evaluation
+    And I do not see a fabricated assertion, compilation run, or source event
+```
+
+### Provider facts remain provider-owned
+
+```gherkin
+@first_release
+Feature: Separate external facts from Merl semantics
+
+  Scenario: A close request waits for GitHub
+    Given GitHub reports issue "204" as open
+    When an authorized user requests that issue "204" close
+    Then Merl shows a pending provider action
+    And the provider mirror remains open
+    When GitHub reports issue "204" as closed
+    Then the provider mirror becomes closed
+
+  Scenario: Merl derives a blocker without changing GitHub facts
+    Given GitHub reports issue "204" as open
+    When policy accepts blocker "B9" for issue "204"
+    Then the Merl semantic overlay contains blocker "B9"
+    And the provider mirror remains open
+```
+
+### Source content can be purged without rewriting history
+
+```gherkin
+@first_release
+Feature: Remove retained sensitive content
+
+  Scenario: An administrator purges captured bytes
+    Given source event "SE771" retains sensitive content
+    And decision "D18" derives from that event
+    When an authorized administrator purges "SE771" with a reason and matching digest
+    Then the retained source bytes are unavailable
+    And the source event keeps an audit tombstone, digest, actor, time, and reason
+    And decision "D18" reports that its evidence is unavailable
+    And replay reports that it cannot reproduce the affected compiler input
+```
+
+### Unrelated changes do not invalidate policy
+
+```gherkin
+@first_release
+Feature: Validate policy dependencies
+
+  Scenario: An unrelated object changes before commit
+    Given a policy evaluation read "D18@4" and "Q32@2"
+    And another transaction changes unrelated task "T91"
+    When the authority commits the evaluation
+    Then the dependency check succeeds
+    And the authority assigns the next project revision
+
+  Scenario: A predicate dependency changes before commit
+    Given a policy evaluation recorded that no active decision uses key "capture.gain"
+    And another transaction activates a decision with that key
+    When the authority commits the evaluation
+    Then the dependency check fails
+    And policy reevaluates or reports a conflict
 ```
 
 ### GitHub publication stays sparse
@@ -931,6 +1132,21 @@ Feature: Publish accepted state for humans
     When GitHub returns that comment through ingestion
     Then Merl captures the provider event
     And no observed assertion is created from it
+
+  Scenario: One project owns a shared publication slot
+    Given projects "atlas" and "core" both ingest issue "204"
+    And project "atlas" owns its Merl publication slot
+    When project "core" attempts to publish to that slot
+    Then the command fails with code "publication_slot_not_owned"
+    And no GitHub write is attempted
+
+  Scenario: Another authority recognizes Merl output
+    Given project "atlas" published a verified Merl comment to issue "204"
+    And project "core" also ingests issue "204"
+    When Core captures the comment
+    Then Core records the stable publication and publishing-project identities
+    And Core does not compile the generated prose as ordinary source
+    And a hidden marker by itself would not be sufficient verification
 ```
 
 ### Cross-project work preserves authority
@@ -1207,7 +1423,10 @@ The driver vocabulary should stay close to user actions:
 create_project
 attach_source
 view_issue
+inspect_compilation_context
 submit_command
+inspect_derivation
+purge_source_content
 request_task
 plan_task
 read_inbox
@@ -1218,6 +1437,7 @@ create_workspace
 release_workspace
 inspect_storage
 collect_scratch
+inspect_security_boundary
 export_node
 import_node
 create_request
