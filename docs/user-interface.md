@@ -4,6 +4,8 @@ Status: draft behavior contract
 
 This document describes how people and agents use Merl. It defines observable behavior before command parsing, storage, networking, or database design. The examples use a CLI because it is concrete and easy to test. MCP tools, agent skills, and future graphical interfaces should expose the same actions and outcomes.
 
+Examples use two fictional projects: Atlas develops a product, while Core owns shared infrastructure and developer tooling that Atlas may request.
+
 The command names are the first proposed interface. We may refine spelling during implementation, but the behavioral distinctions in this document are requirements.
 
 ## Interface principles

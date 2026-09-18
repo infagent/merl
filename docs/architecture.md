@@ -4,6 +4,8 @@ Status: draft for implementation
 
 This document defines Merl's implementation architecture. The [product description](product-description.md) explains the product and its intended use. The [user interface and behavior contract](user-interface.md) defines what callers can observe. This document fixes the boundaries, consistency model, and failure behavior that the code must preserve.
 
+Examples use two fictional projects: Atlas develops a product, while Core owns shared infrastructure and developer tooling that Atlas may request.
+
 ## Decision summary
 
 | Area | Decision |

@@ -116,6 +116,8 @@ Separate worktrees prevent filesystem races; they do not prevent two tasks from 
 
 Multi-repository work stays inside one accepted project history. Cross-project work connects independently authoritative histories through requests and exports.
 
+The examples below use two fictional projects: Atlas develops a product, while Core owns shared infrastructure and developer tooling that Atlas may request.
+
 Each side owns a separate request aggregate. If Atlas asks Core for infrastructure, Atlas owns an `OutboundRequest` describing its need and constraints. Core imports that request as an `InboundRequest`, then decides whether to accept it and how to represent the work. Atlas cannot assign Core's owner, priority, or implementation.
 
 ```mermaid
