@@ -43,6 +43,10 @@ The compiler does not read one comment in isolation or reload the full thread ea
 
 Direct prose follows the same authority boundary. A human or agent message is immutable source evidence, not a state mutation. Delivery alone grants no authority. Compilation may derive several independent assertions, and policy may accept one while rejecting or holding another. Merl-generated notifications retain their origin and never return through semantic compilation.
 
+Capture does not require compilation. Each source binding chooses `capture_only`, `on_demand`, or `eager` by source kind. Routine agent notes and long artifacts can remain cold until an authorized action needs their semantics. Human project comments may compile eagerly so accepted state does not knowingly lag the discussion. Structured commands and deterministic provider observations bypass prose extraction entirely.
+
+Compilation belongs to the source inside a project, not to a recipient. Several deliveries and later sessions reuse the same applicable derivation. Raw uncompiled payloads stay out of ordinary views; an agent expands or compiles them explicitly when needed.
+
 When a source is edited or deleted, Merl keeps the earlier assertion as a record of what the compiler inferred at the time. It marks the affected evidence for revalidation and runs the new source version through compilation and policy. The accepted object may remain active while its support is pending review; policy later confirms, weakens, supersedes, or invalidates it. This keeps an object's lifecycle separate from the health of its supporting evidence.
 
 Provider-owned facts use the same accepted revision and delta path as Merl semantics. A trusted observation that GitHub closed an Issue passes through deterministic policy, updates the provider mirror, advances the project revision, and reaches subscribed agents without an LLM interpreting it.
@@ -251,5 +255,7 @@ Compiler integrations use a versioned, language-neutral boundary. Rust implement
 Merl keeps GitHub useful for people. It does not replace issues, pull requests, or human-readable discussion. It reduces how often agents must consume the full history.
 
 Merl is also not a general chat system. Durable project objects carry most collaboration. Human- or agent-authored prose can supply source evidence when a structured action is not enough, but conversational reply links do not resolve work. A researcher updates a hypothesis or records a claim; the subscribed engineer receives the resulting delta.
+
+Merl prefers that structured action because it preserves semantics without paying another model to recover them from prose. Free text is an escape hatch for humans, imported history, rich explanation, and cases the current ontology cannot express.
 
 Merl does not choose a model, run arbitrary agent loops, or give an extractor permission to change the project. Agent hosts decide how and when to invoke agents. Merl maintains state, applies authority policy, and delivers committed changes.

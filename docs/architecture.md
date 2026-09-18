@@ -17,6 +17,7 @@ This document defines Merl's implementation architecture. The [product descripti
 | History | Append-only record envelopes with audited erasure of protected payload bytes |
 | Current state | Materialized from accepted domain events and rebuildable |
 | Compiler context | Bounded, reproducible, and causally limited to an observation cutoff |
+| Compilation policy | Prose is captured universally and compiled selectively by binding policy |
 | Truth maintenance | Evidence support changes independently from accepted-object lifecycle |
 | Policy input | Assertions, commands, provider observations, receipts, and administrative actions share one typed boundary |
 | Concurrency | Global revision ordering with dependency and write-set validation |
@@ -54,6 +55,8 @@ flowchart TB
     subgraph authority[Merl Project Authority]
         SA[Source adapters]
         SE[(SourceEvent log)]
+        CG[Compilation policy]
+        COLD[(Cold payload)]
         CX[CompilationContext]
         CR[CompilationRun]
         OA[ObservedAssertion]
@@ -68,7 +71,10 @@ flowchart TB
         CMD[Authenticated commands]
         PUB[Publication worker]
 
-        SA --> SE --> CX --> CR --> OA --> PI --> PE --> DE
+        SA --> SE --> CG
+        CG -->|eager or triggered| CX --> CR --> OA --> PI --> PE --> DE
+        CG -->|capture_only or waiting| COLD
+        COLD -. authorized trigger .-> CG
         SE --> PO --> PI
         CMD --> PI
         DE --> KP --> MP
@@ -117,7 +123,7 @@ The architecture keeps three categories of state separate:
 
 A `ProjectSource` identifies an external namespace. Source kinds include repositories, artifact stores, experiment systems, local artifact directories, and future communication connectors.
 
-A `ProjectSourceBinding` connects one source to one project. This many-to-many relationship lets a project use several repositories while one repository feeds several projects. The binding stores three independent concerns:
+A `ProjectSourceBinding` connects one source to one project. This many-to-many relationship lets a project use several repositories while one repository feeds several projects. The binding keeps four concerns separate:
 
 ```yaml
 selection:
@@ -129,10 +135,15 @@ capabilities:
   publish_comment: true
   create_issue: false
 
+compilation:
+  issue_comment: eager
+  bot_comment: capture_only
+  artifact_report: on_demand
+
 credential_ref: github-work
 ```
 
-Selection decides relevance. Capabilities decide permission. The credential reference supplies provider access. A selector never grants authority. Each binding keeps its own ingestion cursor and publication configuration while accepted effects enter the project's revision sequence.
+Selection decides relevance. Capabilities decide permission. Compilation policy decides when selected prose incurs extraction cost. The credential reference supplies provider access. None grants semantic authority. Each binding keeps its own ingestion cursor, compilation policy, and publication configuration while accepted effects enter the project's revision sequence.
 
 A `Repository` stores a Merl ID, provider, immutable provider repository ID, current human-readable name, and URL. Repository names and ownership can change. Provider identity preserves continuity across a rename or transfer. Issues and pull requests refer to their repository ID plus an immutable provider object ID where available.
 
@@ -184,6 +195,20 @@ Protected payloads do not share deletion fate across projects, principals, or re
 
 ### Compilation contexts
 
+Capture and compilation are separate decisions. Capturing a prose-bearing source stores immutable metadata and an erasable payload without placing its text in an agent context. The effective `CompilationPolicy` comes from the `ProjectSourceBinding`, source kind, actor class, and project override. A sender cannot force an expensive compiler run through message metadata.
+
+Prose compilation modes are:
+
+- `capture_only`: retain the source without scheduling semantic extraction; policy may compile it later;
+- `on_demand`: compile after an authorized explicit request or when accepted work selects the source as evidence;
+- `eager`: schedule compilation immediately after capture.
+
+Structured commands bypass compilation because they already carry typed semantics. Trusted provider state changes use deterministic `ProviderObservation` inputs. Merl-generated notifications and projections are marked by origin and never compile. Deterministic extractors may still process structured artifacts without a model call.
+
+`on_demand` triggers are explicit and auditable: an authorized `source compile` command, selection of the source as evidence for a semantic command, or an authorized backfill after policy changes. Reading the raw payload does not silently compile it. The first implementation will not estimate future readership or automatically spend tokens at a predicted break-even point.
+
+Sensible defaults keep human project surfaces current without compiling routine agent traffic. Human-authored Issue comments may be eager. Direct agent notes, long reports, research notes, and legacy mailbox imports default to `capture_only` or `on_demand`. Projects can change those defaults at the binding level.
+
 A new comment rarely makes sense by itself. Phrases such as "same as the first run" or "the frame issue above" require accepted state and a small amount of conversational history. Merl records that input in an immutable `CompilationContext` rather than recompiling an entire thread or asking the compiler to guess.
 
 The context manifest contains:
@@ -211,6 +236,8 @@ Replay uses the recorded manifest and available source bytes. A purge can make e
 ### Compilation runs and observed assertions
 
 A `CompilationRun` records one attempt to interpret a `CompilationContext`. Its provenance includes the compiler name and version, context ID, configuration, prompt or ruleset hash, model identity when applicable, mode, and start and completion times.
+
+Compilation belongs to the project source, not to a recipient or delivery. Several deliveries and later sessions reuse the same accepted derivation while its source and recorded context remain applicable. A source or relevant context change creates a new run; a policy-version change can reevaluate existing assertions without repeating extraction.
 
 Compilation modes are:
 
@@ -875,6 +902,7 @@ The architecture depends on replay and transaction boundaries, so tests must exe
 - Property tests check monotonic revisions, idempotent ingestion and commands, and legal supersession.
 - Store tests inject failures around every step of the accepted-batch transaction.
 - Context tests reconstruct exact compiler input, enforce selection budgets and causal cutoffs, request expansion for unresolved references, and refuse silent full-history fallback.
+- Compilation-policy tests cover `capture_only`, `on_demand`, and `eager`, prove that senders cannot override binding policy, and reuse one run across recipient deliveries.
 - Historical tests process sources in sequence and use a fixture whose later correction would expose any future-information leak.
 - Provenance tests cover assertions, direct commands, provider observations, receipts, administrative actions, and source content made unavailable by purge.
 - Assertion tests cover compound prose, precise source spans, quotations, relays, polarity, epistemic basis, and independent policy dispositions.
@@ -901,6 +929,10 @@ The architecture depends on replay and transaction boundaries, so tests must exe
 
 The benchmark compares five paths: full raw history, a rolling current-state summary, recent-window retrieval with search on demand, summary plus retrieval, and Merl state with expansion. Each path receives equivalent task prompts and tool access where the method permits it.
 
+Merl's induced token cost is capture overhead plus selected compilation, compact views, and requested expansions. Raw consumption is the sum of history reads across consumers and visits. Capture itself does not place payload text in a model context. Compilation is justified only when its one-time cost plus compact repeated consumption beats the relevant raw, summary, or retrieval alternative. A one-reader, one-read source may never cross that threshold.
+
+Structured actions form a separate baseline and should dominate prose extraction when the originating agent already knows the semantics. Merl must not spend a model call rediscovering information that the actor can submit through an existing typed operation. When direct messaging ships, its benchmark will graph raw prose, eager compilation, on-demand compilation, and structured actions against downstream consumption count.
+
 Evaluation records the model and version, effort, system and task prompts, tool set, and sampling controls such as temperature or seed when the provider exposes them. Paired repeated trials report variance alongside task correctness, missed blockers, stale-state errors, provenance accuracy, expansion frequency, clarification turns, human-label disagreement, latency, and total induced token cost. Break-even curves show when compilation pays for itself across repeated reads by several roles.
 
 ## Architectural invariants
@@ -910,6 +942,7 @@ The implementation must preserve these rules:
 - A `Project` is the unit of accepted history, revision ordering, policy, and membership.
 - Projects and sources relate many-to-many through `ProjectSourceBinding` records.
 - Source selection, capabilities, and credentials remain separate concerns.
+- Source bindings select an effective `capture_only`, `on_demand`, or `eager` compilation policy independently from ingest permission.
 - Exactly one authority serializes accepted mutations for a project.
 - Only the project authority creates accepted `DomainEvent` records.
 - Offline clients queue idempotent `Command` records rather than domain events.
@@ -973,6 +1006,11 @@ The implementation must preserve these rules:
 - Purge removes retained bytes or keys, preserves a tombstone and digest, and exposes the resulting replay limitation.
 - Purge claims cover only the active store and Merl-managed copies named by retention policy.
 - Every compilation run references a bounded context manifest with exact source, state, selector, renderer, and input-digest provenance.
+- Source capture never implies compilation, and uncompiled payloads remain outside ordinary views.
+- Structured semantic commands and trusted provider observations bypass prose extraction.
+- Merl-generated notifications and projections are never compiled.
+- Compilation is project/source-scoped, not recipient-scoped; deliveries and later sessions reuse applicable derivations.
+- A sender cannot override the binding's compilation policy or unilaterally incur a model call.
 - Each observed assertion records separate speech-act, epistemic-basis, polarity, confidence, attribution, and source-span fields.
 - Relayed or quoted authority is unverified unless it links to an authenticated original source.
 - Relative time resolves from recorded author context; event-relative expressions remain predicates rather than guessed dates.
@@ -1028,6 +1066,8 @@ Merl will not maintain a mutable summary as its source of record. Summaries lose
 Merl will not allow compilers to write current state directly. Extraction quality and authority are separate concerns and need separate audit trails.
 
 Merl will not treat direct prose as either an authoritative mutation or an inert inbox blob. Authored prose is source evidence; compilation and policy separate its semantic acts. Message labels and reply links remain hints and provenance, not task or question lifecycle.
+
+Merl will not compile every captured source by default. Capture preserves optional evidence; binding policy spends extraction tokens only when the surface requires current semantics or an authorized demand justifies the cost.
 
 Merl will not compile every new comment in isolation or reload the full thread by default. Recorded bounded context gives the compiler enough local meaning without recreating the original token cost.
 

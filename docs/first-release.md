@@ -81,6 +81,7 @@ The release includes:
 - a Rust workspace with SQLite migrations and local commands equivalent to the CI checks;
 - one local project authority with serialized accepted writes;
 - GitHub Issue identity and immutable capture of descriptions, comments, and edits;
+- binding-scoped `capture_only`, `on_demand`, and `eager` compilation policy, with the selected Issue comments configured as eager;
 - separate provider-owned Issue facts and Merl-owned semantic state;
 - protected payloads with independent erasure scopes, audited administrative purge, and tombstones;
 - versioned `CompilationContext`, `CompilationRun`, and `ObservedAssertion` records with source spans, assertion axes, and attribution;
@@ -106,6 +107,10 @@ The release is ready when:
 - CI uses least-privilege permissions, does not expose write credentials to untrusted fork jobs, and has documented equivalent local commands;
 - conventional commits update a Release Please pull request, while tags and GitHub releases are created only after that pull request merges with required checks passing;
 - repeated ingestion creates no duplicate source records or accepted effects;
+- source capture records the effective compilation policy without placing payload text in an agent view;
+- structured commands and deterministic provider observations reach policy without a prose compiler;
+- one compilation run is reused across role views and repeated visits while its source and context remain applicable;
+- generated Merl projections never enter compilation;
 - an edit creates a new source capture linked to the prior version;
 - source capture preserves Merl observation order and available provider creation, update, and version data;
 - a compilation run records every source event, source-observation cutoff, basis revision, object revision, recent-event window, selection rule, renderer version, and input hash it used;

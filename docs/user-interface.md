@@ -141,7 +141,13 @@ merl project status
 merl source list
 merl source show github:acme/atlas
 merl source bindings github:acme/atlas
+merl source compilation-policy github:acme/atlas
+merl source compilation-policy set github:acme/atlas \
+  --kind issue_comment \
+  --mode eager
 ```
+
+Compilation policy is part of the project-source binding. Modes are `capture_only`, `on_demand`, and `eager`. A sender cannot override this policy on an individual message. Structured commands and trusted provider observations bypass prose compilation.
 
 `merl project status` makes authority and freshness visible:
 
@@ -658,7 +664,25 @@ merl message send \
   --ref github:acme/atlas/pull/229
 ```
 
-The authored note becomes an immutable source event with one or more delivery records. Compilation may derive several assertions from precise spans of the note; delivery itself accepts none of them. Policy handles each assertion independently. A PM defers `T45`, not the message.
+The structured task is the state change. It does not need an extraction model. The authored note becomes an immutable source event with one or more delivery records and follows the binding's compilation policy. Delivery itself accepts nothing. A PM defers `T45`, not the message.
+
+Cold notes appear without their body in ordinary inbox and role views:
+
+```text
+M91 from atlas-researcher
+refs: H4 E37
+payload: 3.8k chars, not loaded
+compilation: on_demand, not compiled
+```
+
+The recipient can read the source without compiling it, or request semantic extraction:
+
+```bash
+merl message read M91
+merl source compile SE91
+```
+
+An authorized compile request records the effective policy, requester, reason, and chosen compiler. One project-scoped run serves every delivery and later session while its source and context remain applicable.
 
 `in_reply_to` preserves conversation history but does not close a question, finding, or task. Those objects change only through semantic commands or accepted assertions such as `answers Q41`, `updates T45`, or `disputes C9`. One note may address several objects, and several notes may address one object.
 
@@ -1098,6 +1122,13 @@ Feature: Derive state from an authored note
     When Merl renders the three notifications
     Then every notification references the same semantic origin
     And none becomes a new semantic source event
+
+  Scenario: A sender cannot buy a compiler run
+    Given direct notes use compilation mode "capture_only"
+    When a sender marks a note as important or asks that it compile
+    Then Merl captures the sender metadata
+    And the binding policy remains "capture_only"
+    And no compilation run is scheduled
 ```
 
 ### Compiler context is bounded and reproducible
@@ -1105,6 +1136,25 @@ Feature: Derive state from an authored note
 ```gherkin
 @first_release
 Feature: Compile an incremental Issue comment
+
+  Scenario: Binding policy chooses eager compilation
+    Given Issue comments on source "github:acme/atlas" use compilation mode "eager"
+    When Merl captures a new human Issue comment
+    Then the source event records the effective compilation policy
+    And Merl schedules one project-scoped compilation run
+    And no recipient-specific compilation run is created
+
+  Scenario: Capture-only prose stays cold
+    Given bot comments on source "github:acme/atlas" use compilation mode "capture_only"
+    When Merl captures a bot comment
+    Then Merl retains its payload without scheduling compilation
+    And ordinary project and inbox views omit the payload body
+
+  Scenario: An authorized request compiles cold evidence
+    Given source event "SE91" was captured without compilation
+    When an authorized user requests compilation of "SE91"
+    Then Merl records the requester, reason, effective policy, and compiler
+    And later role views reuse the resulting derivation
 
   Scenario: A comment uses earlier context
     Given issue "204" has current decision "D18" and open question "Q32"
