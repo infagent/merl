@@ -138,6 +138,7 @@ Useful inspection commands include:
 ```bash
 merl project list
 merl project status
+merl project coverage [--role researcher]
 merl source list
 merl source show github:acme/atlas
 merl source bindings github:acme/atlas
@@ -155,6 +156,8 @@ Compilation policy is part of the project-source binding. Modes are `capture_onl
 Project: atlas (P17)
 Authority: local, reachable
 Accepted revision: 482
+Source observation head: 771
+Semantic coverage: eager through observation 771; no relevant gaps
 Local cache: current
 Pending commands: 0
 Pending deliveries: 1
@@ -226,8 +229,10 @@ The main read commands are:
 
 ```bash
 merl project view [--role researcher]
+merl project coverage [--role researcher]
 merl project delta --since 481 [--role engineer]
 merl issue view github:acme/atlas#204 [--role researcher]
+merl issue coverage github:acme/atlas#204 [--role researcher]
 merl pr view github:acme/atlas/pull/229 [--role reviewer]
 merl show D18
 merl show D18 --history
@@ -235,18 +240,26 @@ merl show D18 --source
 merl artifact read A81 [--section protocol]
 ```
 
-Views show current accepted state by default. Superseded objects stay hidden unless the user asks for history. Every compact object can expand to detail and captured evidence.
+Views show current accepted state by default. Superseded objects stay hidden unless the user asks for history. Every compact object can expand to detail and captured evidence. Accepted revision describes committed state; it does not imply that Merl has interpreted every captured source.
+
+Coverage is scoped to the view or question. It reports the source-observation head, the contiguous compiled cutoff, and relevant gaps grouped as cold, pending, failed, purged, or excluded. A watermark never hides an earlier hole. Negative answers remain qualified until relevant eager sources are current and no applicable gap remains.
 
 For provider-backed work, views label the source of each field. GitHub-owned facts such as open or closed state, labels, assignees, timestamps, and merge state appear separately from Merl-owned requirements, blockers, decisions, and findings. A pending provider action appears as a request until GitHub confirms it.
 
 Example compact output:
 
 ```text
-atlas@482  phase=session2
+atlas@482  source_head=771  semantic_coverage=eager:771 gaps=0
 
 Keep receive gain and LO fixed for baseline captures. (D18)
 Open question: choose storage location for session two. (Q41)
 Blocked: session two capture waits on core request X17. (B9)
+```
+
+When coverage is incomplete, the same field is explicit:
+
+```text
+Blocked: none accepted; 2 relevant sources remain uncompiled. (SE804 SE811)
 ```
 
 JSON output includes the same meanings, IDs, revision, provenance links, and expansion references. It does not include decorative human prose that changes the semantics.
@@ -272,9 +285,13 @@ Recent source: SE768 SE769 SE771
 Selector: issue-context/v1, budget 6000 chars
 Renderer: issue-compiler-context/v1
 Input digest: sha256:...
+Output budget: assertions=12 bytes=16384 tokens=1200 context_requests=2 expansions=2 payload_bytes=2048
+Output: accepted by protocol, 4 assertions
 ```
 
 The compiler can return `context_required` with a relation, object, or source range it needs. Policy limits the expansion and records a new context. Merl reports unresolved ambiguity when it cannot satisfy the request; it does not load the full thread without recording that choice.
+
+The response schema accepts typed assertions, spans, relations, confidence, attribution, `context_required`, and `unresolved`. It does not accept rationale or summary essays, copied source passages, or chain-of-thought. Exceeding an output or expansion limit fails the run with a stable error; Merl does not keep a truncated subset as though compilation succeeded.
 
 Historical imports display `replay` only when the recorded context excludes all later observations. If provider history is incomplete, Merl displays `hindsight`; that run cannot enter accepted state unless an authorized user promotes its outputs through policy.
 
@@ -380,8 +397,11 @@ merl task request \
   --team software \
   --summary 'Add clipping metadata to the capture reader' \
   --needed-by 2026-10-01 \
-  --impact-if-late 'Session two analysis cannot begin'
+  --impact-if-late 'Session two analysis cannot begin' \
+  --note-file design-context.md
 ```
+
+`--note-file` is captured atomically with the command. The resulting source records `semantic_origin=CMD44` and `supplements=T44` after acceptance. If the note is compiled later, Merl supplies those links and the represented task semantics so compilation can add constraints or evidence without creating another task.
 
 The project manager controls commitment and scheduling:
 
@@ -1051,6 +1071,43 @@ Feature: Read compact project state
     And the view does not contain the full source thread
     When I expand decision "D18" to its source
     Then I receive the captured source and provenance
+
+  Scenario: A negative answer exposes incomplete semantic coverage
+    Given issue "github:acme/atlas#204" has no accepted blocker
+    And relevant source "SE804" is captured but uncompiled
+    And unrelated source "SE900" is also cold
+    When I view the issue as a researcher
+    Then the view says there is no accepted blocker
+    And it says one relevant source remains uncompiled
+    And it does not count unrelated source "SE900" in that scoped gap
+
+  Scenario: An eager Issue is visibly caught up
+    Given eager Issue sources are observed through sequence 771
+    And every applicable source through sequence 771 compiled successfully
+    When I inspect Issue coverage
+    Then the observation head is 771
+    And the contiguous compiled cutoff is 771
+    And the view reports no relevant gaps
+```
+
+### Compiler output stays bounded
+
+```gherkin
+@first_release
+Feature: Enforce the compiler protocol
+
+  Scenario: An over-budget response fails without partial semantics
+    Given a compilation run permits at most 12 assertions
+    When its compiler returns 13 assertions
+    Then the run fails with code "compiler_output_budget_exceeded"
+    And no assertion from that response enters policy
+    And Merl does not silently truncate the response
+
+  Scenario: Explanatory prose is outside the normal response schema
+    Given a compiler response contains a rationale essay or copied source text
+    When Merl validates the response
+    Then validation fails with code "compiler_response_invalid"
+    And no chain-of-thought is requested or retained
 ```
 
 ### Evaluation compares practical alternatives
@@ -1108,6 +1165,14 @@ Feature: Consume one logical agent inbox safely
 
 ```gherkin
 Feature: Derive state from an authored note
+
+  Scenario: Supplemental prose enriches one structured action
+    Given a task request and note were submitted atomically as command "CMD44"
+    And the accepted task is "T45"
+    When Merl later compiles the note
+    Then the source links to command "CMD44" and task "T45"
+    And compilation may add constraints, evidence, or corrections
+    And policy does not create another task for the covered request
 
   Scenario: A note addresses several project objects
     Given an agent sends one note that reports evidence, answers "Q41", and requests work on "T45"

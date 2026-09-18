@@ -61,11 +61,11 @@ The slice performs these actions:
 
 1. Capture one Issue description, its comments, and edits as immutable source metadata with separately erasable content.
 2. Replay those observations sequentially. Build each bounded compiler context from state available at its basis revision, a recent source window ending at its observation cutoff, relevant unresolved objects, and the triggering event.
-3. Record the exact context manifest, cutoff, renderer version, selection policy, object revisions, and rendered-input hash.
-4. Store the compiler's assertions without granting them authority.
+3. Record the exact context manifest, cutoff, renderer version, selection policy, object revisions, rendered-input hash, and input and output budgets.
+4. Validate a bounded structured compiler response, then store its assertions without granting them authority.
 5. Evaluate assertions or explicit semantic commands as typed policy inputs.
 6. Commit accepted events, the next project revision, materialized objects, and inbox entries atomically.
-7. Render compact researcher and engineer views with expansion to available evidence.
+7. Render compact researcher and engineer views with expansion to available evidence and scoped semantic-coverage metadata.
 8. Ingest one new comment and expose only its accepted delta through a pollable inbox.
 9. Rebuild the same state from an empty database.
 10. Run the held-out benchmark against all four simpler baselines and publish correctness, break-even, and variance.
@@ -85,11 +85,12 @@ The release includes:
 - separate provider-owned Issue facts and Merl-owned semantic state;
 - protected payloads with independent erasure scopes, audited administrative purge, and tombstones;
 - versioned `CompilationContext`, `CompilationRun`, and `ObservedAssertion` records with source spans, assertion axes, and attribution;
+- a bounded compiler-response protocol with typed output and explicit budget failures;
 - typed policy inputs for assertions, direct semantic commands, and provider observations;
 - deterministic policy evaluation with recorded read dependencies and write sets;
 - append-only domain events, project revisions, and rebuildable projections;
 - evidence-impact records and support revalidation after source edits or deletions;
-- compact researcher and engineer views;
+- compact researcher and engineer views with semantic-coverage and freshness metadata;
 - object and source expansion, including an explicit unavailable result after purge;
 - project deltas and a minimal pollable inbox with acknowledgement;
 - CLI commands for capture, compilation, review, correction, views, expansion, replay, purge, and evaluation;
@@ -110,6 +111,8 @@ The release is ready when:
 - source capture records the effective compilation policy without placing payload text in an agent view;
 - structured commands and deterministic provider observations reach policy without a prose compiler;
 - one compilation run is reused across role views and repeated visits while its source and context remain applicable;
+- compiler responses enforce configured assertion, encoded-byte, output-token, context-request, expansion-round, and payload-text limits;
+- the compiler protocol rejects undeclared prose, copied source text, and chain-of-thought, and an over-budget response creates no partial accepted assertions;
 - generated Merl projections never enter compilation;
 - an edit creates a new source capture linked to the prior version;
 - source capture preserves Merl observation order and available provider creation, update, and version data;
@@ -120,7 +123,11 @@ The release is ready when:
 - rebuilding a recorded compiler input produces the same bytes;
 - an ambiguous reference produces an explicit context request or unresolved assertion instead of an invented meaning;
 - the compiler does not need the full Issue history to process the selected incremental fixtures;
+- a caught-up eager Issue view reports its observation head, contiguous compiled cutoff, and no relevant compilation gaps;
+- a view with relevant cold, pending, failed, purged, or excluded sources distinguishes "no accepted blocker" from a complete claim that no blocker exists;
+- scoped coverage omits unrelated cold sources while preserving an expandable count and reason for every relevant gap;
 - direct commands reach policy evaluation without fabricated source events or compilation runs;
+- a structured command with supplemental prose records semantic lineage to the command, accepted batch, and affected objects; later compilation may enrich the action but cannot create a duplicate task or decision;
 - every accepted object expands to its policy evaluation and typed derivation inputs;
 - extracted objects also expand through their assertions and compilation runs to available source content;
 - one compound comment may yield several assertions with independent policy dispositions and precise source spans;

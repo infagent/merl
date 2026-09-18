@@ -47,6 +47,12 @@ Capture does not require compilation. Each source binding chooses `capture_only`
 
 Compilation belongs to the source inside a project, not to a recipient. Several deliveries and later sessions reuse the same applicable derivation. Raw uncompiled payloads stay out of ordinary views; an agent expands or compiles them explicitly when needed.
 
+An accepted revision is not a claim that Merl has interpreted every source it has captured. Views show semantic coverage beside accepted state: the source-observation head, the contiguous compiled cutoff, and relevant sources that are cold, pending, failed, purged, or excluded. A negative answer such as "no accepted blocker" is qualified when uncompiled material could change it.
+
+Structured actions may include an optional explanatory note. Merl records that note as supplemental source evidence and links it to the command, accepted batch, and affected objects. If the note is compiled later, the compiler sees what the structured action already represented and extracts only added evidence, constraints, corrections, or other acts. It does not create the same task or decision again.
+
+Compiler responses are typed and deliberately small. A run has limits for assertions, encoded bytes, output tokens, context requests, expansion rounds, and new payload text. The ordinary response contains assertions, source spans, relations, confidence, attribution, or a structured request for more context. Essays, copied source text, and chain-of-thought are not part of the protocol. A response that exceeds its budget fails visibly rather than being silently truncated.
+
 When a source is edited or deleted, Merl keeps the earlier assertion as a record of what the compiler inferred at the time. It marks the affected evidence for revalidation and runs the new source version through compilation and policy. The accepted object may remain active while its support is pending review; policy later confirms, weakens, supersedes, or invalidates it. This keeps an object's lifecycle separate from the health of its supporting evidence.
 
 Provider-owned facts use the same accepted revision and delta path as Merl semantics. A trusted observation that GitHub closed an Issue passes through deterministic policy, updates the provider mirror, advances the project revision, and reaches subscribed agents without an LLM interpreting it.

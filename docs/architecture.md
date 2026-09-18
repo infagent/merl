@@ -18,6 +18,8 @@ This document defines Merl's implementation architecture. The [product descripti
 | Current state | Materialized from accepted domain events and rebuildable |
 | Compiler context | Bounded, reproducible, and causally limited to an observation cutoff |
 | Compilation policy | Prose is captured universally and compiled selectively by binding policy |
+| Semantic coverage | Views separate accepted revision from compilation freshness and gaps |
+| Compiler output | Typed, bounded responses with no default explanatory prose |
 | Truth maintenance | Evidence support changes independently from accepted-object lifecycle |
 | Policy input | Assertions, commands, provider observations, receipts, and administrative actions share one typed boundary |
 | Concurrency | Global revision ordering with dependency and write-set validation |
@@ -239,6 +241,18 @@ A `CompilationRun` records one attempt to interpret a `CompilationContext`. Its 
 
 Compilation belongs to the project source, not to a recipient or delivery. Several deliveries and later sessions reuse the same accepted derivation while its source and recorded context remain applicable. A source or relevant context change creates a new run; a policy-version change can reevaluate existing assertions without repeating extraction.
 
+Each run records hard output limits:
+
+- maximum assertion count;
+- maximum encoded response bytes;
+- model output-token limit when the provider exposes one;
+- maximum context requests and expansion rounds;
+- maximum referenced or newly produced payload bytes.
+
+The normal compiler response contains assertions, source spans, typed relations, confidence and attribution fields, or bounded `context_required` and `unresolved` outcomes. It does not contain a rationale essay, summary essay, chain-of-thought, or copied source text. A bounded diagnostic explanation may use an optional erasable `PayloadRef` when policy enables it. Merl never requests or retains chain-of-thought.
+
+Budget overflow fails the run with a visible outcome. Merl does not silently truncate assertions or enter a context-expansion loop. A later attempt may use a narrower context, deterministic extractor, less expensive model, or stronger model; each attempt remains a separate run with its own provenance. The protocol permits this escalation without requiring an automatic router.
+
 Compilation modes are:
 
 - `live` for normal ingestion
@@ -315,6 +329,10 @@ A command contains:
 - the requested operation and arguments
 - the authenticated actor
 - the submission time and client metadata
+
+A structured command may carry an optional supplemental prose payload. The command receipt records that payload's source identity. If policy accepts the command, the accepted transaction relates the source to the command, domain-event batch, and created or changed objects through `semantic_origin` and `supplements` edges. If policy rejects the command, the source remains linked to that outcome without pretending an accepted object exists.
+
+When supplemental prose compiles later, its context includes those lineage edges and the semantics already represented by the structured action. The compiler extracts new evidence, constraints, corrections, and other acts rather than recreating the origin. A repeated act may still be emitted for safety, but policy records it as covered or duplicate through strong lineage instead of creating another task or decision.
 
 The authority stores command receipt and outcome so a client can retry the same command ID without applying it twice. A command ID cannot be reused with another payload. The command remains immutable; append-only outcome records mark it accepted, rejected, conflicted, or pending review. The command enters policy as a typed input and may produce a domain-event batch.
 
@@ -773,6 +791,16 @@ A renderer receives accepted objects at a recorded project revision. It may expr
 
 A role view projects accepted objects into the smallest useful representation for that role. Views hide superseded objects by default but retain their references for expansion.
 
+Accepted project revision and semantic coverage answer different questions. A revision says which accepted events the view contains. `SemanticCoverage` says how much captured source Merl has interpreted for that view's relevant bindings and source kinds. It records:
+
+- the source observation head;
+- the greatest contiguous compiled observation cutoff where one exists;
+- relevant observation holes and whether each is cold, pending, failed, purged, or excluded by policy;
+- counts of uncompiled `capture_only` and `on_demand` sources;
+- pending and failed compilation counts.
+
+A single watermark cannot hide holes. Coverage is scoped to the role view or query, so unrelated cold material does not add noise. A negative answer is qualified whenever relevant uncompiled or failed sources could change it: `No accepted blocker; two relevant sources remain uncompiled.` An all-eager view is current only when it has no relevant gaps through its observation head.
+
 Merl exposes four levels of detail:
 
 ```mermaid
@@ -884,7 +912,7 @@ The MCP server remains a thin adapter. It exposes a small surface around state v
 
 ### Compiler protocol
 
-External compilers receive an immutable rendered `CompilationContext` and return assertions in a versioned envelope. They cannot access the database or retrieve extra history directly. Merl records the context manifest and configuration needed to compare runs, while secrets remain outside persisted provenance.
+External compilers receive an immutable rendered `CompilationContext` and return a bounded, versioned response. The schema accepts typed assertions, source spans, relations, confidence, attribution, and structured context or unresolved outcomes. It rejects undeclared prose fields and responses beyond the run budget. Compilers cannot access the database or retrieve extra history directly. Merl records the context manifest and configuration needed to compare runs, while secrets remain outside persisted provenance.
 
 ### GitHub
 
@@ -903,6 +931,8 @@ The architecture depends on replay and transaction boundaries, so tests must exe
 - Store tests inject failures around every step of the accepted-batch transaction.
 - Context tests reconstruct exact compiler input, enforce selection budgets and causal cutoffs, request expansion for unresolved references, and refuse silent full-history fallback.
 - Compilation-policy tests cover `capture_only`, `on_demand`, and `eager`, prove that senders cannot override binding policy, and reuse one run across recipient deliveries.
+- Coverage tests create compilation holes and failures, then verify that scoped views qualify negative answers without listing unrelated cold sources.
+- Compiler-protocol tests reject prose fields and over-budget responses, bound context expansion, and preserve explicit failure outcomes without partial assertions.
 - Historical tests process sources in sequence and use a fixture whose later correction would expose any future-information leak.
 - Provenance tests cover assertions, direct commands, provider observations, receipts, administrative actions, and source content made unavailable by purge.
 - Assertion tests cover compound prose, precise source spans, quotations, relays, polarity, epistemic basis, and independent policy dispositions.
@@ -918,6 +948,7 @@ The architecture depends on replay and transaction boundaries, so tests must exe
 - Provisioning tests cover delegation limits, duplicate spawn requests, resource reservation, ambiguous host failure, readiness, drain, and stop.
 - Delivery tests distinguish receipt from semantic acceptance, enforce one consuming session per logical agent, and retry durable interrupt actions.
 - Conversation tests treat reply links as provenance, resolve addressed objects independently, and deduplicate only through strong lineage.
+- Supplemental-source tests bind prose to its command, batch, and objects; later compilation may enrich but cannot duplicate the covered transition.
 - Workspace tests cover concurrent writers, enforced read-only sharing, path aliases, unique branches, dirty cleanup refusal, and full-clone fallback.
 - Storage tests route agent temporary files, enforce configured watermarks, inject cleanup crashes, and prove that the janitor cannot leave owned roots or touch protected data.
 - Portability tests round-trip node manifests, reject secret material, preserve logical agent and command IDs, create a new node ID, and report unreproducible workspace state.
@@ -1007,10 +1038,17 @@ The implementation must preserve these rules:
 - Purge claims cover only the active store and Merl-managed copies named by retention policy.
 - Every compilation run references a bounded context manifest with exact source, state, selector, renderer, and input-digest provenance.
 - Source capture never implies compilation, and uncompiled payloads remain outside ordinary views.
+- Accepted revision never implies semantic completeness over captured sources.
+- Views expose scoped coverage, relevant gaps, pending work, and failures whenever omitted semantics could affect the answer.
+- Negative answers are qualified when relevant semantic coverage is incomplete.
 - Structured semantic commands and trusted provider observations bypass prose extraction.
 - Merl-generated notifications and projections are never compiled.
 - Compilation is project/source-scoped, not recipient-scoped; deliveries and later sessions reuse applicable derivations.
 - A sender cannot override the binding's compilation policy or unilaterally incur a model call.
+- Structured actions and their supplemental prose share explicit semantic lineage; later compilation enriches rather than recreates the covered transition.
+- Compiler output is typed and bounded by assertion, byte, token, context-request, expansion, and payload limits.
+- Compiler responses contain no default rationale, summary essay, copied source text, or chain-of-thought.
+- Output overflow and exhausted expansion budgets fail visibly; Merl never silently truncates semantic output.
 - Each observed assertion records separate speech-act, epistemic-basis, polarity, confidence, attribution, and source-span fields.
 - Relayed or quoted authority is unverified unless it links to an authenticated original source.
 - Relative time resolves from recorded author context; event-relative expressions remain predicates rather than guessed dates.
