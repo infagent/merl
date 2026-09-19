@@ -31,8 +31,8 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
     licenseInfo { spdxId }
     issue(number: $number) {
       id number title state closedAt url body createdAt updatedAt lastEditedAt includesCreatedEdit
-      labels(first: 100) { nodes { name } }
-      assignees(first: 100) { nodes { id login } }
+      labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
+      assignees(first: 100) { nodes { id login } pageInfo { hasNextPage } }
       milestone { title }
       author { login ... on Node { id } }
       userContentEdits(first: 100) {

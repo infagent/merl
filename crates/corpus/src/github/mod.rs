@@ -62,6 +62,12 @@ pub fn fixture_from_graphql_pages(
         if page_issue.id != issue.id || page.data.repository.id != repository.id {
             return Err("GitHub pagination changed source identity".to_owned());
         }
+        if page_issue.labels.page_info.has_next_page {
+            return Err("Issue labels snapshot is incomplete".to_owned());
+        }
+        if page_issue.assignees.page_info.has_next_page {
+            return Err("Issue assignees snapshot is incomplete".to_owned());
+        }
         for comment in &page_issue.comments.nodes {
             if !seen_comments.insert(&comment.id) {
                 return Err(format!("duplicate GitHub comment {}", comment.id));
@@ -385,6 +391,8 @@ struct GraphqlIssue {
 #[derive(Debug, Deserialize)]
 struct GraphqlLabels {
     nodes: Vec<GraphqlLabel>,
+    #[serde(rename = "pageInfo")]
+    page_info: GraphqlPageInfo,
 }
 #[derive(Debug, Deserialize)]
 struct GraphqlLabel {
@@ -393,6 +401,8 @@ struct GraphqlLabel {
 #[derive(Debug, Deserialize)]
 struct GraphqlActors {
     nodes: Vec<GraphqlActor>,
+    #[serde(rename = "pageInfo")]
+    page_info: GraphqlPageInfo,
 }
 #[derive(Debug, Deserialize)]
 struct GraphqlMilestone {

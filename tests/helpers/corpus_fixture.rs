@@ -1,5 +1,5 @@
 use corpus::fixture::{
-    EvidenceRole, Fixture, ObjectLifecycle, RelationKind, SupportStatus, ValidationError,
+    EvidenceRole, Fixture, GoldObjectState, RelationKind, SupportStatus, ValidationError,
     source_digest, validate,
 };
 
@@ -36,11 +36,11 @@ impl CorpusFixture {
     }
 
     pub fn expects_active(self, object: &str) -> Self {
-        self.expects_state(object, ObjectLifecycle::Active)
+        self.expects_state(object, GoldObjectState::Active)
     }
 
     pub fn expects_superseded(self, object: &str) -> Self {
-        self.expects_state(object, ObjectLifecycle::Superseded)
+        self.expects_state(object, GoldObjectState::Superseded)
     }
 
     pub fn expects_partial_support(self, object: &str) -> Self {
@@ -87,7 +87,7 @@ impl CorpusFixture {
             .unwrap()
     }
 
-    fn expects_state(self, object: &str, expected: ObjectLifecycle) -> Self {
+    fn expects_state(self, object: &str, expected: GoldObjectState) -> Self {
         let cutoff = self.cutoff.expect("a cutoff must be selected first");
         let state = self
             .fixture

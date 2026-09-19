@@ -252,25 +252,25 @@ pub struct GoldState {
     pub relations: Vec<GoldRelation>,
 }
 
-/// One expected semantic object, its lifecycle, and evidence health.
+/// One expected semantic object with separate state and evidence health.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GoldObject {
     /// Stable fixture-local name.
     pub key: String,
     /// Domain object kind.
     pub kind: String,
-    /// Expected lifecycle state.
-    pub lifecycle: ObjectLifecycle,
+    /// Expected state for this object kind.
+    pub lifecycle: GoldObjectState,
     /// Whether the object's original evidence is still sound.
     pub support_status: SupportStatus,
     /// Evidence with explicit role rather than an undifferentiated support list.
     pub evidence: Vec<GoldEvidence>,
 }
 
-/// Expected object lifecycle at a causal cutoff.
+/// Corpus state at a causal cutoff, including type-specific states such as open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ObjectLifecycle {
+pub enum GoldObjectState {
     /// Proposed but not yet accepted.
     Candidate,
     /// Unresolved question or work item.
@@ -285,7 +285,7 @@ pub enum ObjectLifecycle {
     Invalidated,
 }
 
-/// Health of the evidence supporting an object, independent of its lifecycle.
+/// Health of the evidence supporting an object, independent of its state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SupportStatus {
@@ -372,6 +372,8 @@ pub enum ValidationError {
     InvalidVersionLineage(u64),
     /// Exact bytes and their digest must appear together; gaps need a reason.
     InvalidBodyCapture(u64),
+    /// Edit metadata does not describe its enclosing source version.
+    InvalidContentEdit(u64),
     /// A provenance timestamp is not RFC 3339.
     InvalidTimestamp(String),
     /// A source version is placed before its external entity existed.
@@ -443,6 +445,9 @@ impl fmt::Display for ValidationError {
                     formatter,
                     "inconsistent body capture at observation {sequence}"
                 )
+            }
+            Self::InvalidContentEdit(sequence) => {
+                write!(formatter, "invalid edit metadata at observation {sequence}")
             }
             Self::InvalidTimestamp(value) => {
                 write!(formatter, "invalid RFC 3339 timestamp {value}")
@@ -672,6 +677,21 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
             return Err(ValidationError::ObservationAfterCapture(
                 observation.sequence,
             ));
+        }
+        if let Some(edit) = &observation.edit {
+            let edited_at = parse_timestamp(&edit.edited_at)?;
+            if edit.provider_id != observation.version_id || edited_at != occurred_at {
+                return Err(ValidationError::InvalidContentEdit(observation.sequence));
+            }
+            if let Some(deleted_at) = edit
+                .deleted_at
+                .as_deref()
+                .map(parse_timestamp)
+                .transpose()?
+                && (deleted_at < edited_at || deleted_at > captured_at)
+            {
+                return Err(ValidationError::InvalidContentEdit(observation.sequence));
+            }
         }
         if !version_ids.insert(observation.version_id.as_str()) {
             return Err(ValidationError::DuplicateVersionIdentity(

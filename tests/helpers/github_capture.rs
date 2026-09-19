@@ -161,4 +161,71 @@ impl GithubCapture {
             Err(ValidationError::AmbiguousCausalOrder(4))
         );
     }
+
+    pub fn then_rejects_truncated_labels(mut self) -> Self {
+        self.expect_truncated_snapshot("labels");
+        self
+    }
+
+    pub fn then_rejects_truncated_assignees(mut self) -> Self {
+        self.expect_truncated_snapshot("assignees");
+        self
+    }
+
+    fn expect_truncated_snapshot(&mut self, field: &str) {
+        let mut pages: serde_json::Value = serde_json::from_str(&self.source).unwrap();
+        for page in pages.as_array_mut().unwrap() {
+            page["data"]["repository"]["issue"][field]["pageInfo"]["hasNextPage"] = true.into();
+        }
+        let source = serde_json::to_vec(&pages).unwrap();
+        assert!(
+            fixture_from_graphql_pages("DEV-FAKE", self.captured_at, &source)
+                .is_err_and(|error| error.contains(field) && error.contains("incomplete"))
+        );
+    }
+
+    pub fn then_rejects_mismatched_edit_identity(self) -> Self {
+        self.expect_invalid_edit(
+            |edit| "another-edit".clone_into(&mut edit.provider_id),
+            ValidationError::InvalidContentEdit(3),
+        );
+        self
+    }
+
+    pub fn then_rejects_mismatched_edit_time(self) -> Self {
+        self.expect_invalid_edit(
+            |edit| "2026-01-01T11:30:00Z".clone_into(&mut edit.edited_at),
+            ValidationError::InvalidContentEdit(3),
+        );
+        self.expect_invalid_edit(
+            |edit| "not-a-time".clone_into(&mut edit.edited_at),
+            ValidationError::InvalidTimestamp("not-a-time".to_owned()),
+        );
+        self
+    }
+
+    pub fn then_rejects_invalid_deletion_time(self) {
+        self.expect_invalid_edit(
+            |edit| edit.deleted_at = Some("not-a-time".to_owned()),
+            ValidationError::InvalidTimestamp("not-a-time".to_owned()),
+        );
+        for deleted_at in ["2026-01-01T10:30:00Z", "2026-01-03T00:00:00Z"] {
+            self.expect_invalid_edit(
+                |edit| edit.deleted_at = Some(deleted_at.to_owned()),
+                ValidationError::InvalidContentEdit(3),
+            );
+        }
+    }
+
+    fn expect_invalid_edit(
+        &self,
+        change: impl FnOnce(&mut corpus::fixture::ContentEdit),
+        expected: ValidationError,
+    ) {
+        let mut fixture = self.fixture().clone();
+        change(fixture.observations[2].edit.as_mut().unwrap());
+        fixture.capture.source_sha256 =
+            source_digest(&fixture.provider_snapshot, &fixture.observations);
+        assert_eq!(validate(&fixture), Err(expected));
+    }
 }

@@ -38,3 +38,19 @@ fn timezone_offsets_do_not_reorder_observations() {
         .when_captured()
         .then_has_four_versions_in_order();
 }
+
+#[test]
+fn capture_rejects_incomplete_provider_snapshot() {
+    GithubCapture::two_pages_with_issue_edit()
+        .then_rejects_truncated_labels()
+        .then_rejects_truncated_assignees();
+}
+
+#[test]
+fn captured_edit_metadata_must_match_its_source_version() {
+    GithubCapture::two_pages_with_issue_edit()
+        .when_captured()
+        .then_rejects_mismatched_edit_identity()
+        .then_rejects_mismatched_edit_time()
+        .then_rejects_invalid_deletion_time();
+}
