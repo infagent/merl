@@ -55,30 +55,49 @@ impl From<StoreError> for CliError {
     }
 }
 
+/// The command result and the output mode selected by the CLI parser.
+#[derive(Debug)]
+pub enum CliResponse {
+    /// Text for standard output after a successful command.
+    Success(String),
+    /// An error for standard error in human mode.
+    HumanError(CliError),
+    /// An error for standard output in JSON mode.
+    JsonError(CliError),
+}
+
 /// Parses and runs one command without network access.
 ///
-/// # Errors
-/// Returns stable CLI errors for unsupported arguments, missing values, or
-/// local storage failures. The caller controls how errors reach stderr.
-pub fn run(arguments: &[String]) -> Result<String, CliError> {
+/// The parser keeps the chosen output mode with an error, so the executable
+/// does not have to inspect the arguments again after a failure.
+#[must_use]
+pub fn run(arguments: &[String]) -> CliResponse {
+    let mut json_output = false;
+    match execute(arguments, &mut json_output) {
+        Ok(output) => CliResponse::Success(output),
+        Err(error) if json_output => CliResponse::JsonError(error),
+        Err(error) => CliResponse::HumanError(error),
+    }
+}
+
+fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliError> {
     let mut positional = Vec::new();
     let mut database = None;
     let mut id = None;
     let mut project = None;
-    let mut json_output = false;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--format" => {
                 index += 1;
                 let format = arguments.get(index).ok_or_else(missing_value)?;
-                json_output = match format.as_str() {
+                *json_output = match format.as_str() {
                     "json" => true,
                     "human" => false,
                     _ => return Err(invalid_input("format must be human or json")),
                 };
             }
-            "--json" => json_output = true,
+            "--json" => *json_output = true,
             "--database" => {
                 index += 1;
                 database = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
@@ -101,23 +120,23 @@ pub fn run(arguments: &[String]) -> Result<String, CliError> {
     }
 
     match positional.as_slice() {
-        [] | ["help"] => help("", json_output),
-        ["help", "project"] => help("project", json_output),
-        ["help", "project", "init"] => help("project init", json_output),
-        ["help", "project", "revision"] => help("project revision", json_output),
+        [] | ["help"] => help("", *json_output),
+        ["help", "project"] => help("project", *json_output),
+        ["help", "project", "init"] => help("project init", *json_output),
+        ["help", "project", "revision"] => help("project revision", *json_output),
         ["project", "init"] => {
             let id = parse_project(id.ok_or_else(|| invalid_input("--id is required"))?)?;
             let path = database.ok_or_else(|| invalid_input("--database is required"))?;
             let mut store = Store::open(Path::new(path))?;
             store.create_project(&id)?;
-            result("project.init", &id, 0, json_output)
+            result("project.init", &id, 0, *json_output)
         }
         ["project", "revision"] => {
             let id = parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
             let path = database.ok_or_else(|| invalid_input("--database is required"))?;
             let store = Store::open(Path::new(path))?;
             let revision = store.project_revision(&id)?;
-            result("project.revision", &id, revision.get(), json_output)
+            result("project.revision", &id, revision.get(), *json_output)
         }
         _ => Err(invalid_input("unknown command; run `merl help`")),
     }

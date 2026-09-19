@@ -36,7 +36,7 @@ publish = false
 merl-cli = { path = "crates/merl-cli" }
 
 [dev-dependencies]
-corpus = { package = "merl-corpus", path = "crates/merl-corpus" }
+merl-corpus = { path = "crates/merl-corpus" }
 serde_json.workspace = true
 merl-core = { path = "crates/merl-core" }
 merl-store = { path = "crates/merl-store" }

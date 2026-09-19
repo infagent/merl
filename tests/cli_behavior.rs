@@ -46,6 +46,27 @@ fn cli_help_is_incremental_and_machine_readable() {
     assert_eq!(error["code"], "INVALID_INPUT");
 }
 
+#[test]
+fn the_last_format_option_also_controls_errors() {
+    for arguments in [
+        &["--json", "--format", "human", "project", "unknown"][..],
+        &[
+            "--format", "json", "--format", "human", "project", "unknown",
+        ][..],
+    ] {
+        let output = run(arguments);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("INVALID_INPUT"));
+    }
+
+    let json = run(&["--format", "human", "--json", "project", "unknown"]);
+    assert!(!json.status.success());
+    assert!(json.stderr.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&json.stdout).expect("JSON error");
+    assert_eq!(error["code"], "INVALID_INPUT");
+}
+
 fn run(arguments: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_merl"))
         .args(arguments)

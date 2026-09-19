@@ -1,4 +1,4 @@
-use corpus::fixture::{
+use merl_corpus::fixture::{
     EvidenceRole, Fixture, GoldObjectState, RelationKind, SupportStatus, TaskCommitment,
     TaskExecution, TaskScheduling, ValidationError, source_digest, validate,
 };
@@ -185,7 +185,7 @@ impl CorpusFixture {
         self
     }
 
-    fn object(&self, key: &str) -> &corpus::fixture::GoldObject {
+    fn object(&self, key: &str) -> &merl_corpus::fixture::GoldObject {
         let cutoff = self.cutoff.expect("a cutoff must be selected first");
         self.fixture
             .gold_states
@@ -229,10 +229,12 @@ impl CorpusFixture {
             .iter_mut()
             .find(|item| item.key == object)
             .expect("named gold object should exist at the selected cutoff");
-        gold_object.evidence.push(corpus::fixture::GoldEvidence {
-            observation,
-            role: corpus::fixture::EvidenceRole::Supports,
-        });
+        gold_object
+            .evidence
+            .push(merl_corpus::fixture::GoldEvidence {
+                observation,
+                role: merl_corpus::fixture::EvidenceRole::Supports,
+            });
         self.expected_leak = Some((object.to_owned(), observation));
         self
     }

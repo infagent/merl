@@ -77,6 +77,10 @@ identifier!(
 );
 identifier!(RelationId, "The stable identity of one accepted relation.");
 identifier!(
+    RelationKind,
+    "A bounded relation predicate, such as `supersedes`."
+);
+identifier!(
     SourceId,
     "The stable identity of one captured source entity."
 );
@@ -85,6 +89,21 @@ identifier!(
     "The stable identity of one immutable source version."
 );
 identifier!(PolicyInputId, "The identity of one immutable policy input.");
+
+/// A project-scoped link between two accepted objects.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Relation {
+    /// Stable identity of this link.
+    pub id: RelationId,
+    /// Project that owns both endpoints.
+    pub project: ProjectId,
+    /// Object the predicate starts from.
+    pub subject: ObjectId,
+    /// Bounded predicate, such as `supersedes` or `supports`.
+    pub kind: RelationKind,
+    /// Object the predicate points to.
+    pub object: ObjectId,
+}
 
 /// A precise captured source version, independent of its protected bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
