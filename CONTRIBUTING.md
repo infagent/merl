@@ -47,9 +47,9 @@ Install the stable Rust toolchain with [rustup](https://rustup.rs/). The CI work
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-cargo doc --workspace --all-features --no-deps
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-features
+RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
 ```
 
 Repository-specific engineering rules live in [AGENTS.md](AGENTS.md). They apply to human- and agent-authored changes alike.
