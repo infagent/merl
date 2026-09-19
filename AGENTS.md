@@ -84,7 +84,7 @@ Do not make an MCP server or a mandatory skill part of a feature unless a later 
 
 ## Comments and documentation
 
-Run prose through the Tagore writing pass before committing it. Use plain language, sentence-case headings, active subjects, and enough specificity to let a reader act. Remove filler, inflated claims, canned conclusions, and repetitive structure.
+Write comments and documentation in a natural, human voice. Use plain language, sentence-case headings, active subjects, and enough specificity to let a reader act. Remove filler, inflated claims, canned conclusions, and repetitive structure. [Tagore](https://github.com/apurvrdx1/tagore) is a recommended editing pass, not a required tool.
 
 Comments and docstrings explain when a rule applies and why it exists. They record invariants, tradeoffs, surprising constraints, safety arguments, and consequences of changing a value. They do not translate the code into English or narrate how an obvious loop works.
 
