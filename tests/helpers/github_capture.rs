@@ -1,4 +1,4 @@
-use corpus::{
+use merl_corpus::{
     fixture::{
         Fixture, ValidationError, require_exact_source_bodies_through, source_digest, validate,
     },
@@ -153,11 +153,11 @@ impl GithubCapture {
         let fixture = self.fixture();
         assert!(fixture.observations[3].ambiguous_order_with_previous);
         assert_eq!(
-            corpus::fixture::require_unambiguous_order_through(fixture, 3),
+            merl_corpus::fixture::require_unambiguous_order_through(fixture, 3),
             Err(ValidationError::AmbiguousCausalOrder(4))
         );
         assert_eq!(
-            corpus::fixture::require_unambiguous_order_through(fixture, 4),
+            merl_corpus::fixture::require_unambiguous_order_through(fixture, 4),
             Err(ValidationError::AmbiguousCausalOrder(4))
         );
     }
@@ -219,7 +219,7 @@ impl GithubCapture {
 
     fn expect_invalid_edit(
         &self,
-        change: impl FnOnce(&mut corpus::fixture::ContentEdit),
+        change: impl FnOnce(&mut merl_corpus::fixture::ContentEdit),
         expected: ValidationError,
     ) {
         let mut fixture = self.fixture().clone();

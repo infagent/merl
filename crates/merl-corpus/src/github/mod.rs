@@ -151,7 +151,7 @@ pub fn fixture_from_graphql_pages(
         },
         capture: Capture {
             captured_at: captured_at.to_owned(),
-            capture_tool_version: format!("corpus/{}", env!("CARGO_PKG_VERSION")),
+            capture_tool_version: format!("merl-corpus/{}", env!("CARGO_PKG_VERSION")),
             source_sha256: source_digest(&provider_snapshot, &observations),
             history_fidelity: fidelity,
             provider_observation_count: observations.len(),

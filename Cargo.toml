@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/corpus"]
+members = ["crates/merl-corpus", "crates/merl-core", "crates/merl-store", "crates/merl-cli"]
 
 [workspace.package]
 edition = "2024"
@@ -13,6 +13,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 time = { version = "0.3.55", default-features = false, features = ["parsing"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -31,9 +32,14 @@ license = "MIT"
 repository = "https://github.com/infagent/merl"
 publish = false
 
+[dependencies]
+merl-cli = { path = "crates/merl-cli" }
+
 [dev-dependencies]
-corpus = { path = "crates/corpus" }
+merl-corpus = { path = "crates/merl-corpus" }
 serde_json.workspace = true
+merl-core = { path = "crates/merl-core" }
+merl-store = { path = "crates/merl-store" }
 
 [lints]
 workspace = true

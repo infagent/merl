@@ -6,7 +6,7 @@ use std::{
     process::{Command, ExitCode},
 };
 
-use corpus::{
+use merl_corpus::{
     fixture::{Fixture, validate},
     github::fixture_from_graphql_pages,
 };
@@ -15,8 +15,8 @@ const HELP: &str = "\
 Capture and validate Merl evaluation fixtures.
 
 Usage:
-  corpus validate <fixture>...
-  corpus capture-github <fixture-id> <owner/repository> <issue-number> <captured-at> <output>
+  merl-corpus validate <fixture>...
+  merl-corpus capture-github <fixture-id> <owner/repository> <issue-number> <captured-at> <output>
 
 The capture command requires a separately installed GitHub CLI (gh).
 Authenticate with gh auth login or supply GH_TOKEN. captured-at must be an
@@ -59,7 +59,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("corpus: {error}");
+            eprintln!("merl-corpus: {error}");
             ExitCode::FAILURE
         }
     }
@@ -91,7 +91,9 @@ fn run() -> Result<(), String> {
             let values: Vec<_> = args.collect();
             let [fixture_id, repository, issue_number, captured_at, output] = values.as_slice()
             else {
-                return Err("capture-github requires five arguments; run corpus help".to_owned());
+                return Err(
+                    "capture-github requires five arguments; run merl-corpus help".to_owned(),
+                );
             };
             let issue_number = issue_number
                 .parse::<u64>()
@@ -104,7 +106,7 @@ fn run() -> Result<(), String> {
             println!("captured {fixture_id} in {output}");
             Ok(())
         }
-        other => Err(format!("unknown command {other}; run corpus help")),
+        other => Err(format!("unknown command {other}; run merl-corpus help")),
     }
 }
 
