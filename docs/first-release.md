@@ -60,7 +60,7 @@ flowchart TB
 The slice performs these actions:
 
 1. Capture one Issue description, its comments, and edits as immutable source metadata with separately erasable content.
-2. Replay those observations sequentially. Build each bounded compiler context from state available at its basis revision, a recent source window ending at its observation cutoff, relevant unresolved objects, and the triggering event.
+2. Replay those observations sequentially. Build each bounded compiler context from state available at its `interpretation_basis_revision`, a recent source window ending at `source_observation_cutoff`, relevant unresolved objects, and the triggering event.
 3. Record the exact context manifest, cutoff, renderer version, selection policy, object revisions, rendered-input hash, and input and output budgets.
 4. Validate a bounded structured compiler response, then store its assertions without granting them authority.
 5. Evaluate assertions or explicit semantic commands as typed policy inputs.
@@ -81,7 +81,7 @@ The release includes:
 - a Rust workspace with SQLite migrations and local commands equivalent to the CI checks;
 - one local project authority with serialized accepted writes;
 - GitHub Issue identity and immutable capture of descriptions, comments, and edits;
-- binding-scoped `capture_only`, `on_demand`, and `eager` compilation policy, with the selected Issue comments configured as eager;
+- binding-scoped compilation mode and coverage requirement, with selected human Issue comments configured as `eager` and `required`;
 - separate provider-owned Issue facts and Merl-owned semantic state;
 - protected payloads with independent erasure scopes, audited administrative purge, and tombstones;
 - versioned `CompilationContext`, `CompilationRun`, and `ObservedAssertion` records with source spans, assertion axes, and attribution;
@@ -109,7 +109,7 @@ The release is ready when:
 - CI uses least-privilege permissions, does not expose write credentials to untrusted fork jobs, and has documented equivalent local commands;
 - conventional commits update a Release Please pull request, while tags and GitHub releases are created only after that pull request merges with required checks passing;
 - repeated ingestion creates no duplicate source records or accepted effects;
-- source capture records the effective compilation policy without placing payload text in an agent view;
+- source capture records the effective compilation mode, coverage requirement, and policy version without placing payload text in an agent view;
 - structured commands and deterministic provider observations reach policy without a prose compiler;
 - one compilation run is reused across role views and repeated visits while its source and context remain applicable;
 - compiler responses enforce configured assertion, encoded-byte, output-token, context-request, expansion-round, and payload-text limits;
@@ -117,16 +117,18 @@ The release is ready when:
 - generated Merl projections never enter compilation;
 - an edit creates a new source capture linked to the prior version;
 - source capture preserves Merl observation order and available provider creation, update, and version data;
-- a compilation run records every source event, source-observation cutoff, basis revision, object revision, recent-event window, selection rule, renderer version, and input hash it used;
+- a compilation run records every source event, source-observation cutoff, interpretation-basis revision, object revision, recent-event window, selection rule, renderer version, and input hash it used;
+- late on-demand compilation reconstructs context at the source's historical `interpretation_basis_revision`, while its policy evaluation uses current accepted state at a separately recorded `basis_project_revision`;
 - historical bootstrap compiles observations sequentially and never exposes later source or accepted state to an earlier causal run;
 - a fixture designed to reveal future leakage fails under noncausal context construction and passes under the recorded cutoff;
 - incomplete historical version data produces an explicit hindsight run that cannot count as causal replay or enter accepted state without promotion;
 - rebuilding a recorded compiler input produces the same bytes;
 - an ambiguous reference produces an explicit context request or unresolved assertion instead of an invented meaning;
 - the compiler does not need the full Issue history to process the selected incremental fixtures;
-- a caught-up eager Issue view reports its observation head, contiguous compiled cutoff, and no relevant compilation gaps;
-- a view with relevant cold, pending, failed, purged, or excluded sources distinguishes "no accepted blocker" from a complete claim that no blocker exists;
-- scoped coverage omits unrelated cold sources while preserving an expandable count and reason for every relevant gap;
+- a caught-up required Issue view reports its observation head, contiguous processed cutoff, and no required compilation gaps;
+- a view with required cold, pending, failed, purged, or excluded sources distinguishes "no accepted blocker" from a complete claim that no blocker exists;
+- optional cold sources do not create coverage gaps, while structurally linked optional sources remain visible as expandable attachments;
+- coverage requirement is selected without reading cold payload text, and only an authorized policy action can promote an optional source to required;
 - direct commands reach policy evaluation without fabricated source events or compilation runs;
 - a structured command with supplemental prose records semantic lineage to the command, accepted batch, and affected objects; later compilation may enrich the action but cannot create a duplicate task or decision;
 - every accepted object expands to its policy evaluation and typed derivation inputs;

@@ -31,9 +31,9 @@ Provider facts and Merl interpretations stay separate. GitHub owns whether an Is
 One project authority serializes accepted changes for each project. Merl processes activity through that authority in six layers.
 
 1. A `SourceEvent` records what Merl observed. Its append-only metadata points to retained source content. An edited GitHub comment creates another source event instead of rewriting the first one.
-2. A `CompilationContext` records the bounded state and recent conversation needed to understand the new source. It preserves the source-observation cutoff, basis revision, selected object revisions, renderer, and exact input digest.
+2. A `CompilationContext` records the bounded state and recent conversation needed to understand the new source. It preserves `source_observation_cutoff`, historical `interpretation_basis_revision`, selected object revisions, renderer, and exact input digest.
 3. A versioned `CompilationRun` interprets that context and emits `ObservedAssertion` records. A long comment or direct note may yield several assertions with separate source spans, speech acts, epistemic bases, polarity, confidence, and attribution.
-4. A `PolicyEvaluation` considers typed inputs, including assertions and direct commands, together with accepted state. It applies authority rules, detects conflicts, and records why each input was accepted, rejected, or held for review.
+4. A `PolicyEvaluation` considers typed inputs, including assertions and direct commands, together with accepted state at its own current `basis_project_revision`. It applies authority rules, detects conflicts, and records why each input was accepted, rejected, or held for review.
 5. Accepted evaluations produce an atomic batch of `DomainEvent` records. The authority updates materialized state, advances the project revision once, and creates inbox entries for subscribed agents in the same transaction.
 6. Merl renders the new state as role-specific views and deltas. Wake-up is best effort; the durable inbox remains correct if a process crashes or a host integration fails.
 
@@ -43,11 +43,13 @@ The compiler does not read one comment in isolation or reload the full thread ea
 
 Direct prose follows the same authority boundary. A human or agent message is immutable source evidence, not a state mutation. Delivery alone grants no authority. Compilation may derive several independent assertions, and policy may accept one while rejecting or holding another. Merl-generated notifications retain their origin and never return through semantic compilation.
 
-Capture does not require compilation. Each source binding chooses `capture_only`, `on_demand`, or `eager` by source kind. Routine agent notes and long artifacts can remain cold until an authorized action needs their semantics. Human project comments may compile eagerly so accepted state does not knowingly lag the discussion. Structured commands and deterministic provider observations bypass prose extraction entirely.
+Capture does not require compilation. Each source binding chooses a compilation mode of `capture_only`, `on_demand`, or `eager` and a separate coverage requirement of `required` or `optional`. Mode controls when extraction runs. Coverage requirement controls whether an unprocessed observation prevents a completeness claim. Routine agent notes and long artifacts can remain optional and cold until an authorized action needs their semantics. Human project comments are normally eager and required so accepted state does not knowingly lag the discussion. Structured commands and deterministic provider observations bypass prose extraction entirely.
 
 Compilation belongs to the source inside a project, not to a recipient. Several deliveries and later sessions reuse the same applicable derivation. Raw uncompiled payloads stay out of ordinary views; an agent expands or compiles them explicitly when needed.
 
-An accepted revision is not a claim that Merl has interpreted every source it has captured. Views show semantic coverage beside accepted state: the source-observation head, the contiguous compiled cutoff, and relevant sources that are cold, pending, failed, purged, or excluded. A negative answer such as "no accepted blocker" is qualified when uncompiled material could change it.
+Compiling an old source later does not reinterpret it with facts learned afterward. The compilation context reconstructs accepted state and source history at the source's original causal position. Policy then evaluates the resulting assertions against current accepted state. Deliberate reinterpretation with later knowledge is labeled hindsight.
+
+An accepted revision is not a claim that Merl has interpreted every required source. Views show semantic coverage beside accepted state: the source-observation head, the contiguous processed cutoff, and required sources that are cold, pending, failed, purged, or excluded. A negative answer such as "no accepted blocker" is qualified while required coverage is incomplete. Optional cold sources do not create gaps; explicit references and other structural metadata can still expose them as attachments without reading their payloads.
 
 Structured actions may include an optional explanatory note. Merl records that note as supplemental source evidence and links it to the command, accepted batch, and affected objects. If the note is compiled later, the compiler sees what the structured action already represented and extracts only added evidence, constraints, corrections, or other acts. It does not create the same task or decision again.
 
@@ -226,7 +228,7 @@ Extraction does not grant authority. Merl distinguishes what a compiler observed
 
 A deterministic fact read from a machine artifact may pass policy without review. An explicit decision from an authorized project owner may also become active at once. An agent's interpretation of research direction, a conflicting requirement, or a request to approve a merge may remain a candidate until the right person or policy accepts it.
 
-Policy evaluations record their typed inputs, basis revision, state dependencies, predicate guards, and proposed writes. An unrelated project revision does not invalidate the result. A change to something the policy read, or a conflict with its writes, requires reevaluation.
+Policy evaluations record their typed inputs, `basis_project_revision`, state dependencies, predicate guards, and proposed writes. An unrelated project revision does not invalidate the result. A change to something the policy read, or a conflict with its writes, requires reevaluation.
 
 People and agents ask the authority to act by submitting idempotent commands. A disconnected client may queue a command with its basis revision, but it cannot create an accepted domain event. When the client reconnects, the authority authenticates the actor, checks project membership and current state, then evaluates the command through policy.
 

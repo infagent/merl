@@ -17,7 +17,7 @@ This document defines Merl's implementation architecture. The [product descripti
 | History | Append-only record envelopes with audited erasure of protected payload bytes |
 | Current state | Materialized from accepted domain events and rebuildable |
 | Compiler context | Bounded, reproducible, and causally limited to an observation cutoff |
-| Compilation policy | Prose is captured universally and compiled selectively by binding policy |
+| Compilation policy | Binding policy separates compilation timing from coverage requirements |
 | Semantic coverage | Views separate accepted revision from compilation freshness and gaps |
 | Compiler output | Typed, bounded responses with no default explanatory prose |
 | Truth maintenance | Evidence support changes independently from accepted-object lifecycle |
@@ -122,7 +122,7 @@ The architecture keeps three categories of state separate:
 
 A `ProjectSource` identifies an external namespace. Source kinds include repositories, artifact stores, experiment systems, local artifact directories, and future communication connectors.
 
-A `ProjectSourceBinding` connects one source to one project. This many-to-many relationship lets a project use several repositories while one repository feeds several projects. The binding keeps four concerns separate:
+A `ProjectSourceBinding` connects one source to one project. This many-to-many relationship lets a project use several repositories while one repository feeds several projects. The binding keeps five concerns separate:
 
 ```yaml
 selection:
@@ -135,14 +135,20 @@ capabilities:
   create_issue: false
 
 compilation:
-  issue_comment: eager
-  bot_comment: capture_only
-  artifact_report: on_demand
+  issue_comment:
+    mode: eager
+    coverage_requirement: required
+  bot_comment:
+    mode: capture_only
+    coverage_requirement: optional
+  artifact_report:
+    mode: on_demand
+    coverage_requirement: optional
 
 credential_ref: github-work
 ```
 
-Selection decides relevance. Capabilities decide permission. Compilation policy decides when selected prose incurs extraction cost. The credential reference supplies provider access. None grants semantic authority. Each binding keeps its own ingestion cursor, compilation policy, and publication configuration while accepted effects enter the project's revision sequence.
+Selection decides relevance. Capabilities decide permission. Compilation mode decides when selected prose incurs extraction cost. Coverage requirement decides whether an unprocessed observation prevents a semantic-completeness claim. The credential reference supplies provider access. None grants semantic authority. Each binding keeps its own ingestion cursor, compilation policy, and publication configuration while accepted effects enter the project's revision sequence.
 
 A `Repository` stores a Merl ID, provider, immutable provider repository ID, current human-readable name, and URL. Repository names and ownership can change. Provider identity preserves continuity across a rename or transfer. Issues and pull requests refer to their repository ID plus an immutable provider object ID where available.
 
@@ -194,7 +200,7 @@ Protected payloads do not share deletion fate across projects, principals, or re
 
 ### Compilation contexts
 
-Capture and compilation are separate decisions. Capturing a prose-bearing source stores immutable metadata and an erasable payload without placing its text in an agent context. The effective `CompilationPolicy` comes from the `ProjectSourceBinding`, source kind, actor class, and project override. A sender cannot force an expensive compiler run through message metadata.
+Capture and compilation are separate decisions. Capturing a prose-bearing source stores immutable metadata and an erasable payload without placing its text in an agent context. The effective `CompilationPolicy` comes from the `ProjectSourceBinding`, source kind, actor class, and project override. It has two orthogonal fields: compilation mode and coverage requirement. Source capture records both effective values and the policy version that selected them. A sender cannot force an expensive compiler run through message metadata.
 
 Prose compilation modes are:
 
@@ -202,18 +208,27 @@ Prose compilation modes are:
 - `on_demand`: compile after an authorized explicit request or when accepted work selects the source as evidence;
 - `eager`: schedule compilation immediately after capture.
 
+Coverage requirements are:
+
+- `required`: the observation must be processed successfully before Merl claims semantic completeness for its scope;
+- `optional`: the observation is retained evidence that may enrich accepted state later, but its uncompiled state does not create a coverage gap.
+
+Coverage requirement is based on trusted structural metadata such as source binding, source kind, actor class, explicit object references, and an authorized policy override. Merl does not read a cold payload to decide whether it is required. Optional sources may appear as cold attachments when their metadata links them to a viewed object, but they remain separate from required coverage gaps.
+
+An authorized policy action may promote an optional source to required for a recorded scope and reason. Promotion creates durable policy state and makes the source pending for coverage until processing succeeds. A sender cannot promote its own prose or otherwise force a compiler expense. `capture_only` with `required` is valid, but the affected scope remains incomplete until an authorized action compiles or excludes the source.
+
 Structured commands bypass compilation because they already carry typed semantics. Trusted provider state changes use deterministic `ProviderObservation` inputs. Merl-generated notifications and projections are marked by origin and never compile. Deterministic extractors may still process structured artifacts without a model call.
 
 `on_demand` triggers are explicit and auditable: an authorized `source compile` command, selection of the source as evidence for a semantic command, or an authorized backfill after policy changes. Reading the raw payload does not silently compile it. The first implementation will not estimate future readership or automatically spend tokens at a predicted break-even point.
 
-Sensible defaults keep human project surfaces current without compiling routine agent traffic. Human-authored Issue comments may be eager. Direct agent notes, long reports, research notes, and legacy mailbox imports default to `capture_only` or `on_demand`. Projects can change those defaults at the binding level.
+Sensible defaults keep human project surfaces current without compiling routine agent traffic. Human-authored Issue comments are normally `eager` and `required`. Direct agent notes, long reports, research notes, and legacy mailbox imports normally use `capture_only` or `on_demand` with `optional` coverage. Structured provider observations are processed deterministically and remain required. Projects can change those defaults at the binding level.
 
 A new comment rarely makes sense by itself. Phrases such as "same as the first run" or "the frame issue above" require accepted state and a small amount of conversational history. Merl records that input in an immutable `CompilationContext` rather than recompiling an entire thread or asking the compiler to guess.
 
 The context manifest contains:
 
 - triggering source-event IDs;
-- the basis project revision;
+- `interpretation_basis_revision`, the project revision causally available at the triggering source position;
 - the inclusive Merl source-observation cutoff;
 - selected object and relation revisions;
 - collection or predicate snapshots used during selection;
@@ -222,7 +237,9 @@ The context manifest contains:
 - the renderer version and exact rendered-input digest;
 - a `PayloadRef` to the rendered input when retention policy permits retention.
 
-The context builder starts with the triggering event, materialized state as it existed at the basis revision, relevant unresolved objects, and a bounded recent window ending at the observation cutoff. It may include only source observations and accepted state causally available at that position. A versioned selector may expand the set through relations without crossing the cutoff.
+The context builder starts with the triggering event, materialized state as it existed at the interpretation-basis revision, relevant unresolved objects, and a bounded recent window ending at the observation cutoff. It may include only source observations and accepted state causally available at that position. A versioned selector may expand the set through relations without crossing the cutoff.
+
+Late `on_demand` compilation preserves the source's historical meaning. If a source arrived at observation 100 when the project was at revision 72, a compilation requested at revision 500 still uses `interpretation_basis_revision=72` and `source_observation_cutoff=100`. The resulting assertions then enter a new `PolicyEvaluation` with `basis_project_revision=500`. Interpretation asks what the source meant then; policy asks what that assertion may change now. A run that deliberately uses later knowledge to reinterpret the source is `hindsight`, not ordinary on-demand compilation.
 
 Historical bootstrap processes the Issue description and each later source observation in sequence. It compiles and accepts each position before constructing the next context. Merl never imports a terminal thread snapshot, derives its final state, and then uses that state to compile earlier comments.
 
@@ -291,13 +308,13 @@ Source supersession enqueues a new compilation context at the new causal positio
 
 A `PolicyInput` is an immutable semantic proposal presented to policy. Its kinds include `ObservedAssertion`, `Command`, `ProviderObservation`, `CrossProjectReceipt`, and `AdministrativeAction`. This keeps direct user actions honest: a command-created decision does not pretend to have a source event or compilation run.
 
-A `PolicyEvaluation` decides how Merl should treat one or more policy inputs. It evaluates them together with accepted state at a recorded project revision.
+A `PolicyEvaluation` decides how Merl should treat one or more policy inputs. It evaluates them together with accepted state at `basis_project_revision`, which is independent from any compilation context's historical interpretation basis.
 
 The evaluation records:
 
 - typed input IDs and their individual dispositions
 - the policy version and configuration
-- the basis project revision
+- `basis_project_revision`
 - object, relation, collection, and predicate dependencies read during evaluation
 - the proposed write set
 - the actor or process that requested evaluation
@@ -664,7 +681,7 @@ Derived external artifacts retain their request lineage. If the origin later ing
 
 Each project has a monotonically increasing `project_revision`. Each materialized object also has an `object_revision`. The project revision orders accepted changes and drives cursors; it does not make every prior evaluation stale.
 
-A policy evaluation records its basis revision, read dependencies, and proposed write set. Read dependencies may name an object or relation revision, a collection version, or a predicate guard such as "no active decision exists for this key." Merl commits an accepted batch as follows:
+A policy evaluation records `basis_project_revision`, read dependencies, and a proposed write set. Read dependencies may name an object or relation revision, a collection version, or a predicate guard such as "no active decision exists for this key." Merl commits an accepted batch as follows:
 
 ```mermaid
 sequenceDiagram
@@ -790,15 +807,15 @@ A renderer receives accepted objects at a recorded project revision. It may expr
 
 A role view projects accepted objects into the smallest useful representation for that role. Views hide superseded objects by default but retain their references for expansion.
 
-Accepted project revision and semantic coverage answer different questions. A revision says which accepted events the view contains. `SemanticCoverage` says how much captured source Merl has interpreted for that view's relevant bindings and source kinds. It records:
+Accepted project revision and semantic coverage answer different questions. A revision says which accepted events the view contains. `SemanticCoverage` says whether every coverage-required observation for that view's scope has been processed. It records:
 
 - the source observation head;
-- the greatest contiguous compiled observation cutoff where one exists;
-- relevant observation holes and whether each is cold, pending, failed, purged, or excluded by policy;
-- counts of uncompiled `capture_only` and `on_demand` sources;
+- the greatest observation cutoff through which every required observation has processed successfully;
+- required observation holes and whether each is cold, pending, failed, purged, or excluded by policy;
+- counts of optional cold sources linked by structural metadata;
 - pending and failed compilation counts.
 
-A single watermark cannot hide holes. Coverage is scoped to the role view or query, so unrelated cold material does not add noise. A negative answer is qualified whenever relevant uncompiled or failed sources could change it: `No accepted blocker; two relevant sources remain uncompiled.` An all-eager view is current only when it has no relevant gaps through its observation head.
+A single watermark cannot hide required holes. Coverage is scoped to the role view or query, so unrelated material does not add noise. A negative answer is qualified when required sources are cold, pending, or failed: `No accepted blocker; two required sources remain uncompiled.` Optional sources never weaken the completeness claim merely because their payloads are cold. If structural metadata links them to the view, Merl reports them separately, for example `One optional cold note is attached to T42.` A view is semantically complete when all required observations through its head have processed successfully and no required work is pending or failed.
 
 Merl exposes four levels of detail:
 
@@ -924,8 +941,9 @@ The architecture depends on replay and transaction boundaries, so tests must exe
 - Property tests check monotonic revisions, idempotent ingestion and commands, and legal supersession.
 - Store tests inject failures around every step of the accepted-batch transaction.
 - Context tests reconstruct exact compiler input, enforce selection budgets and causal cutoffs, request expansion for unresolved references, and refuse silent full-history fallback.
-- Compilation-policy tests cover `capture_only`, `on_demand`, and `eager`, prove that senders cannot override binding policy, and reuse one run across recipient deliveries.
-- Coverage tests create compilation holes and failures, then verify that scoped views qualify negative answers without listing unrelated cold sources.
+- Compilation-policy tests cover every mode and coverage-requirement combination, prove that senders cannot override binding policy, and reuse one run across recipient deliveries.
+- Coverage tests create required holes, optional cold attachments, and failures, then verify that scoped views qualify negative answers only for required gaps.
+- Late-compilation tests interpret an old source against its historical revision and cutoff, then evaluate its assertions against current accepted state.
 - Compiler-protocol tests reject prose fields and over-budget responses, bound context expansion, and preserve explicit failure outcomes without partial assertions.
 - Historical tests process sources in sequence and use a fixture whose later correction would expose any future-information leak.
 - Provenance tests cover assertions, direct commands, provider observations, receipts, administrative actions, and source content made unavailable by purge.
@@ -968,7 +986,7 @@ The implementation must preserve these rules:
 - A `Project` is the unit of accepted history, revision ordering, policy, and membership.
 - Projects and sources relate many-to-many through `ProjectSourceBinding` records.
 - Source selection, capabilities, and credentials remain separate concerns.
-- Source bindings select an effective `capture_only`, `on_demand`, or `eager` compilation policy independently from ingest permission.
+- Source bindings select compilation mode and coverage requirement independently from ingest permission.
 - Exactly one authority serializes accepted mutations for a project.
 - Only the project authority creates accepted `DomainEvent` records.
 - Offline clients queue idempotent `Command` records rather than domain events.
@@ -1032,11 +1050,16 @@ The implementation must preserve these rules:
 - Protected payloads with different retention scopes remain independently erasable.
 - Purge removes retained bytes or keys, preserves a tombstone and digest, and exposes the resulting replay limitation.
 - Purge claims cover only the active store and Merl-managed copies named by retention policy.
-- Every compilation run references a bounded context manifest with exact source, state, selector, renderer, and input-digest provenance.
+- Every compilation run references a bounded context manifest with exact source, interpretation basis, observation cutoff, selector, renderer, and input-digest provenance.
+- Compilation interpretation basis and policy-evaluation basis are independent; late compilation uses causally historical context and current policy state.
 - Source capture never implies compilation, and uncompiled payloads remain outside ordinary views.
 - Accepted revision never implies semantic completeness over captured sources.
-- Views expose scoped coverage, relevant gaps, pending work, and failures whenever omitted semantics could affect the answer.
-- Negative answers are qualified when relevant semantic coverage is incomplete.
+- Compilation mode and coverage requirement are orthogonal binding-policy fields recorded at capture.
+- Required observations block semantic completeness until processed; optional observations do not.
+- Coverage requirement is selected from structural metadata and policy, never by reading a cold payload.
+- Only an authorized policy action may promote an optional source to required.
+- Views expose scoped required gaps, pending work, failures, and structurally linked optional cold sources.
+- Negative answers are qualified when required semantic coverage is incomplete.
 - Structured semantic commands and trusted provider observations bypass prose extraction.
 - Merl-generated notifications and projections are never compiled.
 - Compilation is project/source-scoped, not recipient-scoped; deliveries and later sessions reuse applicable derivations.
