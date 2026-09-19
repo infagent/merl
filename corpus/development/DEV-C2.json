@@ -1,0 +1,194 @@
+{
+  "schema": "merl.corpus-fixture/v1",
+  "id": "DEV-C2",
+  "partition": "development",
+  "origin": "controlled",
+  "source": {
+    "provider": "controlled",
+    "issue_provider_id": "controlled:DEV-C2"
+  },
+  "capture": {
+    "captured_at": "2026-09-19T00:00:00Z",
+    "capture_tool_version": "manual/v1",
+    "source_sha256": "sha256:b5dd19a30b45090505b4df6d90a0c38f7149757fefca997a93314e448762e44d",
+    "history_fidelity": "staged_exact",
+    "provider_observation_count": 3
+  },
+  "provenance": {
+    "repository_license_at_capture": "not_applicable",
+    "redistribution_review": "approved"
+  },
+  "provider_snapshot": {
+    "title": "Checksum parser investigation",
+    "state": "OPEN",
+    "labels": [],
+    "assignees": []
+  },
+  "observations": [
+    {
+      "sequence": 1,
+      "kind": "controlled",
+      "provider_id": "controlled:DEV-C2:O1",
+      "version_id": "controlled:DEV-C2:O1:v1",
+      "author": {"provider_id": "controlled:researcher", "login": "researcher"},
+      "occurred_at": "2026-02-01T09:00:00Z",
+      "created_at": "2026-02-01T09:00:00Z",
+      "body": "We suspect the parser reads the frame length twice. Capture 41 should tell us whether that causes the checksum error.",
+      "body_sha256": "sha256:fbe8b263bb29b35b23db7519611b96d9905c6a9a55ee16e18ccab18d8a0480a9"
+    },
+    {
+      "sequence": 2,
+      "kind": "controlled",
+      "provider_id": "controlled:DEV-C2:O2",
+      "version_id": "controlled:DEV-C2:O2:v1",
+      "author": {"provider_id": "controlled:researcher", "login": "researcher"},
+      "occurred_at": "2026-02-01T10:00:00Z",
+      "created_at": "2026-02-01T10:00:00Z",
+      "body": "I replayed capture 41. The checksum still fails, but the frame length is read once. That weakens the double-read hypothesis. Please repair the checksum parser after PR 229 merges.",
+      "body_sha256": "sha256:8f0adcca776828c3b46e7b5444a7c8ff93c8448b113c2728c34282f1ca8de59d"
+    },
+    {
+      "sequence": 3,
+      "kind": "controlled",
+      "provider_id": "controlled:DEV-C2:O3",
+      "version_id": "controlled:DEV-C2:O3:v1",
+      "author": {"provider_id": "controlled:project-manager", "login": "project-manager"},
+      "occurred_at": "2026-02-01T11:00:00Z",
+      "created_at": "2026-02-01T11:00:00Z",
+      "body": "Take the parser task, but start it only after PR 229 merges because that PR changes the frame reader. Leave the hypothesis change for research review.",
+      "body_sha256": "sha256:adc240370ca8f3086142410bc92b03c1e184c2eb546cb03adff6a7edf88723fe"
+    }
+  ],
+  "gold_states": [
+    {
+      "source_observation_cutoff": 1,
+      "objects": [
+        {
+          "key": "double-read-hypothesis",
+          "kind": "hypothesis",
+          "lifecycle": "active",
+          "support_status": "current",
+          "evidence": [{"observation": 1, "role": "supports"}]
+        }
+      ]
+    },
+    {
+      "source_observation_cutoff": 2,
+      "objects": [
+        {
+          "key": "double-read-hypothesis",
+          "kind": "hypothesis",
+          "lifecycle": "active",
+          "support_status": "partially_supported",
+          "evidence": [
+            {"observation": 1, "role": "supports"},
+            {"observation": 2, "role": "disputes"}
+          ]
+        },
+        {
+          "key": "checksum-still-fails",
+          "kind": "finding",
+          "lifecycle": "active",
+          "support_status": "current",
+          "evidence": [{"observation": 2, "role": "supports"}]
+        },
+        {
+          "key": "length-read-once",
+          "kind": "fact",
+          "lifecycle": "active",
+          "support_status": "current",
+          "evidence": [{"observation": 2, "role": "supports"}]
+        },
+        {
+          "key": "weaken-double-read",
+          "kind": "claim",
+          "lifecycle": "candidate",
+          "support_status": "current",
+          "evidence": [{"observation": 2, "role": "supports"}]
+        },
+        {
+          "key": "repair-checksum-parser",
+          "kind": "task",
+          "lifecycle": "active",
+          "support_status": "current",
+          "evidence": [{"observation": 2, "role": "supports"}],
+          "task_plan": {
+            "commitment": "pending",
+            "scheduling": "unscheduled",
+            "execution": "not_started",
+            "start_after": {
+              "subject": "github:example/parser/pull/229",
+              "predicate": "merged",
+              "expected": true
+            }
+          }
+        }
+      ],
+      "relations": [
+        {"from": "length-read-once", "kind": "disputes", "to": "double-read-hypothesis", "observation": 2},
+        {"from": "length-read-once", "kind": "supports", "to": "weaken-double-read", "observation": 2}
+      ]
+    },
+    {
+      "source_observation_cutoff": 3,
+      "objects": [
+        {
+          "key": "double-read-hypothesis",
+          "kind": "hypothesis",
+          "lifecycle": "active",
+          "support_status": "partially_supported",
+          "evidence": [
+            {"observation": 1, "role": "supports"},
+            {"observation": 2, "role": "disputes"}
+          ]
+        },
+        {
+          "key": "checksum-still-fails",
+          "kind": "finding",
+          "lifecycle": "active",
+          "support_status": "current",
+          "evidence": [{"observation": 2, "role": "supports"}]
+        },
+        {
+          "key": "length-read-once",
+          "kind": "fact",
+          "lifecycle": "active",
+          "support_status": "current",
+          "evidence": [{"observation": 2, "role": "supports"}]
+        },
+        {
+          "key": "weaken-double-read",
+          "kind": "claim",
+          "lifecycle": "candidate",
+          "support_status": "current",
+          "evidence": [{"observation": 2, "role": "supports"}]
+        },
+        {
+          "key": "repair-checksum-parser",
+          "kind": "task",
+          "lifecycle": "active",
+          "support_status": "current",
+          "evidence": [
+            {"observation": 2, "role": "supports"},
+            {"observation": 3, "role": "supports"}
+          ],
+          "task_plan": {
+            "commitment": "accepted",
+            "scheduling": "deferred",
+            "execution": "not_started",
+            "deferral_reason": "PR 229 changes the frame reader",
+            "start_after": {
+              "subject": "github:example/parser/pull/229",
+              "predicate": "merged",
+              "expected": true
+            }
+          }
+        }
+      ],
+      "relations": [
+        {"from": "length-read-once", "kind": "disputes", "to": "double-read-hypothesis", "observation": 2},
+        {"from": "length-read-once", "kind": "supports", "to": "weaken-double-read", "observation": 2}
+      ]
+    }
+  ]
+}

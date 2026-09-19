@@ -240,7 +240,7 @@ pub struct ContentEdit {
     pub deleted_at: Option<String>,
 }
 
-/// Expected accepted state after a source observation.
+/// Expected state and unresolved candidates after a source observation.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GoldState {
     /// Highest observation visible at this point.
@@ -265,6 +265,80 @@ pub struct GoldObject {
     pub support_status: SupportStatus,
     /// Evidence with explicit role rather than an undifferentiated support list.
     pub evidence: Vec<GoldEvidence>,
+    /// Task planning facets, present only for a task object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_plan: Option<GoldTaskPlan>,
+}
+
+/// A Task's commitment, schedule, and execution at one cutoff.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GoldTaskPlan {
+    /// Whether the work owner accepted the request.
+    pub commitment: TaskCommitment,
+    /// When the owner intends to revisit or start it.
+    pub scheduling: TaskScheduling,
+    /// How far work has progressed.
+    pub execution: TaskExecution,
+    /// Why the owner deferred the task, when applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deferral_reason: Option<String>,
+    /// Earliest provider or project state that permits the task to start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_after: Option<GoldPredicate>,
+    /// Date when the owner will reconsider a deferred task.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_at: Option<String>,
+}
+
+/// Commitment to a known Task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskCommitment {
+    /// The owner has not accepted or declined the request.
+    Pending,
+    /// The owner has taken responsibility for the work.
+    Accepted,
+    /// The owner will not take the work.
+    Declined,
+}
+
+/// Scheduling of a known Task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskScheduling {
+    /// The owner has not placed the work on a schedule.
+    Unscheduled,
+    /// The owner will reconsider the work when its trigger arrives.
+    Deferred,
+    /// The owner has set a time to perform the work.
+    Scheduled,
+}
+
+/// Execution of a known Task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskExecution {
+    /// Nobody has started the work.
+    NotStarted,
+    /// Work is under way.
+    InProgress,
+    /// An accepted constraint prevents progress.
+    Blocked,
+    /// The work is done.
+    Completed,
+    /// The owner stopped the work.
+    Cancelled,
+}
+
+/// State predicate that must hold before a Task can start.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GoldPredicate {
+    /// Fully qualified provider or project object reference.
+    pub subject: String,
+    /// Field or state to check on that object.
+    pub predicate: String,
+    /// Truth value required before work may start.
+    pub expected: bool,
 }
 
 /// Corpus state at a causal cutoff, including type-specific states such as open.
@@ -275,7 +349,7 @@ pub enum GoldObjectState {
     Candidate,
     /// Unresolved question or work item.
     Open,
-    /// Accepted current object.
+    /// Current object; a Task may still await owner commitment.
     Active,
     /// Answered question or completed work item.
     Resolved,
@@ -403,6 +477,8 @@ pub enum ValidationError {
     DuplicateGoldCutoff(u64),
     /// One gold state defines the same local object twice.
     DuplicateGoldObject(String),
+    /// A task's gold planning facets are absent or inconsistent.
+    InvalidTaskPlan(String),
     /// A gold object cites an observation that does not exist.
     UnknownSupport {
         /// Fixture-local object name.
@@ -502,6 +578,9 @@ impl fmt::Display for ValidationError {
             }
             Self::DuplicateGoldObject(key) => {
                 write!(formatter, "duplicate gold object {key}")
+            }
+            Self::InvalidTaskPlan(key) => {
+                write!(formatter, "invalid gold task plan for {key}")
             }
             Self::UnknownSupport {
                 object,
@@ -753,6 +832,28 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
         for object in &state.objects {
             if !keys.insert(object.key.as_str()) {
                 return Err(ValidationError::DuplicateGoldObject(object.key.clone()));
+            }
+            if (object.kind == "task") != object.task_plan.is_some() {
+                return Err(ValidationError::InvalidTaskPlan(object.key.clone()));
+            }
+            if let Some(plan) = &object.task_plan {
+                let has_reason = plan
+                    .deferral_reason
+                    .as_deref()
+                    .is_some_and(|reason| !reason.trim().is_empty());
+                let has_condition = plan.start_after.as_ref().is_some_and(|condition| {
+                    !condition.subject.trim().is_empty() && !condition.predicate.trim().is_empty()
+                });
+                let has_review = plan.review_at.as_deref().is_some();
+                if let Some(review_at) = &plan.review_at {
+                    parse_timestamp(review_at)?;
+                }
+                if plan.start_after.is_some() && !has_condition
+                    || plan.scheduling == TaskScheduling::Deferred
+                        && (!has_reason || !(has_condition || has_review))
+                {
+                    return Err(ValidationError::InvalidTaskPlan(object.key.clone()));
+                }
             }
             for support_observation in object.evidence.iter().map(|item| &item.observation) {
                 if *support_observation == 0 || *support_observation > last_observation {

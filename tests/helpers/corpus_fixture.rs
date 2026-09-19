@@ -1,6 +1,6 @@
 use corpus::fixture::{
-    EvidenceRole, Fixture, GoldObjectState, RelationKind, SupportStatus, ValidationError,
-    source_digest, validate,
+    EvidenceRole, Fixture, GoldObjectState, RelationKind, SupportStatus, TaskCommitment,
+    TaskExecution, TaskScheduling, ValidationError, source_digest, validate,
 };
 
 pub struct CorpusFixture {
@@ -41,6 +41,117 @@ impl CorpusFixture {
 
     pub fn expects_superseded(self, object: &str) -> Self {
         self.expects_state(object, GoldObjectState::Superseded)
+    }
+
+    pub fn expects_candidate(self, object: &str) -> Self {
+        self.expects_state(object, GoldObjectState::Candidate)
+    }
+
+    pub fn expects_current_support(self, object: &str) -> Self {
+        let gold = self.object(object);
+        assert_eq!(gold.support_status, SupportStatus::Current);
+        self
+    }
+
+    pub fn expects_revalidation_pending(self, object: &str) -> Self {
+        let gold = self.object(object);
+        assert_eq!(gold.support_status, SupportStatus::RevalidationPending);
+        self
+    }
+
+    pub fn expects_evidence_changed_by(self, object: &str, observation: u64) -> Self {
+        let gold = self.object(object);
+        assert!(gold.evidence.iter().any(|item| {
+            item.observation == observation && matches!(item.role, EvidenceRole::EvidenceChanged)
+        }));
+        self
+    }
+
+    pub fn expects_source_supersession(self, newer: u64, older: u64) -> Self {
+        let observation = self
+            .fixture
+            .observations
+            .iter()
+            .find(|item| item.sequence == newer)
+            .expect("newer observation should exist");
+        let prior = self
+            .fixture
+            .observations
+            .iter()
+            .find(|item| item.sequence == older)
+            .expect("older observation should exist");
+        assert_eq!(observation.supersedes, Some(older));
+        assert_eq!(observation.provider_id, prior.provider_id);
+        self
+    }
+
+    pub fn expects_task_awaiting_acceptance(self, task: &str) -> Self {
+        let plan = self.object(task).task_plan.as_ref().unwrap();
+        assert_eq!(plan.commitment, TaskCommitment::Pending);
+        assert_eq!(plan.scheduling, TaskScheduling::Unscheduled);
+        assert_eq!(plan.execution, TaskExecution::NotStarted);
+        self
+    }
+
+    pub fn expects_task_start_after_pr_merge(self, task: &str, pull_request: &str) -> Self {
+        let predicate = self
+            .object(task)
+            .task_plan
+            .as_ref()
+            .unwrap()
+            .start_after
+            .as_ref()
+            .unwrap();
+        assert_eq!(predicate.subject, pull_request);
+        assert_eq!(predicate.predicate, "merged");
+        assert!(predicate.expected);
+        self
+    }
+
+    pub fn expects_accepted_task_deferred_until_pr_merge(
+        self,
+        task: &str,
+        pull_request: &str,
+    ) -> Self {
+        let plan = self.object(task).task_plan.as_ref().unwrap();
+        assert_eq!(plan.commitment, TaskCommitment::Accepted);
+        assert_eq!(plan.scheduling, TaskScheduling::Deferred);
+        assert_eq!(plan.execution, TaskExecution::NotStarted);
+        assert!(
+            plan.deferral_reason
+                .as_deref()
+                .is_some_and(|reason| !reason.is_empty())
+        );
+        self.expects_task_start_after_pr_merge(task, pull_request)
+    }
+
+    pub fn then_rejects_deferred_task_without_reason_or_condition(self, task: &str) {
+        let cutoff = self.cutoff.expect("a cutoff must be selected first");
+        for field in ["deferral_reason", "start_after"] {
+            let mut changed = self.fixture.clone();
+            let state = changed
+                .gold_states
+                .iter_mut()
+                .find(|state| state.source_observation_cutoff == cutoff)
+                .unwrap();
+            let plan = state
+                .objects
+                .iter_mut()
+                .find(|object| object.key == task)
+                .unwrap()
+                .task_plan
+                .as_mut()
+                .unwrap();
+            if field == "deferral_reason" {
+                plan.deferral_reason = None;
+            } else {
+                plan.start_after = None;
+            }
+            assert_eq!(
+                validate(&changed),
+                Err(ValidationError::InvalidTaskPlan(task.to_owned()))
+            );
+        }
     }
 
     pub fn expects_partial_support(self, object: &str) -> Self {
