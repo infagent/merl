@@ -1,10 +1,11 @@
 //! Frozen evaluation histories and their temporal gold-state labels.
 
-use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::fmt::{self, Write as _};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 /// Schema understood by this version of the corpus tooling.
 pub const FIXTURE_SCHEMA: &str = "merl.corpus-fixture/v1";
@@ -30,9 +31,6 @@ pub struct Fixture {
     pub provider_snapshot: ProviderSnapshot,
     /// Ordered source observations.
     pub observations: Vec<Observation>,
-    /// Provider transitions retained for questions that depend on them.
-    #[serde(default)]
-    pub provider_events: Vec<ProviderEvent>,
     /// Expected state at selected causal cutoffs.
     #[serde(default)]
     pub gold_states: Vec<GoldState>,
@@ -136,7 +134,7 @@ pub enum RedistributionReview {
 /// Provider-owned Issue facts at capture time.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProviderSnapshot {
-    /// Current Issue title.
+    /// Terminal Issue title at capture time, not a historical fact at every cutoff.
     pub title: String,
     /// Provider state, such as `OPEN` or `CLOSED`.
     pub state: String,
@@ -148,50 +146,55 @@ pub struct ProviderSnapshot {
     pub labels: Vec<String>,
     /// Current provider assignees.
     #[serde(default)]
-    pub assignees: Vec<String>,
+    pub assignees: Vec<ActorRef>,
     /// Current provider milestone title.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub milestone: Option<String>,
 }
 
-/// One provider transition retained outside prose compilation.
+/// Rename-stable provider actor identity and its display login at capture.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ProviderEvent {
-    /// Stable provider event ID.
-    pub provider_id: String,
-    /// Provider event kind.
-    pub kind: String,
-    /// Time the transition occurred.
-    pub occurred_at: String,
-    /// Actor recorded by the provider.
+pub struct ActorRef {
+    /// Provider node ID, when the actor also implements GitHub's Node interface.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub actor: Option<String>,
-    /// Provider-specific structural values needed to interpret the event.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub fields: BTreeMap<String, serde_json::Value>,
+    pub provider_id: Option<String>,
+    /// Login shown to users at capture time.
+    pub login: String,
 }
 
-/// One source observation in provider order.
+/// One immutable source version in causal order.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Observation {
     /// One-based order assigned when the fixture was captured.
     pub sequence: u64,
     /// Kind of provider content.
     pub kind: ObservationKind,
-    /// Provider-stable source identifier.
+    /// Provider-stable external entity identifier, shared by its versions.
     pub provider_id: String,
-    /// Author login recorded by the provider.
+    /// Provider-stable ID of this version or edit event.
+    pub version_id: String,
+    /// Earlier observation sequence for the same external entity.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub author: Option<String>,
-    /// Provider creation time.
+    pub supersedes: Option<u64>,
+    /// Author recorded by the provider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<ActorRef>,
+    /// Time this version became visible according to the provider.
+    pub occurred_at: String,
+    /// Original provider creation time for the external entity.
     pub created_at: String,
-    /// Provider update time.
-    pub updated_at: String,
-    /// Current source text at capture.
-    pub body: String,
-    /// Provider edit records available at capture.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub edits: Vec<ContentEdit>,
+    /// Exact source text, absent when the provider cannot reconstruct it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// Hash of the exact captured version, absent with the body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_sha256: Option<String>,
+    /// Why exact bytes are absent, if they are.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missing_body_reason: Option<MissingBodyReason>,
+    /// Edit metadata, when this observation represents an edit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edit: Option<ContentEdit>,
 }
 
 /// Kind of source observation.
@@ -206,6 +209,16 @@ pub enum ObservationKind {
     Controlled,
 }
 
+/// Reason a historical source version cannot be replayed exactly.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissingBodyReason {
+    /// Only an edit diff, not the complete old body, was available.
+    PriorVersionUnavailable,
+    /// The provider removed this version's retained content.
+    DeletedByProvider,
+}
+
 /// Provider metadata for an edit to user-authored content.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ContentEdit {
@@ -213,7 +226,7 @@ pub struct ContentEdit {
     pub provider_id: String,
     /// Actor who made the edit when the provider exposes it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub editor: Option<String>,
+    pub editor: Option<ActorRef>,
     /// Time of the edit.
     pub edited_at: String,
     /// Provider diff. A diff does not by itself prove the exact prior body.
@@ -231,9 +244,12 @@ pub struct GoldState {
     pub source_observation_cutoff: u64,
     /// Expected semantic objects.
     pub objects: Vec<GoldObject>,
+    /// Expected typed relationships between objects at this cutoff.
+    #[serde(default)]
+    pub relations: Vec<GoldRelation>,
 }
 
-/// One expected semantic object and the observations that support it.
+/// One expected semantic object, its lifecycle, and evidence health.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GoldObject {
     /// Stable fixture-local name.
@@ -241,9 +257,93 @@ pub struct GoldObject {
     /// Domain object kind.
     pub kind: String,
     /// Expected lifecycle state.
-    pub state: String,
-    /// Observations used to justify this expectation.
-    pub support_observations: Vec<u64>,
+    pub lifecycle: ObjectLifecycle,
+    /// Whether the object's original evidence is still sound.
+    pub support_status: SupportStatus,
+    /// Evidence with explicit role rather than an undifferentiated support list.
+    pub evidence: Vec<GoldEvidence>,
+}
+
+/// Expected object lifecycle at a causal cutoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectLifecycle {
+    /// Proposed but not yet accepted.
+    Candidate,
+    /// Unresolved question or work item.
+    Open,
+    /// Accepted current object.
+    Active,
+    /// Answered question or completed work item.
+    Resolved,
+    /// Replaced by a later object.
+    Superseded,
+    /// Withdrawn as incorrect.
+    Invalidated,
+}
+
+/// Health of the evidence supporting an object, independent of its lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SupportStatus {
+    /// Evidence still supports the object.
+    Current,
+    /// An underlying source changed but has not yet been reconsidered.
+    EvidenceChanged,
+    /// Reconsideration is queued or running.
+    RevalidationPending,
+    /// Some, but not all, evidence remains supportive.
+    PartiallySupported,
+    /// No retained evidence currently supports the object.
+    Unsupported,
+}
+
+/// How an observation bears on a gold object.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GoldEvidence {
+    /// Source observation sequence.
+    pub observation: u64,
+    /// Supports, disputes, or motivates reconsideration of the object.
+    pub role: EvidenceRole,
+}
+
+/// Typed evidence role.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceRole {
+    /// Supports the object.
+    Supports,
+    /// Disputes the object.
+    Disputes,
+    /// Changes its source evidence without yet changing its lifecycle.
+    EvidenceChanged,
+}
+
+/// Expected relation between two gold objects.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GoldRelation {
+    /// Fixture-local source object key.
+    pub from: String,
+    /// Typed semantic relation.
+    pub kind: RelationKind,
+    /// Fixture-local destination object key.
+    pub to: String,
+    /// Source observation establishing the relation.
+    pub observation: u64,
+}
+
+/// Relations needed by the first Issue fixtures.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationKind {
+    /// A new object replaces an earlier object.
+    Supersedes,
+    /// An object supports another.
+    Supports,
+    /// An object disputes another.
+    Disputes,
+    /// A decision or fact answers a question.
+    Answers,
 }
 
 /// A fixture violates a corpus invariant.
@@ -265,6 +365,16 @@ pub enum ValidationError {
         /// Count found in the fixture.
         actual: usize,
     },
+    /// A version does not point to the preceding version of its entity.
+    InvalidVersionLineage(u64),
+    /// Exact bytes and their digest must appear together; gaps need a reason.
+    InvalidBodyCapture(u64),
+    /// A provenance timestamp is not RFC 3339.
+    InvalidTimestamp(String),
+    /// A source version occurs before the observation preceding it.
+    CausalOrder(u64),
+    /// Exact historical replay crosses a missing source version.
+    MissingHistoricalBody(u64),
     /// Capture digest disagrees with the normalized observations.
     SourceDigest {
         /// Digest declared by capture metadata.
@@ -290,6 +400,8 @@ pub enum ValidationError {
         /// Later observation cited by the object.
         support_observation: u64,
     },
+    /// A relation names a gold object absent at its cutoff.
+    UnknownRelationObject(String),
 }
 
 impl fmt::Display for ValidationError {
@@ -303,6 +415,33 @@ impl fmt::Display for ValidationError {
                 formatter,
                 "capture declares {declared} observations, fixture contains {actual}"
             ),
+            Self::InvalidVersionLineage(sequence) => {
+                write!(
+                    formatter,
+                    "invalid source-version lineage at observation {sequence}"
+                )
+            }
+            Self::InvalidBodyCapture(sequence) => {
+                write!(
+                    formatter,
+                    "inconsistent body capture at observation {sequence}"
+                )
+            }
+            Self::InvalidTimestamp(value) => {
+                write!(formatter, "invalid RFC 3339 timestamp {value}")
+            }
+            Self::CausalOrder(sequence) => {
+                write!(
+                    formatter,
+                    "source observation {sequence} is out of causal order"
+                )
+            }
+            Self::MissingHistoricalBody(sequence) => {
+                write!(
+                    formatter,
+                    "exact replay crosses missing body at observation {sequence}"
+                )
+            }
             Self::SourceDigest { declared, actual } => {
                 write!(
                     formatter,
@@ -327,6 +466,9 @@ impl fmt::Display for ValidationError {
                 formatter,
                 "gold object {object} at cutoff {cutoff} cites later observation {support_observation}"
             ),
+            Self::UnknownRelationObject(key) => {
+                write!(formatter, "gold relation names absent object {key}")
+            }
         }
     }
 }
@@ -340,12 +482,8 @@ impl std::error::Error for ValidationError {}
 /// Panics only if serializing the strongly typed observations fails, which
 /// would indicate a programming error in their `Serialize` implementation.
 #[must_use]
-pub fn source_digest(
-    provider_snapshot: &ProviderSnapshot,
-    observations: &[Observation],
-    provider_events: &[ProviderEvent],
-) -> String {
-    let bytes = serde_json::to_vec(&(provider_snapshot, observations, provider_events))
+pub fn source_digest(provider_snapshot: &ProviderSnapshot, observations: &[Observation]) -> String {
+    let bytes = serde_json::to_vec(&(provider_snapshot, observations))
         .expect("serializing corpus source material should be infallible");
     let digest = Sha256::digest(bytes);
     let mut encoded = String::with_capacity(71);
@@ -356,23 +494,85 @@ pub fn source_digest(
     encoded
 }
 
+/// Hashes exact source bytes without incorporating a mutable display field.
+#[must_use]
+pub fn body_digest(body: &str) -> String {
+    let digest = Sha256::digest(body.as_bytes());
+    let mut encoded = String::with_capacity(71);
+    encoded.push_str("sha256:");
+    for byte in digest {
+        write!(encoded, "{byte:02x}").expect("writing to a string should be infallible");
+    }
+    encoded
+}
+
+/// Checks whether every source version through a cutoff has exact bytes.
+///
+/// # Errors
+///
+/// Returns the first missing version. Capture gaps cannot be replayed as if
+/// the terminal body had been available at an earlier cutoff.
+pub fn require_exact_history(fixture: &Fixture, cutoff: u64) -> Result<(), ValidationError> {
+    for observation in fixture
+        .observations
+        .iter()
+        .filter(|item| item.sequence <= cutoff)
+    {
+        if observation.body.is_none() {
+            return Err(ValidationError::MissingHistoricalBody(observation.sequence));
+        }
+    }
+    Ok(())
+}
+
 /// Checks the integrity and temporal invariants required by a fixture.
 ///
 /// # Errors
 ///
 /// Returns a [`ValidationError`] when capture metadata is inconsistent or a
 /// gold-state label uses missing or future evidence.
+#[expect(
+    clippy::too_many_lines,
+    reason = "fixture integrity is checked as one public boundary"
+)]
 pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
     if fixture.schema != FIXTURE_SCHEMA {
         return Err(ValidationError::UnsupportedSchema(fixture.schema.clone()));
     }
 
+    parse_timestamp(&fixture.capture.captured_at)?;
+    let mut last_time = None;
     for (expected, observation) in (1_u64..).zip(&fixture.observations) {
         if observation.sequence != expected {
             return Err(ValidationError::ObservationSequence {
                 expected,
                 actual: observation.sequence,
             });
+        }
+        let body_is_exact = observation.body.is_some();
+        if body_is_exact != observation.body_sha256.is_some()
+            || body_is_exact == observation.missing_body_reason.is_some()
+            || observation
+                .body
+                .as_ref()
+                .zip(observation.body_sha256.as_ref())
+                .is_some_and(|(body, digest)| body_digest(body) != *digest)
+        {
+            return Err(ValidationError::InvalidBodyCapture(observation.sequence));
+        }
+        let occurred_at = parse_timestamp(&observation.occurred_at)?;
+        parse_timestamp(&observation.created_at)?;
+        if last_time.is_some_and(|time| occurred_at < time) {
+            return Err(ValidationError::CausalOrder(observation.sequence));
+        }
+        last_time = Some(occurred_at);
+    }
+    let mut latest_by_entity = std::collections::HashMap::new();
+    for observation in &fixture.observations {
+        if latest_by_entity.insert(&observation.provider_id, observation.sequence)
+            != observation.supersedes
+        {
+            return Err(ValidationError::InvalidVersionLineage(observation.sequence));
         }
     }
 
@@ -383,11 +583,7 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
         });
     }
 
-    let actual_digest = source_digest(
-        &fixture.provider_snapshot,
-        &fixture.observations,
-        &fixture.provider_events,
-    );
+    let actual_digest = source_digest(&fixture.provider_snapshot, &fixture.observations);
     if fixture.capture.source_sha256 != actual_digest {
         return Err(ValidationError::SourceDigest {
             declared: fixture.capture.source_sha256.clone(),
@@ -406,7 +602,7 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
         }
 
         for object in &state.objects {
-            for support_observation in &object.support_observations {
+            for support_observation in object.evidence.iter().map(|item| &item.observation) {
                 if *support_observation == 0 || *support_observation > last_observation {
                     return Err(ValidationError::UnknownSupport {
                         object: object.key.clone(),
@@ -422,7 +618,37 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
                 }
             }
         }
+        let keys: HashSet<_> = state
+            .objects
+            .iter()
+            .map(|object| object.key.as_str())
+            .collect();
+        for relation in &state.relations {
+            for key in [&relation.from, &relation.to] {
+                if !keys.contains(key.as_str()) {
+                    return Err(ValidationError::UnknownRelationObject(key.clone()));
+                }
+            }
+            if relation.observation == 0 || relation.observation > last_observation {
+                return Err(ValidationError::UnknownSupport {
+                    object: relation.from.clone(),
+                    support_observation: relation.observation,
+                });
+            }
+            if relation.observation > state.source_observation_cutoff {
+                return Err(ValidationError::FutureLeakage {
+                    object: relation.from.clone(),
+                    cutoff: state.source_observation_cutoff,
+                    support_observation: relation.observation,
+                });
+            }
+        }
     }
 
     Ok(())
+}
+
+fn parse_timestamp(value: &str) -> Result<OffsetDateTime, ValidationError> {
+    OffsetDateTime::parse(value, &Rfc3339)
+        .map_err(|_| ValidationError::InvalidTimestamp(value.to_owned()))
 }

@@ -1,0 +1,70 @@
+[
+  {
+    "data": {
+      "repository": {
+        "id": "repo-1",
+        "nameWithOwner": "example/project",
+        "licenseInfo": {"spdxId": "MIT"},
+        "issue": {
+          "id": "issue-1",
+          "number": 17,
+          "title": "Capture history",
+          "state": "OPEN",
+          "closedAt": null,
+          "labels": {"nodes": [{"name": "research"}]},
+          "assignees": {"nodes": [{"id": "user-2", "login": "maintainer"}]},
+          "milestone": null,
+          "url": "https://github.com/example/project/issues/17",
+          "author": {"id": "user-1", "login": "author"},
+          "body": "Use variable gain.",
+          "createdAt": "2026-01-01T09:00:00Z",
+          "updatedAt": "2026-01-01T11:00:00Z",
+          "lastEditedAt": "2026-01-01T11:00:00Z",
+          "userContentEdits": {"nodes": [
+            {"id": "edit-1", "editedAt": "2026-01-01T11:00:00Z", "editor": {"id": "user-2", "login": "maintainer"}, "diff": "@@ -1 +1 @@", "deletedAt": null}
+          ], "pageInfo": {"hasNextPage": false}},
+          "comments": {
+            "nodes": [
+              {"id": "comment-1", "author": {"id": "user-3", "login": "reviewer"}, "body": "What gain?", "createdAt": "2026-01-01T10:00:00Z", "updatedAt": "2026-01-01T10:00:00Z", "lastEditedAt": null, "userContentEdits": {"nodes": [], "pageInfo": {"hasNextPage": false}}}
+            ],
+            "pageInfo": {"hasNextPage": true, "endCursor": "cursor-1"}
+          }
+        }
+      }
+    }
+  },
+  {
+    "data": {
+      "repository": {
+        "id": "repo-1",
+        "nameWithOwner": "example/project",
+        "licenseInfo": {"spdxId": "MIT"},
+        "issue": {
+          "id": "issue-1",
+          "number": 17,
+          "title": "Capture history",
+          "state": "OPEN",
+          "closedAt": null,
+          "labels": {"nodes": [{"name": "research"}]},
+          "assignees": {"nodes": [{"id": "user-2", "login": "maintainer"}]},
+          "milestone": null,
+          "url": "https://github.com/example/project/issues/17",
+          "author": {"id": "user-1", "login": "author"},
+          "body": "Use variable gain.",
+          "createdAt": "2026-01-01T09:00:00Z",
+          "updatedAt": "2026-01-01T11:00:00Z",
+          "lastEditedAt": "2026-01-01T11:00:00Z",
+          "userContentEdits": {"nodes": [
+            {"id": "edit-1", "editedAt": "2026-01-01T11:00:00Z", "editor": {"id": "user-2", "login": "maintainer"}, "diff": "@@ -1 +1 @@", "deletedAt": null}
+          ], "pageInfo": {"hasNextPage": false}},
+          "comments": {
+            "nodes": [
+              {"id": "comment-2", "author": {"id": "user-3", "login": "reviewer"}, "body": "Understood.", "createdAt": "2026-01-01T12:00:00Z", "updatedAt": "2026-01-01T12:00:00Z", "lastEditedAt": null, "userContentEdits": {"nodes": [], "pageInfo": {"hasNextPage": false}}}
+            ],
+            "pageInfo": {"hasNextPage": false, "endCursor": "cursor-2"}
+          }
+        }
+      }
+    }
+  }
+]

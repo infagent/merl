@@ -10,7 +10,7 @@
   "capture": {
     "captured_at": "2026-09-18T00:00:00Z",
     "capture_tool_version": "manual/v1",
-    "source_sha256": "sha256:c0fdeb70593522cb51596e196ad3c0f59d180ee288a7a977b4797891a510a44f",
+    "source_sha256": "sha256:e0b966c8c1a7148915ba213bd68f12e691a8fc1281fca2e50898d9063faa0e14",
     "history_fidelity": "staged_exact",
     "provider_observation_count": 4
   },
@@ -29,37 +29,45 @@
       "sequence": 1,
       "kind": "controlled",
       "provider_id": "controlled:DEV-C1:O1",
-      "author": "fixture-curator",
+      "version_id": "controlled:DEV-C1:O1:v1",
+      "author": {"provider_id": "controlled:curator", "login": "fixture-curator"},
+      "occurred_at": "2026-01-01T09:00:00Z",
       "created_at": "2026-01-01T09:00:00Z",
-      "updated_at": "2026-01-01T09:00:00Z",
-      "body": "Baseline capture procedure is not final. Open question: should receiver gain be fixed or swept?"
+      "body": "Baseline capture procedure is not final. Open question: should receiver gain be fixed or swept?",
+      "body_sha256": "sha256:9b604ba35daf74ad682d32feec15acd5d748eb304026bc6986de2e653a4316d7"
     },
     {
       "sequence": 2,
       "kind": "controlled",
       "provider_id": "controlled:DEV-C1:O2",
-      "author": "fixture-curator",
+      "version_id": "controlled:DEV-C1:O2:v1",
+      "author": {"provider_id": "controlled:curator", "login": "fixture-curator"},
+      "occurred_at": "2026-01-01T10:00:00Z",
       "created_at": "2026-01-01T10:00:00Z",
-      "updated_at": "2026-01-01T10:00:00Z",
-      "body": "For baseline run A, keep receive gain fixed at 20 dB so the noise-floor comparison is stable. Leave the LO unchanged too."
+      "body": "For baseline run A, keep receive gain fixed at 20 dB so the noise-floor comparison is stable. Leave the LO unchanged too.",
+      "body_sha256": "sha256:33c97bf821c1e1ce7f03a9dfef0549039324de9b18b19d8bcb92ee4e9bd3430c"
     },
     {
       "sequence": 3,
       "kind": "controlled",
       "provider_id": "controlled:DEV-C1:O3",
-      "author": "fixture-curator",
+      "version_id": "controlled:DEV-C1:O3:v1",
+      "author": {"provider_id": "controlled:curator", "login": "fixture-curator"},
+      "occurred_at": "2026-01-01T11:00:00Z",
       "created_at": "2026-01-01T11:00:00Z",
-      "updated_at": "2026-01-01T11:00:00Z",
-      "body": "The runner now assumes fixed gain. Do we also want the same settings for run B?"
+      "body": "The runner now assumes fixed gain. Do we also want the same settings for run B?",
+      "body_sha256": "sha256:0e512b540e671330d13ec1780faf2b92ee0a24447e1d391ccc800dd6e861eb48"
     },
     {
       "sequence": 4,
       "kind": "controlled",
       "provider_id": "controlled:DEV-C1:O4",
-      "author": "fixture-curator",
+      "version_id": "controlled:DEV-C1:O4:v1",
+      "author": {"provider_id": "controlled:curator", "login": "fixture-curator"},
+      "occurred_at": "2026-01-01T12:00:00Z",
       "created_at": "2026-01-01T12:00:00Z",
-      "updated_at": "2026-01-01T12:00:00Z",
-      "body": "Correction after checking clipping: do not keep gain fixed. Sweep 10, 20, and 30 dB for the baseline, but keep the LO fixed."
+      "body": "Correction after checking clipping: do not keep gain fixed. Sweep 10, 20, and 30 dB for the baseline, but keep the LO fixed.",
+      "body_sha256": "sha256:9be1622131f2617487869bb2a6d3a9ff40a5930b9aedce60f400cc88aa6804c3"
     }
   ],
   "gold_states": [
@@ -69,8 +77,9 @@
         {
           "key": "gain-strategy",
           "kind": "question",
-          "state": "open",
-          "support_observations": [1]
+          "lifecycle": "open",
+          "support_status": "current",
+          "evidence": [{"observation": 1, "role": "supports"}]
         }
       ]
     },
@@ -80,20 +89,23 @@
         {
           "key": "gain-fixed-20db",
           "kind": "decision",
-          "state": "active",
-          "support_observations": [2, 3]
+          "lifecycle": "active",
+          "support_status": "current",
+          "evidence": [{"observation": 2, "role": "supports"}, {"observation": 3, "role": "supports"}]
         },
         {
           "key": "lo-unchanged",
           "kind": "decision",
-          "state": "active",
-          "support_observations": [2]
+          "lifecycle": "active",
+          "support_status": "current",
+          "evidence": [{"observation": 2, "role": "supports"}]
         },
         {
           "key": "run-b-settings",
           "kind": "question",
-          "state": "open",
-          "support_observations": [3]
+          "lifecycle": "open",
+          "support_status": "current",
+          "evidence": [{"observation": 3, "role": "supports"}]
         }
       ]
     },
@@ -103,27 +115,34 @@
         {
           "key": "gain-fixed-20db",
           "kind": "decision",
-          "state": "superseded",
-          "support_observations": [2, 4]
+          "lifecycle": "superseded",
+          "support_status": "partially_supported",
+          "evidence": [{"observation": 2, "role": "supports"}, {"observation": 4, "role": "disputes"}]
         },
         {
           "key": "gain-sweep-10-20-30db",
           "kind": "decision",
-          "state": "active",
-          "support_observations": [4]
+          "lifecycle": "active",
+          "support_status": "current",
+          "evidence": [{"observation": 4, "role": "supports"}]
         },
         {
           "key": "lo-unchanged",
           "kind": "decision",
-          "state": "active",
-          "support_observations": [2, 4]
+          "lifecycle": "active",
+          "support_status": "current",
+          "evidence": [{"observation": 2, "role": "supports"}, {"observation": 4, "role": "supports"}]
         },
         {
           "key": "run-b-settings",
           "kind": "question",
-          "state": "open",
-          "support_observations": [3]
+          "lifecycle": "open",
+          "support_status": "current",
+          "evidence": [{"observation": 3, "role": "supports"}]
         }
+      ],
+      "relations": [
+        {"from": "gain-sweep-10-20-30db", "kind": "supersedes", "to": "gain-fixed-20db", "observation": 4}
       ]
     }
   ]

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/merl-corpus"]
+members = ["crates/corpus"]
 
 [workspace.package]
 edition = "2024"
@@ -12,6 +12,7 @@ repository = "https://github.com/infagent/merl"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
+time = { version = "0.3.55", default-features = false, features = ["parsing"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -31,7 +32,7 @@ repository = "https://github.com/infagent/merl"
 publish = false
 
 [dev-dependencies]
-merl-corpus = { path = "crates/merl-corpus" }
+corpus = { path = "crates/corpus" }
 serde_json.workspace = true
 
 [lints]

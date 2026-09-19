@@ -1,4 +1,6 @@
-use merl_corpus::corpus::{Fixture, ValidationError, validate};
+use corpus::fixture::{
+    EvidenceRole, Fixture, ObjectLifecycle, RelationKind, SupportStatus, ValidationError, validate,
+};
 
 pub struct CorpusFixture {
     fixture: Fixture,
@@ -33,14 +35,58 @@ impl CorpusFixture {
     }
 
     pub fn expects_active(self, object: &str) -> Self {
-        self.expects_state(object, "active")
+        self.expects_state(object, ObjectLifecycle::Active)
     }
 
     pub fn expects_superseded(self, object: &str) -> Self {
-        self.expects_state(object, "superseded")
+        self.expects_state(object, ObjectLifecycle::Superseded)
     }
 
-    fn expects_state(self, object: &str, expected: &str) -> Self {
+    pub fn expects_partial_support(self, object: &str) -> Self {
+        let gold = self.object(object);
+        assert_eq!(gold.support_status, SupportStatus::PartiallySupported);
+        self
+    }
+
+    pub fn expects_disputed_by(self, object: &str, observation: u64) -> Self {
+        let gold = self.object(object);
+        assert!(gold.evidence.iter().any(|item| {
+            item.observation == observation && matches!(item.role, EvidenceRole::Disputes)
+        }));
+        self
+    }
+
+    pub fn expects_supersedes(self, newer: &str, older: &str, observation: u64) -> Self {
+        let cutoff = self.cutoff.expect("a cutoff must be selected first");
+        let state = self
+            .fixture
+            .gold_states
+            .iter()
+            .find(|state| state.source_observation_cutoff == cutoff)
+            .unwrap();
+        assert!(state.relations.iter().any(|relation| {
+            relation.from == newer
+                && relation.to == older
+                && relation.observation == observation
+                && matches!(relation.kind, RelationKind::Supersedes)
+        }));
+        self
+    }
+
+    fn object(&self, key: &str) -> &corpus::fixture::GoldObject {
+        let cutoff = self.cutoff.expect("a cutoff must be selected first");
+        self.fixture
+            .gold_states
+            .iter()
+            .find(|state| state.source_observation_cutoff == cutoff)
+            .unwrap()
+            .objects
+            .iter()
+            .find(|item| item.key == key)
+            .unwrap()
+    }
+
+    fn expects_state(self, object: &str, expected: ObjectLifecycle) -> Self {
         let cutoff = self.cutoff.expect("a cutoff must be selected first");
         let state = self
             .fixture
@@ -52,8 +98,8 @@ impl CorpusFixture {
             state
                 .objects
                 .iter()
-                .any(|item| item.key == object && item.state == expected),
-            "{object} should be {expected} at cutoff {cutoff}"
+                .any(|item| item.key == object && item.lifecycle == expected),
+            "{object} should be {expected:?} at cutoff {cutoff}"
         );
         self
     }
@@ -71,7 +117,10 @@ impl CorpusFixture {
             .iter_mut()
             .find(|item| item.key == object)
             .expect("named gold object should exist at the selected cutoff");
-        gold_object.support_observations.push(observation);
+        gold_object.evidence.push(corpus::fixture::GoldEvidence {
+            observation,
+            role: corpus::fixture::EvidenceRole::Supports,
+        });
         self.expected_leak = Some((object.to_owned(), observation));
         self
     }
