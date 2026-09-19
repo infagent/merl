@@ -16,6 +16,10 @@ Merl ships as a Rust CLI and project authority. Local projects use SQLite; share
 
 Merl is under active design. Read the [product description](docs/product-description.md), [UI behavior contract](docs/user-interface.md), [architecture](docs/architecture.md), [first release plan](docs/first-release.md), and [architecture decisions](docs/adr/).
 
+## Contributing
+
+Bug reports, design feedback, documentation fixes, and code contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
+
 ## License
 
 Merl is available under the [MIT License](LICENSE).
