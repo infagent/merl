@@ -1,0 +1,130 @@
+{
+  "schema": "merl.corpus-fixture/v1",
+  "id": "DEV-C1",
+  "partition": "development",
+  "origin": "controlled",
+  "source": {
+    "provider": "controlled",
+    "issue_provider_id": "controlled:DEV-C1"
+  },
+  "capture": {
+    "captured_at": "2026-09-18T00:00:00Z",
+    "capture_tool_version": "manual/v1",
+    "source_sha256": "sha256:c0fdeb70593522cb51596e196ad3c0f59d180ee288a7a977b4797891a510a44f",
+    "history_fidelity": "staged_exact",
+    "provider_observation_count": 4
+  },
+  "provenance": {
+    "repository_license_at_capture": "not_applicable",
+    "redistribution_review": "approved"
+  },
+  "provider_snapshot": {
+    "title": "Baseline capture gain strategy",
+    "state": "OPEN",
+    "labels": [],
+    "assignees": []
+  },
+  "observations": [
+    {
+      "sequence": 1,
+      "kind": "controlled",
+      "provider_id": "controlled:DEV-C1:O1",
+      "author": "fixture-curator",
+      "created_at": "2026-01-01T09:00:00Z",
+      "updated_at": "2026-01-01T09:00:00Z",
+      "body": "Baseline capture procedure is not final. Open question: should receiver gain be fixed or swept?"
+    },
+    {
+      "sequence": 2,
+      "kind": "controlled",
+      "provider_id": "controlled:DEV-C1:O2",
+      "author": "fixture-curator",
+      "created_at": "2026-01-01T10:00:00Z",
+      "updated_at": "2026-01-01T10:00:00Z",
+      "body": "For baseline run A, keep receive gain fixed at 20 dB so the noise-floor comparison is stable. Leave the LO unchanged too."
+    },
+    {
+      "sequence": 3,
+      "kind": "controlled",
+      "provider_id": "controlled:DEV-C1:O3",
+      "author": "fixture-curator",
+      "created_at": "2026-01-01T11:00:00Z",
+      "updated_at": "2026-01-01T11:00:00Z",
+      "body": "The runner now assumes fixed gain. Do we also want the same settings for run B?"
+    },
+    {
+      "sequence": 4,
+      "kind": "controlled",
+      "provider_id": "controlled:DEV-C1:O4",
+      "author": "fixture-curator",
+      "created_at": "2026-01-01T12:00:00Z",
+      "updated_at": "2026-01-01T12:00:00Z",
+      "body": "Correction after checking clipping: do not keep gain fixed. Sweep 10, 20, and 30 dB for the baseline, but keep the LO fixed."
+    }
+  ],
+  "gold_states": [
+    {
+      "source_observation_cutoff": 1,
+      "objects": [
+        {
+          "key": "gain-strategy",
+          "kind": "question",
+          "state": "open",
+          "support_observations": [1]
+        }
+      ]
+    },
+    {
+      "source_observation_cutoff": 3,
+      "objects": [
+        {
+          "key": "gain-fixed-20db",
+          "kind": "decision",
+          "state": "active",
+          "support_observations": [2, 3]
+        },
+        {
+          "key": "lo-unchanged",
+          "kind": "decision",
+          "state": "active",
+          "support_observations": [2]
+        },
+        {
+          "key": "run-b-settings",
+          "kind": "question",
+          "state": "open",
+          "support_observations": [3]
+        }
+      ]
+    },
+    {
+      "source_observation_cutoff": 4,
+      "objects": [
+        {
+          "key": "gain-fixed-20db",
+          "kind": "decision",
+          "state": "superseded",
+          "support_observations": [2, 4]
+        },
+        {
+          "key": "gain-sweep-10-20-30db",
+          "kind": "decision",
+          "state": "active",
+          "support_observations": [4]
+        },
+        {
+          "key": "lo-unchanged",
+          "kind": "decision",
+          "state": "active",
+          "support_observations": [2, 4]
+        },
+        {
+          "key": "run-b-settings",
+          "kind": "question",
+          "state": "open",
+          "support_observations": [3]
+        }
+      ]
+    }
+  ]
+}
