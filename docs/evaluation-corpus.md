@@ -33,10 +33,10 @@ The body and ordering checks are separate. Passing the body check does not turn 
 Use the workspace tool from the repository root (replace the example UTC timestamp with the time of capture):
 
 ```sh
-cargo run --locked -p corpus -- validate corpus/development/DEV-C1.json
-cargo run --locked -p corpus -- validate corpus/development/DEV-C2.json corpus/development/DEV-C3.json
-cargo run --locked -p corpus -- capture-github DEV-N1 rust-lang/rust 55618 2026-09-19T02:00:58Z corpus/development/DEV-N1.json
-cargo run --locked -p corpus -- capture-github DEV-N2 prometheus/prometheus 4254 2026-09-19T02:00:58Z corpus/development/DEV-N2.json
+cargo run --locked -p merl-corpus -- validate corpus/development/DEV-C1.json
+cargo run --locked -p merl-corpus -- validate corpus/development/DEV-C2.json corpus/development/DEV-C3.json
+cargo run --locked -p merl-corpus -- capture-github DEV-N1 rust-lang/rust 55618 2026-09-19T02:00:58Z corpus/development/DEV-N1.json
+cargo run --locked -p merl-corpus -- capture-github DEV-N2 prometheus/prometheus 4254 2026-09-19T02:00:58Z corpus/development/DEV-N2.json
 ```
 
 The capture command freezes the returned snapshot and leaves redistribution status `pending`. Keep local captures private until reviewed. The held-out inputs and answer keys must never be placed in this repository, its agent workspaces, or a searchable connected drive used by implementers.

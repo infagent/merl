@@ -1,0 +1,16 @@
+[package]
+name = "merl-cli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+merl-core = { path = "../merl-core" }
+merl-store = { path = "../merl-store" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

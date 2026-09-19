@@ -854,20 +854,20 @@ The workspace separates business rules from adapters:
 
 ```text
 crates/
-  corpus          evaluation fixture capture and validation
-  merl-core       IDs, events, objects, relations, policies, transitions
-  merl-store      persistence interfaces, SQLite, migrations, replay
-  merl-compiler   compiler protocol and built-in deterministic extraction
-  merl-daemon     project authority, ingestion, subscriptions, dispatch
-  merl-client     authority client, local cache, pending commands
-  merl-cli        command-line interface
-  merl-github     GitHub capture and incremental polling
-  merl-publish    publication policy, rendering, and delivery records
-  merl-federation cross-project contracts, envelopes, and delivery
-  merl-host       spawn, wake, context, process, and resource adapters
+  merl-corpus      evaluation fixture capture and validation
+  merl-core        IDs, events, objects, relations, policies, transitions
+  merl-store       persistence interfaces, SQLite, migrations, replay
+  merl-compiler    compiler protocol and deterministic extraction
+  merl-daemon      project authority, ingestion, subscriptions, dispatch
+  merl-client      authority client, local cache, pending commands
+  merl-cli         command-line interface
+  merl-github      GitHub capture and incremental polling
+  merl-publish     publication policy, rendering, and delivery records
+  merl-federation  cross-project contracts and delivery
+  merl-host        spawn, wake, context, process, resource adapters
 ```
 
-`merl-core` has no dependency on SQLite, GitHub, CLI parsing, or an async runtime. It accepts explicit clocks and ID providers where behavior depends on them. Domain transitions remain testable without the network or filesystem.
+`merl-core` has no dependency on SQLite, GitHub, CLI parsing, or an async runtime. Callers supply the IDs and timestamps of accepted batches, so tests can replay them without a clock or ID generator hidden in the crate. Domain transitions remain testable without the network or filesystem.
 
 Adapters translate external types at their boundaries. Public core APIs do not expose types from GitHub, SQLite, or CLI libraries. The workspace follows Microsoft's [Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/guidelines/index.html) in spirit, including strong types, small crates, structured telemetry, mockable I/O, and documented error behavior.
 
