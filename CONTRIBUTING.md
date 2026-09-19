@@ -47,9 +47,9 @@ Install the stable Rust toolchain with [rustup](https://rustup.rs/). The CI work
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-cargo doc --workspace --all-features --no-deps
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-features
+RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
 ```
 
 Repository-specific engineering rules live in [AGENTS.md](AGENTS.md). They apply to human- and agent-authored changes alike.
@@ -67,6 +67,8 @@ In the pull request description:
 - include sample human and JSON CLI output when either changes.
 
 Use a conventional commit subject such as `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, or `chore:`. Release Please uses these prefixes to prepare release notes and versions.
+
+Maintainers can find token setup and release verification steps in [docs/releasing.md](docs/releasing.md).
 
 Maintainers may ask for revisions or split work before merging. Review focuses on observable behavior, compatibility, correctness, and fit with the current milestone.
 
