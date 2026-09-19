@@ -240,7 +240,7 @@ pub struct ContentEdit {
     pub deleted_at: Option<String>,
 }
 
-/// Expected accepted state after a source observation.
+/// Expected state and unresolved candidates after a source observation.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GoldState {
     /// Highest observation visible at this point.
@@ -347,6 +347,8 @@ pub enum RelationKind {
     Disputes,
     /// A decision or fact answers a question.
     Answers,
+    /// A task waits until its named condition is met.
+    WaitsFor,
 }
 
 /// A fixture violates a corpus invariant.

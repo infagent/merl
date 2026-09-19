@@ -43,6 +43,69 @@ impl CorpusFixture {
         self.expects_state(object, GoldObjectState::Superseded)
     }
 
+    pub fn expects_candidate(self, object: &str) -> Self {
+        self.expects_state(object, GoldObjectState::Candidate)
+    }
+
+    pub fn expects_open(self, object: &str) -> Self {
+        self.expects_state(object, GoldObjectState::Open)
+    }
+
+    pub fn expects_current_support(self, object: &str) -> Self {
+        let gold = self.object(object);
+        assert_eq!(gold.support_status, SupportStatus::Current);
+        self
+    }
+
+    pub fn expects_revalidation_pending(self, object: &str) -> Self {
+        let gold = self.object(object);
+        assert_eq!(gold.support_status, SupportStatus::RevalidationPending);
+        self
+    }
+
+    pub fn expects_evidence_changed_by(self, object: &str, observation: u64) -> Self {
+        let gold = self.object(object);
+        assert!(gold.evidence.iter().any(|item| {
+            item.observation == observation && matches!(item.role, EvidenceRole::EvidenceChanged)
+        }));
+        self
+    }
+
+    pub fn expects_source_supersession(self, newer: u64, older: u64) -> Self {
+        let observation = self
+            .fixture
+            .observations
+            .iter()
+            .find(|item| item.sequence == newer)
+            .expect("newer observation should exist");
+        let prior = self
+            .fixture
+            .observations
+            .iter()
+            .find(|item| item.sequence == older)
+            .expect("older observation should exist");
+        assert_eq!(observation.supersedes, Some(older));
+        assert_eq!(observation.provider_id, prior.provider_id);
+        self
+    }
+
+    pub fn expects_waits_for(self, task: &str, condition: &str, observation: u64) -> Self {
+        let cutoff = self.cutoff.expect("a cutoff must be selected first");
+        let state = self
+            .fixture
+            .gold_states
+            .iter()
+            .find(|state| state.source_observation_cutoff == cutoff)
+            .unwrap();
+        assert!(state.relations.iter().any(|relation| {
+            relation.from == task
+                && relation.to == condition
+                && relation.observation == observation
+                && matches!(relation.kind, RelationKind::WaitsFor)
+        }));
+        self
+    }
+
     pub fn expects_partial_support(self, object: &str) -> Self {
         let gold = self.object(object);
         assert_eq!(gold.support_status, SupportStatus::PartiallySupported);
