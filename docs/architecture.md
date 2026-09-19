@@ -37,7 +37,7 @@ This document defines Merl's implementation architecture. The [product descripti
 | Protected content | Arbitrary prose lives behind scope-aware erasable payload references |
 | Local trust | Same-user processes are trusted unless the host adds OS isolation |
 | Source integration | Polling and webhooks feed one incremental GitHub capture path |
-| Agent interfaces | CLI first, then a thin MCP adapter over the same core |
+| Agent interface | CLI with hierarchical help and versioned machine output |
 | Extraction | Versioned compiler protocol with no authority to mutate state |
 | Local storage root | `MERL_HOME`, defaulting to `~/.merl` |
 
@@ -90,7 +90,6 @@ flowchart TB
         A[Developer A cache]
         B[Developer B cache]
         CLI[CLI]
-        MCP[MCP]
     end
 
     GH --> SA
@@ -100,9 +99,7 @@ flowchart TB
     MP --> A
     MP --> B
     MP --> CLI
-    MP --> MCP
     CLI --> CMD
-    MCP --> CMD
     IN --> WA[Wake-up adapters]
     PUB --> GH
 ```
@@ -443,6 +440,8 @@ Session resume is a deterministic context projection, subject to a rendering bud
 4. the latest checkpoint and its references
 5. accepted changes since the checkpoint cursor
 6. current versions of referenced project objects
+
+Durable guidance is stored once but must be rendered into each new model context to have any effect. A host-managed session receives one bounded bootstrap instruction that identifies the logical agent and tells it to run `merl session resume --agent <id> --format json`; it points to hierarchical help for further discovery. The bootstrap does not contain the agent's guidance, assignment, transcript, or command catalog. An externally started process receives the same line from `merl agent attach` for the user or host to inject.
 
 A checkpoint preserves continuity, not truth. Current accepted state wins when a checkpoint note has gone stale. Removing model-host context leaves profiles, guidance, checkpoints, and project state untouched. Retiring or superseding guidance requires an explicit durable operation. Retirement removes guidance from future context but preserves its audit history.
 
@@ -848,12 +847,11 @@ crates/
   merl-publish    publication policy, rendering, and delivery records
   merl-federation cross-project contracts, envelopes, and delivery
   merl-host       spawn, wake, context, process, and resource adapters
-  merl-mcp        thin MCP adapter
 ```
 
-`merl-core` has no dependency on SQLite, GitHub, MCP, CLI parsing, or an async runtime. It accepts explicit clocks and ID providers where behavior depends on them. Domain transitions remain testable without the network or filesystem.
+`merl-core` has no dependency on SQLite, GitHub, CLI parsing, or an async runtime. It accepts explicit clocks and ID providers where behavior depends on them. Domain transitions remain testable without the network or filesystem.
 
-Adapters translate external types at their boundaries. Public core APIs do not expose types from GitHub, SQLite, or MCP libraries. The workspace follows Microsoft's [Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/guidelines/index.html) in spirit, including strong types, small crates, structured telemetry, mockable I/O, and documented error behavior.
+Adapters translate external types at their boundaries. Public core APIs do not expose types from GitHub, SQLite, or CLI libraries. The workspace follows Microsoft's [Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/guidelines/index.html) in spirit, including strong types, small crates, structured telemetry, mockable I/O, and documented error behavior.
 
 The project will not add a custom allocator or raise the release CPU baseline without measurements. Curl-installed binaries must remain portable across their declared target.
 
@@ -904,11 +902,7 @@ Merl sends no telemetry by default. Export and diagnostic commands require expli
 
 ### CLI
 
-The `merl` CLI is the reference interface for humans, skills, CI, and evaluation. Commands expose semantic operations such as viewing an issue, reading a delta, resolving a question, or recording an experiment result. Mutating commands go through the project authority. Machine output has an explicit format and version.
-
-### MCP
-
-The MCP server remains a thin adapter. It exposes a small surface around state views, mutation batches, expansion, artifact reads, and inbox operations. MCP handlers call the same application services as the CLI. Protocol concerns do not enter the domain core.
+The `merl` CLI is the public interface for humans, agents, scripts, CI, and evaluation. Commands expose semantic operations such as viewing an issue, reading a delta, resolving a question, or recording an experiment result. Mutating commands go through the project authority. Machine output and machine-readable help have explicit formats and versions. Hierarchical help reveals only the requested command group or operation, which keeps discovery cost proportional to the work at hand.
 
 ### Compiler protocol
 
@@ -943,6 +937,7 @@ The architecture depends on replay and transaction boundaries, so tests must exe
 - Publication tests inject ambiguous provider failures, duplicate callbacks, and managed-comment edits.
 - Work-planning tests distinguish pending from accepted responsibility, deferred from scheduled work, and requester constraints from owner commitments.
 - Agent-continuity tests clear process context and verify that active guidance, checkpoints, and current project state still shape resume output.
+- Bootstrap tests give a fresh context only the bounded resume instruction, then verify that the agent can retrieve guidance and work without an installed skill or injected command catalog.
 - Context-policy tests verify task-scoped reset ordering, continuous-session retention, host capability fallback, and clean context generations between unrelated tasks.
 - Assignment tests compare agents with different model, effort, capability, availability, and cost advertisements and verify every ranking explanation.
 - Provisioning tests cover delegation limits, duplicate spawn requests, resource reservation, ambiguous host failure, readiness, drain, and stop.
@@ -993,6 +988,7 @@ The implementation must preserve these rules:
 - Logical agent identity does not depend on process, model context, workspace path, or node identity.
 - Clearing process context never deletes durable guidance, checkpoints, or accepted project state.
 - Agent guidance is scoped, attributable, lifecycle-managed, and subordinate to project policy.
+- Every fresh model context receives a bounded resume pointer; durable guidance and command documentation load only on demand.
 - Logical agents and disposable model-context generations are separate identities.
 - Context clears occur only after durable checkpoint, cursor, task-reference, assignment, and lease transitions commit.
 - A failed or unsupported host reset cannot masquerade as a cleared context.
@@ -1121,7 +1117,7 @@ Merl will not use a distributed transaction across projects, GitHub, or another 
 
 Merl will not publish every accepted transition to GitHub. That would recreate the transcript and token problems that the state model removes. Publication policy keeps routine machine state inside Merl.
 
-Merl will not start with MCP as its domain interface. A CLI is easier to replay, test, inspect, and benchmark. MCP will expose proven operations from the same core.
+Merl will not ship a second agent protocol without measured demand that outweighs its context, maintenance, and operational cost. The CLI is easier to discover incrementally, replay, test, inspect, and benchmark. Internal application services remain independent of command parsing, but that boundary is not a promise of another public adapter. See [ADR 0001](adr/0001-cli-as-public-agent-interface.md).
 
 Merl will not infer competence or authority from a model name. Runtime advertisements support planning; measured outcomes, project policy, and authorized judgment govern assignment.
 

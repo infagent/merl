@@ -2,7 +2,7 @@
 
 Status: draft behavior contract
 
-This document describes how people and agents use Merl. It defines observable behavior before command parsing, storage, networking, or database design. The examples use a CLI because it is concrete and easy to test. MCP tools, agent skills, and future graphical interfaces should expose the same actions and outcomes.
+This document describes how people and agents use Merl. It defines observable behavior before storage, networking, or database design. The CLI is the public interface for people, agents, scripts, and CI.
 
 The command names are the first proposed interface. We may refine spelling during implementation, but the behavioral distinctions in this document are requirements.
 
@@ -10,7 +10,8 @@ The command names are the first proposed interface. We may refine spelling durin
 
 Merl's interface follows these rules:
 
-- The CLI is the reference interface.
+- The CLI is the public interface.
+- Help is hierarchical and loaded on demand; agents need not carry the full command catalog.
 - Every mutation reports whether it was accepted, queued, held for review, rejected, or conflicted.
 - A local queue never masquerades as accepted project state.
 - Project context is explicit when a repository belongs to several projects.
@@ -25,13 +26,11 @@ Merl's interface follows these rules:
 
 | Surface | Primary user | Purpose |
 | --- | --- | --- |
-| `merl` CLI | Humans, agents, CI | Reference interface for every semantic action |
+| `merl` CLI | Humans, agents, CI | Public interface for every semantic action |
 | GitHub | Humans | Discussion, managed status, and significant project events |
-| MCP | Agents and tool clients | Small semantic adapter over the same application actions |
-| Agent skill | Coding and research agents | Usage guidance, context selection, and compact defaults |
 | Daemon status | Operators | Authority health, synchronization, queues, and delivery failures |
 
-Merl has no required graphical interface. A graphical client can arrive later without defining another domain API.
+Merl has no required graphical interface. A graphical client can arrive later by invoking the same application services, but it does not define the agent interface.
 
 ## Command shape
 
@@ -66,6 +65,17 @@ Common options apply across commands:
 
 Machine output has a versioned schema. Human output favors readable names and adds stable IDs afterward.
 
+Command discovery is incremental:
+
+```bash
+merl help
+merl help find checkpoint
+merl help session
+merl help session checkpoint --format json
+```
+
+Top-level help lists command groups, not every flag and example. Subcommand help describes arguments, outcomes, error codes, examples, and related commands. JSON help uses a versioned schema so an agent can inspect one operation without loading the whole command surface.
+
 With `--format json`, every command returns one result envelope. The envelope identifies the schema, action, outcome, project, accepted revision if one exists, affected objects, warnings, and error details. For example:
 
 ```json
@@ -80,7 +90,7 @@ With `--format json`, every command returns one result envelope. The envelope id
 }
 ```
 
-CLI JSON, MCP results, and agent-skill wrappers preserve these fields. An adapter may add transport metadata, but it cannot rename an accepted outcome or conceal a queued one.
+Human and JSON output preserve these fields. Compact output cannot rename an accepted outcome or conceal a queued one.
 
 ## Project context
 
@@ -466,10 +476,18 @@ merl session checkpoint \
 A later session resumes from accepted project state plus the checkpoint's references:
 
 ```bash
-merl session resume --agent project-a-tech-lead
+merl session resume --agent project-a-tech-lead --format json
 ```
 
 The checkpoint does not copy full decisions, tasks, or artifacts. `resume` expands current versions and reports anything that changed after the checkpoint revision.
+
+Each new model context receives one bootstrap line from its host adapter:
+
+```text
+Run `merl session resume --agent project-a-tech-lead --format json` before work; use `merl help <topic>` when needed.
+```
+
+The durable agent profile stores this behavior once. The host renders the short pointer into each disposable context because a fresh model cannot retrieve durable guidance until it knows how to resume. Merl does not require an installed skill or inject the command catalog.
 
 Agent guidance survives process shutdown, restart, and model-context clearing:
 
@@ -659,6 +677,8 @@ merl agent attach --template software-dev-medium --task T53
 ```
 
 The authority assigns or confirms the logical identity. It marks manually supplied runtime fields with their actual provenance.
+
+The attach result prints the exact bootstrap line for the user to place in the external session. Host-managed sessions receive it automatically.
 
 Clearing context in an agent host does not call a Merl mutation. Guidance stops affecting future sessions only through an explicit retirement or supersession:
 
@@ -977,12 +997,11 @@ Exit success means Merl durably performed the action it reported. For a queued o
 
 Gherkin is the initial behavior language. It is readable by users and gives the implementation room to change. We should not create another test language until repeated scenarios expose a concrete limitation.
 
-Scenarios interact through public actions and observable results. They do not query SQLite tables or call private Rust modules. The same scenario can run through several drivers:
+Scenarios interact through public actions and observable results. They do not query SQLite tables or call private Rust modules. The same scenario can run through several internal test drivers:
 
 - CLI subprocess against a local daemon
 - application service in process
 - client against a shared authority
-- MCP adapter where the action is exposed
 
 Provider scenarios use controlled GitHub and artifact-store fakes at the external boundary. The runner supplies deterministic time and aliases for generated IDs while assertions use public output.
 
@@ -1512,6 +1531,15 @@ Feature: Plan work requested by another agent
 ```gherkin
 Feature: Resume an agent session
 
+  Scenario: A fresh context receives a bounded bootstrap
+    Given agent "project-a-dev" has active guidance and an actionable assignment
+    When its host starts a fresh model context
+    Then the injected instruction contains the agent's `merl session resume` command
+    And it points to hierarchical help
+    And it contains neither the durable guidance nor the command catalog
+    When the agent runs the resume command
+    Then the resume view contains its relevant guidance and assignment
+
   Scenario: Referenced state changed after checkpoint
     Given agent "project-a-tech-lead" checkpointed at revision 481 with reference "D18"
     And decision "D18" changed at revision 484
@@ -1710,7 +1738,7 @@ Feature: Bound agent temporary storage
 
 ## Test implementation guidance
 
-Step definitions should call a small behavior-driver interface rather than shelling out from every step. A CLI driver renders actions as commands and parses public results. Other drivers call the corresponding public service or MCP action.
+Step definitions should call a small behavior-driver interface rather than shelling out from every step. A CLI driver renders actions as commands and parses public results. Internal drivers may call the corresponding application service to test the same behavior below the process boundary.
 
 The driver vocabulary should stay close to user actions:
 

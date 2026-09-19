@@ -12,7 +12,7 @@ This costs tokens and produces mistakes. Summaries help for a while, but repeate
 
 Merl is for teams that use several coding or research agents on the same project. A team might include a project lead, researchers, software engineers, and reviewers, with humans working through GitHub alongside them.
 
-Merl does not require every participant to use the same model or agent host. Claude Code, Codex, shell scripts, CI jobs, and people can work against the same state through a CLI, a local service, or a small MCP interface.
+Merl does not require every participant to use the same model or agent host. Claude Code, Codex, shell scripts, CI jobs, and people can work against the same state through the CLI, whether the project authority is local or remote.
 
 ## Projects and sources
 
@@ -248,7 +248,7 @@ The [user interface and behavior contract](user-interface.md) describes the acti
 
 Exactly one authority accepts mutations for a project at a time. A project can move from local to shared operation only through an exclusive handoff that preserves its ID, event history, and revision sequence.
 
-The `merl` CLI is the first public interface. It supports humans, agent skills, shell scripts, CI, replay tools, and evaluation harnesses. A thin MCP server will call the same core library after usage shows which operations deserve tools. GitHub and model providers remain adapters outside the domain core.
+The `merl` CLI is the public interface. It supports humans, coding agents, shell scripts, CI, replay tools, and evaluation harnesses. Hierarchical help keeps command discovery on demand, while versioned JSON gives agents structured results without loading a catalog of tool schemas into every context. GitHub and model providers remain adapters outside the domain core.
 
 `MERL_HOME`, which defaults to `~/.merl`, is the local node home. It holds credentials, configuration, caches, logs, sockets, pending commands, and agent workspaces. In local mode it also holds the authoritative project database. Project and agent identities do not depend on paths, so users can move a checkout without changing its history.
 

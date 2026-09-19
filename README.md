@@ -12,9 +12,9 @@ Humans approve agent templates and resource limits. Project managers can staff w
 
 On one computer, concurrent writers use separate Git worktrees and task branches. Merl gives each managed agent bounded, disk-backed scratch space instead of relying on the system `/tmp`. A portable manifest moves non-secret agent and workspace setup to another computer.
 
-Merl ships as a Rust CLI and project authority. Local projects use SQLite; shared projects use the same domain API behind a reachable authority. A thin MCP adapter exposes proven operations from that API.
+Merl ships as a Rust CLI and project authority. Local projects use SQLite; shared projects use the same application services behind a reachable authority. Agents discover commands through concise, hierarchical help and consume versioned JSON output when human-readable output is not appropriate.
 
-Merl is under active design. Read the [product description](docs/product-description.md), [UI behavior contract](docs/user-interface.md), [architecture](docs/architecture.md), and [first release plan](docs/first-release.md).
+Merl is under active design. Read the [product description](docs/product-description.md), [UI behavior contract](docs/user-interface.md), [architecture](docs/architecture.md), [first release plan](docs/first-release.md), and [architecture decisions](docs/adr/).
 
 ## License
 

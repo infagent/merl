@@ -94,6 +94,7 @@ The release includes:
 - object and source expansion, including an explicit unavailable result after purge;
 - project deltas and a minimal pollable inbox with acknowledgement;
 - CLI commands for capture, compilation, review, correction, views, expansion, replay, purge, and evaluation;
+- hierarchical human and machine-readable help for the included commands, plus versioned JSON results and stable error codes;
 - development, held-out, and adversarial evaluation sets;
 - a benchmark report covering correctness and token break-even;
 - executable behavior tests that use public interfaces rather than database tables.
@@ -153,6 +154,9 @@ The release is ready when:
 - purge output states that unmanaged backups, provider systems, and previously exported archives lie outside that guarantee;
 - purge never claims that affected state remains fully replayable;
 - the local CLI states that same-user filesystem access lies outside Merl's enforcement boundary;
+- top-level help lists command groups, while one subcommand's human or JSON help can be loaded without rendering the full command catalog;
+- every included command documents its arguments, outcomes, stable errors, examples, and related commands;
+- non-interactive JSON output never prompts and preserves the same accepted, queued, candidate, rejected, and conflicted meanings as human output;
 - researcher and engineer views answer held-out questions at least as accurately as raw history and the simpler summary and retrieval baselines;
 - benchmark results report disagreements and failures rather than scoring ambiguous cases as automatic successes;
 - benchmark reports freeze model, effort, prompts, tool access, and sampling controls, and include paired repeated trials with variance;
@@ -178,7 +182,7 @@ The first release excludes:
 - direct-message capture, delivery, and legacy mailbox migration;
 - model-backed publication or policy classification;
 - automatic authority for consequential model interpretations;
-- MCP and graphical interfaces;
+- graphical interfaces;
 - packaged artifacts and curl installation.
 
 These capabilities remain part of the product architecture. They enter release planning only after the Issue benchmark supports Merl's central claim.
