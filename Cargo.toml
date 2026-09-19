@@ -1,5 +1,25 @@
 [workspace]
 resolver = "3"
+members = ["crates/corpus"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.98.1"
+license = "MIT"
+repository = "https://github.com/infagent/merl"
+
+[workspace.dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+time = { version = "0.3.55", default-features = false, features = ["parsing"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
 
 [package]
 name = "merl"
@@ -11,9 +31,9 @@ license = "MIT"
 repository = "https://github.com/infagent/merl"
 publish = false
 
-[lints.rust]
-unsafe_code = "forbid"
+[dev-dependencies]
+corpus = { path = "crates/corpus" }
+serde_json.workspace = true
 
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
+[lints]
+workspace = true

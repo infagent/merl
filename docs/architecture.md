@@ -854,6 +854,7 @@ The workspace separates business rules from adapters:
 
 ```text
 crates/
+  corpus          evaluation fixture capture and validation
   merl-core       IDs, events, objects, relations, policies, transitions
   merl-store      persistence interfaces, SQLite, migrations, replay
   merl-compiler   compiler protocol and built-in deterministic extraction
