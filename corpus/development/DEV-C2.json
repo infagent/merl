@@ -10,7 +10,7 @@
   "capture": {
     "captured_at": "2026-09-19T00:00:00Z",
     "capture_tool_version": "manual/v1",
-    "source_sha256": "sha256:1c04604f3f04514e4035827dd8f81182416f9bd819530251a2f8c0cf6d3f1edf",
+    "source_sha256": "sha256:b5dd19a30b45090505b4df6d90a0c38f7149757fefca997a93314e448762e44d",
     "history_fidelity": "staged_exact",
     "provider_observation_count": 3
   },
@@ -55,8 +55,8 @@
       "author": {"provider_id": "controlled:project-manager", "login": "project-manager"},
       "occurred_at": "2026-02-01T11:00:00Z",
       "created_at": "2026-02-01T11:00:00Z",
-      "body": "Take the parser task, but start it only after PR 229 merges. Leave the hypothesis change for research review.",
-      "body_sha256": "sha256:61812ea9a3b5d4f46f70f192672408a4e78129626bebd30f1646fe16b94988a9"
+      "body": "Take the parser task, but start it only after PR 229 merges because that PR changes the frame reader. Leave the hypothesis change for research review.",
+      "body_sha256": "sha256:adc240370ca8f3086142410bc92b03c1e184c2eb546cb03adff6a7edf88723fe"
     }
   ],
   "gold_states": [
@@ -109,22 +109,24 @@
         {
           "key": "repair-checksum-parser",
           "kind": "task",
-          "lifecycle": "candidate",
+          "lifecycle": "active",
           "support_status": "current",
-          "evidence": [{"observation": 2, "role": "supports"}]
-        },
-        {
-          "key": "pr-229-merge",
-          "kind": "wait_condition",
-          "lifecycle": "candidate",
-          "support_status": "current",
-          "evidence": [{"observation": 2, "role": "supports"}]
+          "evidence": [{"observation": 2, "role": "supports"}],
+          "task_plan": {
+            "commitment": "pending",
+            "scheduling": "unscheduled",
+            "execution": "not_started",
+            "start_after": {
+              "subject": "github:example/parser/pull/229",
+              "predicate": "merged",
+              "expected": true
+            }
+          }
         }
       ],
       "relations": [
         {"from": "length-read-once", "kind": "disputes", "to": "double-read-hypothesis", "observation": 2},
-        {"from": "length-read-once", "kind": "supports", "to": "weaken-double-read", "observation": 2},
-        {"from": "repair-checksum-parser", "kind": "waits_for", "to": "pr-229-merge", "observation": 2}
+        {"from": "length-read-once", "kind": "supports", "to": "weaken-double-read", "observation": 2}
       ]
     },
     {
@@ -164,28 +166,28 @@
         {
           "key": "repair-checksum-parser",
           "kind": "task",
-          "lifecycle": "open",
+          "lifecycle": "active",
           "support_status": "current",
           "evidence": [
             {"observation": 2, "role": "supports"},
             {"observation": 3, "role": "supports"}
-          ]
-        },
-        {
-          "key": "pr-229-merge",
-          "kind": "wait_condition",
-          "lifecycle": "open",
-          "support_status": "current",
-          "evidence": [
-            {"observation": 2, "role": "supports"},
-            {"observation": 3, "role": "supports"}
-          ]
+          ],
+          "task_plan": {
+            "commitment": "accepted",
+            "scheduling": "deferred",
+            "execution": "not_started",
+            "deferral_reason": "PR 229 changes the frame reader",
+            "start_after": {
+              "subject": "github:example/parser/pull/229",
+              "predicate": "merged",
+              "expected": true
+            }
+          }
         }
       ],
       "relations": [
         {"from": "length-read-once", "kind": "disputes", "to": "double-read-hypothesis", "observation": 2},
-        {"from": "length-read-once", "kind": "supports", "to": "weaken-double-read", "observation": 2},
-        {"from": "repair-checksum-parser", "kind": "waits_for", "to": "pr-229-merge", "observation": 2}
+        {"from": "length-read-once", "kind": "supports", "to": "weaken-double-read", "observation": 2}
       ]
     }
   ]

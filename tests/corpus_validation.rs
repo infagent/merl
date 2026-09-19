@@ -41,13 +41,20 @@ fn one_note_can_report_a_fact_propose_a_claim_and_request_work() {
         .expects_active("checksum-still-fails")
         .expects_active("length-read-once")
         .expects_candidate("weaken-double-read")
-        .expects_candidate("repair-checksum-parser")
-        .expects_candidate("pr-229-merge")
+        .expects_active("repair-checksum-parser")
+        .expects_task_awaiting_acceptance("repair-checksum-parser")
+        .expects_task_start_after_pr_merge(
+            "repair-checksum-parser",
+            "github:example/parser/pull/229",
+        )
         .expects_disputed_by("double-read-hypothesis", 2)
         .at_cutoff(3)
-        .expects_open("repair-checksum-parser")
+        .expects_accepted_task_deferred_until_pr_merge(
+            "repair-checksum-parser",
+            "github:example/parser/pull/229",
+        )
         .expects_candidate("weaken-double-read")
-        .expects_waits_for("repair-checksum-parser", "pr-229-merge", 2);
+        .then_rejects_deferred_task_without_reason_or_condition("repair-checksum-parser");
 }
 
 #[test]

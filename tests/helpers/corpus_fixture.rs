@@ -1,6 +1,6 @@
 use corpus::fixture::{
-    EvidenceRole, Fixture, GoldObjectState, RelationKind, SupportStatus, ValidationError,
-    source_digest, validate,
+    EvidenceRole, Fixture, GoldObjectState, RelationKind, SupportStatus, TaskCommitment,
+    TaskExecution, TaskScheduling, ValidationError, source_digest, validate,
 };
 
 pub struct CorpusFixture {
@@ -47,10 +47,6 @@ impl CorpusFixture {
         self.expects_state(object, GoldObjectState::Candidate)
     }
 
-    pub fn expects_open(self, object: &str) -> Self {
-        self.expects_state(object, GoldObjectState::Open)
-    }
-
     pub fn expects_current_support(self, object: &str) -> Self {
         let gold = self.object(object);
         assert_eq!(gold.support_status, SupportStatus::Current);
@@ -89,21 +85,73 @@ impl CorpusFixture {
         self
     }
 
-    pub fn expects_waits_for(self, task: &str, condition: &str, observation: u64) -> Self {
-        let cutoff = self.cutoff.expect("a cutoff must be selected first");
-        let state = self
-            .fixture
-            .gold_states
-            .iter()
-            .find(|state| state.source_observation_cutoff == cutoff)
-            .unwrap();
-        assert!(state.relations.iter().any(|relation| {
-            relation.from == task
-                && relation.to == condition
-                && relation.observation == observation
-                && matches!(relation.kind, RelationKind::WaitsFor)
-        }));
+    pub fn expects_task_awaiting_acceptance(self, task: &str) -> Self {
+        let plan = self.object(task).task_plan.as_ref().unwrap();
+        assert_eq!(plan.commitment, TaskCommitment::Pending);
+        assert_eq!(plan.scheduling, TaskScheduling::Unscheduled);
+        assert_eq!(plan.execution, TaskExecution::NotStarted);
         self
+    }
+
+    pub fn expects_task_start_after_pr_merge(self, task: &str, pull_request: &str) -> Self {
+        let predicate = self
+            .object(task)
+            .task_plan
+            .as_ref()
+            .unwrap()
+            .start_after
+            .as_ref()
+            .unwrap();
+        assert_eq!(predicate.subject, pull_request);
+        assert_eq!(predicate.predicate, "merged");
+        assert!(predicate.expected);
+        self
+    }
+
+    pub fn expects_accepted_task_deferred_until_pr_merge(
+        self,
+        task: &str,
+        pull_request: &str,
+    ) -> Self {
+        let plan = self.object(task).task_plan.as_ref().unwrap();
+        assert_eq!(plan.commitment, TaskCommitment::Accepted);
+        assert_eq!(plan.scheduling, TaskScheduling::Deferred);
+        assert_eq!(plan.execution, TaskExecution::NotStarted);
+        assert!(
+            plan.deferral_reason
+                .as_deref()
+                .is_some_and(|reason| !reason.is_empty())
+        );
+        self.expects_task_start_after_pr_merge(task, pull_request)
+    }
+
+    pub fn then_rejects_deferred_task_without_reason_or_condition(self, task: &str) {
+        let cutoff = self.cutoff.expect("a cutoff must be selected first");
+        for field in ["deferral_reason", "start_after"] {
+            let mut changed = self.fixture.clone();
+            let state = changed
+                .gold_states
+                .iter_mut()
+                .find(|state| state.source_observation_cutoff == cutoff)
+                .unwrap();
+            let plan = state
+                .objects
+                .iter_mut()
+                .find(|object| object.key == task)
+                .unwrap()
+                .task_plan
+                .as_mut()
+                .unwrap();
+            if field == "deferral_reason" {
+                plan.deferral_reason = None;
+            } else {
+                plan.start_after = None;
+            }
+            assert_eq!(
+                validate(&changed),
+                Err(ValidationError::InvalidTaskPlan(task.to_owned()))
+            );
+        }
     }
 
     pub fn expects_partial_support(self, object: &str) -> Self {
