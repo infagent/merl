@@ -176,6 +176,9 @@ pub struct Observation {
     /// Earlier observation sequence for the same external entity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supersedes: Option<u64>,
+    /// A timestamp tie with the preceding observation lacks a causal order.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ambiguous_order_with_previous: bool,
     /// Author recorded by the provider.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<ActorRef>,
@@ -371,8 +374,18 @@ pub enum ValidationError {
     InvalidBodyCapture(u64),
     /// A provenance timestamp is not RFC 3339.
     InvalidTimestamp(String),
+    /// A source version is placed before its external entity existed.
+    ObservationBeforeCreation(u64),
+    /// A source version is placed after the fixture was captured.
+    ObservationAfterCapture(u64),
+    /// Two observations claim the same immutable version identity.
+    DuplicateVersionIdentity(u64),
     /// A source version occurs before the observation preceding it.
     CausalOrder(u64),
+    /// A natural capture claims exact ordering across a timestamp tie.
+    InvalidOrderingClaim(u64),
+    /// Exact causal replay crosses a timestamp tie with no established order.
+    AmbiguousCausalOrder(u64),
     /// Exact historical replay crosses a missing source version.
     MissingHistoricalBody(u64),
     /// Capture digest disagrees with the normalized observations.
@@ -384,6 +397,10 @@ pub enum ValidationError {
     },
     /// A gold-state cutoff does not identify a retained observation.
     UnknownCutoff(u64),
+    /// Two gold states claim the same causal cutoff.
+    DuplicateGoldCutoff(u64),
+    /// One gold state defines the same local object twice.
+    DuplicateGoldObject(String),
     /// A gold object cites an observation that does not exist.
     UnknownSupport {
         /// Fixture-local object name.
@@ -430,10 +447,34 @@ impl fmt::Display for ValidationError {
             Self::InvalidTimestamp(value) => {
                 write!(formatter, "invalid RFC 3339 timestamp {value}")
             }
+            Self::ObservationBeforeCreation(sequence) => {
+                write!(formatter, "observation {sequence} precedes source creation")
+            }
+            Self::ObservationAfterCapture(sequence) => {
+                write!(formatter, "observation {sequence} follows fixture capture")
+            }
+            Self::DuplicateVersionIdentity(sequence) => {
+                write!(
+                    formatter,
+                    "duplicate source version at observation {sequence}"
+                )
+            }
             Self::CausalOrder(sequence) => {
                 write!(
                     formatter,
                     "source observation {sequence} is out of causal order"
+                )
+            }
+            Self::InvalidOrderingClaim(sequence) => {
+                write!(
+                    formatter,
+                    "invalid causal ordering claim at observation {sequence}"
+                )
+            }
+            Self::AmbiguousCausalOrder(sequence) => {
+                write!(
+                    formatter,
+                    "ambiguous causal order at observation {sequence}"
                 )
             }
             Self::MissingHistoricalBody(sequence) => {
@@ -450,6 +491,12 @@ impl fmt::Display for ValidationError {
             }
             Self::UnknownCutoff(cutoff) => {
                 write!(formatter, "gold-state cutoff {cutoff} does not exist")
+            }
+            Self::DuplicateGoldCutoff(cutoff) => {
+                write!(formatter, "duplicate gold-state cutoff {cutoff}")
+            }
+            Self::DuplicateGoldObject(key) => {
+                write!(formatter, "duplicate gold object {key}")
             }
             Self::UnknownSupport {
                 object,
@@ -512,7 +559,11 @@ pub fn body_digest(body: &str) -> String {
 ///
 /// Returns the first missing version. Capture gaps cannot be replayed as if
 /// the terminal body had been available at an earlier cutoff.
-pub fn require_exact_history(fixture: &Fixture, cutoff: u64) -> Result<(), ValidationError> {
+pub fn require_exact_source_bodies_through(
+    fixture: &Fixture,
+    cutoff: u64,
+) -> Result<(), ValidationError> {
+    require_known_cutoff(fixture, cutoff)?;
     for observation in fixture
         .observations
         .iter()
@@ -523,6 +574,55 @@ pub fn require_exact_history(fixture: &Fixture, cutoff: u64) -> Result<(), Valid
         }
     }
     Ok(())
+}
+
+/// Refuses causal replay through a timestamp tie without established order.
+///
+/// # Errors
+///
+/// Returns the first ambiguous observation or an unknown cutoff. A cutoff just
+/// before a tied observation is ambiguous too: that later-listed event may have
+/// happened first. This checks ordering only; callers also need exact source
+/// bytes and suitable fidelity.
+pub fn require_unambiguous_order_through(
+    fixture: &Fixture,
+    cutoff: u64,
+) -> Result<(), ValidationError> {
+    require_known_cutoff(fixture, cutoff)?;
+    for observation in fixture
+        .observations
+        .iter()
+        .filter(|item| item.sequence <= cutoff)
+    {
+        if observation.ambiguous_order_with_previous {
+            return Err(ValidationError::AmbiguousCausalOrder(observation.sequence));
+        }
+    }
+    if let Some(next) = usize::try_from(cutoff)
+        .ok()
+        .and_then(|index| fixture.observations.get(index))
+        && next.ambiguous_order_with_previous
+    {
+        return Err(ValidationError::AmbiguousCausalOrder(next.sequence));
+    }
+    Ok(())
+}
+
+fn require_known_cutoff(fixture: &Fixture, cutoff: u64) -> Result<(), ValidationError> {
+    if cutoff == 0
+        || usize::try_from(cutoff).map_or(true, |index| index > fixture.observations.len())
+    {
+        return Err(ValidationError::UnknownCutoff(cutoff));
+    }
+    Ok(())
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if requires a borrowed value"
+)]
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// Checks the integrity and temporal invariants required by a fixture.
@@ -540,8 +640,9 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
         return Err(ValidationError::UnsupportedSchema(fixture.schema.clone()));
     }
 
-    parse_timestamp(&fixture.capture.captured_at)?;
+    let captured_at = parse_timestamp(&fixture.capture.captured_at)?;
     let mut last_time = None;
+    let mut version_ids = HashSet::new();
     for (expected, observation) in (1_u64..).zip(&fixture.observations) {
         if observation.sequence != expected {
             return Err(ValidationError::ObservationSequence {
@@ -561,9 +662,30 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
             return Err(ValidationError::InvalidBodyCapture(observation.sequence));
         }
         let occurred_at = parse_timestamp(&observation.occurred_at)?;
-        parse_timestamp(&observation.created_at)?;
+        let created_at = parse_timestamp(&observation.created_at)?;
+        if occurred_at < created_at {
+            return Err(ValidationError::ObservationBeforeCreation(
+                observation.sequence,
+            ));
+        }
+        if occurred_at > captured_at {
+            return Err(ValidationError::ObservationAfterCapture(
+                observation.sequence,
+            ));
+        }
+        if !version_ids.insert(observation.version_id.as_str()) {
+            return Err(ValidationError::DuplicateVersionIdentity(
+                observation.sequence,
+            ));
+        }
         if last_time.is_some_and(|time| occurred_at < time) {
             return Err(ValidationError::CausalOrder(observation.sequence));
+        }
+        let tied = last_time.is_some_and(|time| occurred_at == time);
+        if observation.ambiguous_order_with_previous
+            != (tied && matches!(fixture.origin, Origin::Natural))
+        {
+            return Err(ValidationError::InvalidOrderingClaim(observation.sequence));
         }
         last_time = Some(occurred_at);
     }
@@ -592,6 +714,7 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
     }
 
     let last_observation = fixture.observations.last().map_or(0, |item| item.sequence);
+    let mut gold_cutoffs = HashSet::new();
     for state in &fixture.gold_states {
         if state.source_observation_cutoff == 0
             || state.source_observation_cutoff > last_observation
@@ -600,8 +723,17 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
                 state.source_observation_cutoff,
             ));
         }
+        if !gold_cutoffs.insert(state.source_observation_cutoff) {
+            return Err(ValidationError::DuplicateGoldCutoff(
+                state.source_observation_cutoff,
+            ));
+        }
 
+        let mut keys = HashSet::new();
         for object in &state.objects {
+            if !keys.insert(object.key.as_str()) {
+                return Err(ValidationError::DuplicateGoldObject(object.key.clone()));
+            }
             for support_observation in object.evidence.iter().map(|item| &item.observation) {
                 if *support_observation == 0 || *support_observation > last_observation {
                     return Err(ValidationError::UnknownSupport {
@@ -618,11 +750,6 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
                 }
             }
         }
-        let keys: HashSet<_> = state
-            .objects
-            .iter()
-            .map(|object| object.key.as_str())
-            .collect();
         for relation in &state.relations {
             for key in [&relation.from, &relation.to] {
                 if !keys.contains(key.as_str()) {

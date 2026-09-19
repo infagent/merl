@@ -20,12 +20,13 @@
           "createdAt": "2026-01-01T09:00:00Z",
           "updatedAt": "2026-01-01T11:00:00Z",
           "lastEditedAt": "2026-01-01T11:00:00Z",
+          "includesCreatedEdit": false,
           "userContentEdits": {"nodes": [
             {"id": "edit-1", "editedAt": "2026-01-01T11:00:00Z", "editor": {"id": "user-2", "login": "maintainer"}, "diff": "@@ -1 +1 @@", "deletedAt": null}
           ], "pageInfo": {"hasNextPage": false}},
           "comments": {
             "nodes": [
-              {"id": "comment-1", "author": {"id": "user-3", "login": "reviewer"}, "body": "What gain?", "createdAt": "2026-01-01T10:00:00Z", "updatedAt": "2026-01-01T10:00:00Z", "lastEditedAt": null, "userContentEdits": {"nodes": [], "pageInfo": {"hasNextPage": false}}}
+              {"id": "comment-1", "author": {"id": "user-3", "login": "reviewer"}, "body": "What gain?", "createdAt": "2026-01-01T10:00:00Z", "updatedAt": "2026-01-01T10:00:00Z", "lastEditedAt": null, "includesCreatedEdit": true, "userContentEdits": {"nodes": [{"id": "comment-1-created", "editedAt": "2026-01-01T10:00:00Z", "editor": {"id": "user-3", "login": "reviewer"}, "diff": null, "deletedAt": null}], "pageInfo": {"hasNextPage": false}}}
             ],
             "pageInfo": {"hasNextPage": true, "endCursor": "cursor-1"}
           }
@@ -54,12 +55,13 @@
           "createdAt": "2026-01-01T09:00:00Z",
           "updatedAt": "2026-01-01T11:00:00Z",
           "lastEditedAt": "2026-01-01T11:00:00Z",
+          "includesCreatedEdit": false,
           "userContentEdits": {"nodes": [
             {"id": "edit-1", "editedAt": "2026-01-01T11:00:00Z", "editor": {"id": "user-2", "login": "maintainer"}, "diff": "@@ -1 +1 @@", "deletedAt": null}
           ], "pageInfo": {"hasNextPage": false}},
           "comments": {
             "nodes": [
-              {"id": "comment-2", "author": {"id": "user-3", "login": "reviewer"}, "body": "Understood.", "createdAt": "2026-01-01T12:00:00Z", "updatedAt": "2026-01-01T12:00:00Z", "lastEditedAt": null, "userContentEdits": {"nodes": [], "pageInfo": {"hasNextPage": false}}}
+              {"id": "comment-2", "author": {"id": "user-3", "login": "reviewer"}, "body": "Understood.", "createdAt": "2026-01-01T12:00:00Z", "updatedAt": "2026-01-01T12:00:00Z", "lastEditedAt": null, "includesCreatedEdit": false, "userContentEdits": {"nodes": [], "pageInfo": {"hasNextPage": false}}}
             ],
             "pageInfo": {"hasNextPage": false, "endCursor": "cursor-2"}
           }

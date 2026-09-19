@@ -18,8 +18,9 @@ Usage:
   corpus validate <fixture>...
   corpus capture-github <fixture-id> <owner/repository> <issue-number> <captured-at> <output>
 
-The capture command requires an authenticated GitHub CLI. captured-at must be
-an RFC 3339 timestamp supplied by the caller so fixture creation is explicit.
+The capture command requires a separately installed GitHub CLI (gh).
+Authenticate with gh auth login or supply GH_TOKEN. captured-at must be an
+RFC 3339 timestamp supplied by the caller so fixture creation is explicit.
 ";
 
 const ISSUE_QUERY: &str = r"
@@ -29,7 +30,7 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
     nameWithOwner
     licenseInfo { spdxId }
     issue(number: $number) {
-      id number title state closedAt url body createdAt updatedAt lastEditedAt
+      id number title state closedAt url body createdAt updatedAt lastEditedAt includesCreatedEdit
       labels(first: 100) { nodes { name } }
       assignees(first: 100) { nodes { id login } }
       milestone { title }
@@ -40,7 +41,7 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
       }
       comments(first: 100, after: $endCursor) {
         nodes {
-          id body createdAt updatedAt lastEditedAt
+          id body createdAt updatedAt lastEditedAt includesCreatedEdit
           author { login ... on Node { id } }
           userContentEdits(first: 100) {
             nodes { id editedAt editor { login ... on Node { id } } diff deletedAt }

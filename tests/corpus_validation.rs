@@ -19,3 +19,14 @@ fn gold_state_cannot_use_an_observation_from_its_future() {
         .add_support("gain-fixed-20db", 4)
         .then_rejected_as_future_information();
 }
+
+#[test]
+fn fixture_rejects_temporal_and_identity_ambiguity() {
+    CorpusFixture::from_json(include_str!("../corpus/development/DEV-C1.json"))
+        .given_valid_fixture()
+        .rejects_observation_before_creation()
+        .rejects_observation_after_capture()
+        .rejects_duplicate_source_version()
+        .rejects_duplicate_gold_cutoff()
+        .rejects_duplicate_gold_object();
+}

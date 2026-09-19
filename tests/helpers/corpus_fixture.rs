@@ -1,5 +1,6 @@
 use corpus::fixture::{
-    EvidenceRole, Fixture, ObjectLifecycle, RelationKind, SupportStatus, ValidationError, validate,
+    EvidenceRole, Fixture, ObjectLifecycle, RelationKind, SupportStatus, ValidationError,
+    source_digest, validate,
 };
 
 pub struct CorpusFixture {
@@ -139,4 +140,67 @@ impl CorpusFixture {
             })
         );
     }
+
+    pub fn rejects_observation_before_creation(self) -> Self {
+        let mut changed = self.fixture.clone();
+        "2025-12-31T09:00:00Z".clone_into(&mut changed.observations[0].occurred_at);
+        refresh_digest(&mut changed);
+        assert_eq!(
+            validate(&changed),
+            Err(ValidationError::ObservationBeforeCreation(1))
+        );
+        self
+    }
+
+    pub fn rejects_observation_after_capture(self) -> Self {
+        let mut changed = self.fixture.clone();
+        "2026-09-19T00:00:00Z".clone_into(&mut changed.observations[3].occurred_at);
+        refresh_digest(&mut changed);
+        assert_eq!(
+            validate(&changed),
+            Err(ValidationError::ObservationAfterCapture(4))
+        );
+        self
+    }
+
+    pub fn rejects_duplicate_source_version(self) -> Self {
+        let mut changed = self.fixture.clone();
+        let (first, rest) = changed.observations.split_at_mut(1);
+        rest[0].provider_id.clone_from(&first[0].provider_id);
+        rest[0].version_id.clone_from(&first[0].version_id);
+        changed.observations[1].supersedes = Some(1);
+        refresh_digest(&mut changed);
+        assert_eq!(
+            validate(&changed),
+            Err(ValidationError::DuplicateVersionIdentity(2))
+        );
+        self
+    }
+
+    pub fn rejects_duplicate_gold_cutoff(self) -> Self {
+        let mut changed = self.fixture.clone();
+        changed.gold_states.push(changed.gold_states[0].clone());
+        assert_eq!(
+            validate(&changed),
+            Err(ValidationError::DuplicateGoldCutoff(1))
+        );
+        self
+    }
+
+    pub fn rejects_duplicate_gold_object(self) {
+        let mut changed = self.fixture.clone();
+        let duplicate = changed.gold_states[0].objects[0].clone();
+        changed.gold_states[0].objects.push(duplicate);
+        assert_eq!(
+            validate(&changed),
+            Err(ValidationError::DuplicateGoldObject(
+                "gain-strategy".to_owned()
+            ))
+        );
+    }
+}
+
+fn refresh_digest(fixture: &mut Fixture) {
+    fixture.capture.source_sha256 =
+        source_digest(&fixture.provider_snapshot, &fixture.observations);
 }

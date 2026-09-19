@@ -44,6 +44,7 @@ pub fn fixture_from_graphql_pages(
         &issue.created_at,
         &issue.updated_at,
         issue.last_edited_at.as_deref(),
+        issue.includes_created_edit,
         &issue.user_content_edits.nodes,
     )?;
     if issue.user_content_edits.page_info.has_next_page {
@@ -74,6 +75,7 @@ pub fn fixture_from_graphql_pages(
                 &comment.created_at,
                 &comment.updated_at,
                 comment.last_edited_at.as_deref(),
+                comment.includes_created_edit,
                 &comment.user_content_edits.nodes,
             )?;
             if comment.user_content_edits.page_info.has_next_page {
@@ -85,16 +87,24 @@ pub fn fixture_from_graphql_pages(
         }
     }
 
-    observations.sort_by(|left, right| {
-        (&left.occurred_at, &left.provider_id, &left.version_id).cmp(&(
-            &right.occurred_at,
-            &right.provider_id,
-            &right.version_id,
-        ))
-    });
+    // Stable sorting keeps provider connection order for ties without treating
+    // an identifier as a causal clock. The tie remains ambiguous for replay.
+    let mut timed_observations: Vec<_> = observations
+        .into_iter()
+        .map(|item| timestamp(&item.occurred_at).map(|time| (time, item)))
+        .collect::<Result<_, _>>()?;
+    timed_observations.sort_by_key(|(time, _)| *time);
+    let mut observations: Vec<_> = timed_observations
+        .into_iter()
+        .map(|(_, item)| item)
+        .collect();
     let mut previous = std::collections::HashMap::new();
+    let mut prior_time = None;
     for (index, observation) in observations.iter_mut().enumerate() {
         observation.sequence = index as u64 + 1;
+        let occurred = timestamp(&observation.occurred_at)?;
+        observation.ambiguous_order_with_previous = prior_time == Some(occurred);
+        prior_time = Some(occurred);
         observation.supersedes =
             previous.insert(observation.provider_id.clone(), observation.sequence);
     }
@@ -159,6 +169,10 @@ pub fn fixture_from_graphql_pages(
     clippy::too_many_arguments,
     reason = "provider content fields remain explicit at the capture boundary"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "a source entity and its edits are captured as one unit"
+)]
 fn add_versions(
     observations: &mut Vec<Observation>,
     kind: ObservationKind,
@@ -168,6 +182,7 @@ fn add_versions(
     created_at: &str,
     updated_at: &str,
     last_edited_at: Option<&str>,
+    includes_created_edit: bool,
     edits: &[GraphqlEdit],
 ) -> Result<(), String> {
     let created = timestamp(created_at)?;
@@ -181,13 +196,12 @@ fn add_versions(
             "{entity_id} last edit is outside creation/update interval"
         ));
     }
-    let mut sorted_edits: Vec<_> = edits.iter().collect();
-    sorted_edits
-        .sort_by(|left, right| (&left.edited_at, &left.id).cmp(&(&right.edited_at, &right.id)));
-    let latest_edit_time = sorted_edits
-        .last()
-        .map(|edit| timestamp(&edit.edited_at))
-        .transpose()?;
+    let mut sorted_edits: Vec<_> = edits
+        .iter()
+        .map(|edit| timestamp(&edit.edited_at).map(|time| (time, edit)))
+        .collect::<Result<_, _>>()?;
+    sorted_edits.sort_by_key(|(time, _)| *time);
+    let latest_edit_time = sorted_edits.last().map(|(time, _)| *time);
     if latest_edit_time.is_some_and(|edit_time| edit_time > updated || edit_time < created) {
         return Err(format!(
             "{entity_id} edit time is outside creation/update interval"
@@ -201,25 +215,38 @@ fn add_versions(
             "{entity_id} lastEditedAt precedes retained edit history"
         ));
     }
-    let has_edits = !sorted_edits.is_empty() || last_edit.is_some();
+    let created_edit = if includes_created_edit {
+        if sorted_edits.first().map(|(time, _)| *time) != Some(created) {
+            return Err(format!(
+                "{entity_id} claims a creation edit without one at creation"
+            ));
+        }
+        Some(sorted_edits.remove(0).1)
+    } else {
+        None
+    };
+    let has_later_edits = !sorted_edits.is_empty() || last_edit.is_some_and(|time| time > created);
     let author = author.map(ActorRef::from);
     observations.push(observation(
         kind,
         entity_id,
-        format!("{entity_id}:initial"),
+        created_edit.map_or_else(|| format!("{entity_id}:initial"), |edit| edit.id.clone()),
         author.clone(),
         created_at,
         created_at,
-        if has_edits { None } else { Some(terminal_body) },
-        if has_edits {
+        if has_later_edits {
+            None
+        } else {
+            Some(terminal_body)
+        },
+        if has_later_edits {
             Some(MissingBodyReason::PriorVersionUnavailable)
         } else {
             None
         },
-        None,
+        created_edit.map(content_edit),
     ));
-    for (index, edit) in sorted_edits.iter().enumerate() {
-        timestamp(&edit.edited_at)?;
+    for (index, (_, edit)) in sorted_edits.iter().enumerate() {
         let is_last = index + 1 == sorted_edits.len();
         let terminal_at_this_edit = is_last
             && edit.deleted_at.is_none()
@@ -243,17 +270,12 @@ fn add_versions(
             } else {
                 Some(MissingBodyReason::PriorVersionUnavailable)
             },
-            Some(ContentEdit {
-                provider_id: edit.id.clone(),
-                editor: edit.editor.as_ref().map(ActorRef::from),
-                edited_at: edit.edited_at.clone(),
-                diff: edit.diff.clone(),
-                deleted_at: edit.deleted_at.clone(),
-            }),
+            Some(content_edit(edit)),
         ));
     }
-    if last_edit.is_some_and(|reported| latest_edit_time.is_none_or(|recorded| reported > recorded))
-        && let Some(edited_at) = last_edited_at
+    if last_edit.is_some_and(|reported| {
+        reported > created && latest_edit_time.is_none_or(|recorded| reported > recorded)
+    }) && let Some(edited_at) = last_edited_at
     {
         observations.push(observation(
             kind,
@@ -269,6 +291,16 @@ fn add_versions(
     }
     // updatedAt may reflect metadata changes; lastEditedAt locates body changes.
     Ok(())
+}
+
+fn content_edit(edit: &GraphqlEdit) -> ContentEdit {
+    ContentEdit {
+        provider_id: edit.id.clone(),
+        editor: edit.editor.as_ref().map(ActorRef::from),
+        edited_at: edit.edited_at.clone(),
+        diff: edit.diff.clone(),
+        deleted_at: edit.deleted_at.clone(),
+    }
 }
 
 #[expect(
@@ -292,6 +324,7 @@ fn observation(
         provider_id: provider_id.to_owned(),
         version_id,
         supersedes: None,
+        ambiguous_order_with_previous: false,
         author,
         occurred_at: occurred_at.to_owned(),
         created_at: created_at.to_owned(),
@@ -345,6 +378,7 @@ struct GraphqlIssue {
     created_at: String,
     updated_at: String,
     last_edited_at: Option<String>,
+    includes_created_edit: bool,
     user_content_edits: GraphqlEdits,
     comments: GraphqlComments,
 }
@@ -377,6 +411,7 @@ struct GraphqlComment {
     created_at: String,
     updated_at: String,
     last_edited_at: Option<String>,
+    includes_created_edit: bool,
     user_content_edits: GraphqlEdits,
 }
 #[derive(Debug, Deserialize)]

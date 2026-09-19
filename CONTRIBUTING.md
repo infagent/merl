@@ -52,6 +52,8 @@ cargo test --locked --workspace --all-features
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
 ```
 
+If you are capturing GitHub fixtures, install and authenticate `gh` separately. See the [corpus capture instructions](docs/evaluation-corpus.md#capture-dependency). Ordinary builds and tests do not require it.
+
 Repository-specific engineering rules live in [AGENTS.md](AGENTS.md). They apply to human- and agent-authored changes alike.
 
 ## Open a pull request
