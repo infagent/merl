@@ -23,7 +23,7 @@ Use red-green-refactor:
 3. Add the smallest implementation that makes it pass.
 4. Refactor while the tests stay green.
 
-Test through public boundaries. Prefer a CLI invocation, public Rust API, or other user-visible seam over a private function or SQLite table. A refactor should not require test changes unless behavior changes.
+Test through public boundaries. Prefer a CLI invocation, public Rust API, or other user-visible seam over a private function or SQLite table. Once a behavior test expresses the expected outcome, treat that scenario as frozen through red-green-refactor. Implementation work may require a small change inside the test DSL, but should almost never require rewriting the scenario or its expectation. Change the test itself when the agreed behavior changes, not to make an implementation pass.
 
 Write acceptance tests so a non-developer can understand the rule they protect. Gherkin is welcome. A small domain-specific test language is also fine when it reads more clearly and keeps implementation details out of the scenario. Use `Given`, `When`, and `Then` to describe state and outcomes, not setup mechanics.
 
