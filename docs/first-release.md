@@ -60,6 +60,7 @@ flowchart TB
 The slice performs these actions:
 
 1. Capture one Issue description, its comments, and edits as immutable source metadata with separately erasable content.
+   An offline fixture may contain only the provider's terminal Issue snapshot. In that case, Merl records the snapshot at capture time; it does not invent earlier provider-state transitions.
 2. Replay those observations sequentially. Build each bounded compiler context from state available at its `interpretation_basis_revision`, a recent source window ending at `source_observation_cutoff`, relevant unresolved objects, and the triggering event.
 3. Record the exact context manifest, cutoff, renderer version, selection policy, object revisions, rendered-input hash, and input and output budgets.
 4. Validate a bounded structured compiler response, then store its assertions without granting them authority.
@@ -142,6 +143,7 @@ The release is ready when:
 - accepted-object lifecycle and evidence-support status remain separate while revalidation is pending;
 - cosmetic and material edits exercise policy paths that respectively retain current support or supersede, weaken, or invalidate it;
 - GitHub owns mirrored fields such as open or closed state, labels, and provider timestamps;
+- the offline corpus importer uses a fixed `fixture_import_v1` capture policy (`eager`, `required`) for every source version. Its `SourceBinding` record identifies the provider namespace; it does not yet select a general binding policy. That selection arrives with the compiler work;
 - Merl owns derived fields such as requirements, blockers, decisions, and research claims;
 - a Merl command cannot report a provider-owned field changed until GitHub reports that change;
 - a trusted provider observation follows deterministic policy, advances the same project revision as semantic changes, and appears through the same delta and inbox cursor;

@@ -5,8 +5,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::fixture::{
     ActorRef, Capture, ContentEdit, FIXTURE_SCHEMA, Fixture, HistoryFidelity, MissingBodyReason,
-    Observation, ObservationKind, Origin, Partition, Provenance, ProviderSnapshot,
-    RedistributionReview, Source, body_digest, source_digest, validate,
+    Observation, ObservationKind, Origin, Partition, Provenance, ProviderLabelRef,
+    ProviderSnapshot, RedistributionReview, Source, body_digest, source_digest, validate,
 };
 
 /// Parse captured GraphQL pages and preserve missing prior edit bodies as gaps.
@@ -61,6 +61,9 @@ pub fn fixture_from_graphql_pages(
             .ok_or("GitHub pagination lost Issue")?;
         if page_issue.id != issue.id || page.data.repository.id != repository.id {
             return Err("GitHub pagination changed source identity".to_owned());
+        }
+        if page_issue.updated_at != issue.updated_at {
+            return Err("GitHub Issue changed during pagination; capture it again".to_owned());
         }
         if page_issue.labels.page_info.has_next_page {
             return Err("Issue labels snapshot is incomplete".to_owned());
@@ -118,12 +121,22 @@ pub fn fixture_from_graphql_pages(
     let provider_snapshot = ProviderSnapshot {
         title: issue.title.clone(),
         state: issue.state.clone(),
+        updated_at: Some(issue.updated_at.clone()),
         closed_at: issue.closed_at.clone(),
         labels: issue
             .labels
             .nodes
             .iter()
             .map(|label| label.name.clone())
+            .collect(),
+        label_refs: issue
+            .labels
+            .nodes
+            .iter()
+            .map(|label| ProviderLabelRef {
+                provider_id: label.id.clone(),
+                name: label.name.clone(),
+            })
             .collect(),
         assignees: issue.assignees.nodes.iter().map(ActorRef::from).collect(),
         milestone: issue
@@ -191,6 +204,7 @@ fn add_versions(
     includes_created_edit: bool,
     edits: &[GraphqlEdit],
 ) -> Result<(), String> {
+    let first_version_index = observations.len();
     let created = timestamp(created_at)?;
     let updated = timestamp(updated_at)?;
     if updated < created {
@@ -295,7 +309,12 @@ fn add_versions(
             None,
         ));
     }
-    // updatedAt may reflect metadata changes; lastEditedAt locates body changes.
+    // GitHub exposes the current entity update time, not the timestamp of
+    // each historical body version. Earlier versions keep that field unknown.
+    observations[first_version_index..]
+        .last_mut()
+        .expect("add_versions always captures an initial version")
+        .updated_at = Some(updated_at.to_owned());
     Ok(())
 }
 
@@ -334,6 +353,7 @@ fn observation(
         author,
         occurred_at: occurred_at.to_owned(),
         created_at: created_at.to_owned(),
+        updated_at: None,
         body: body.map(str::to_owned),
         body_sha256: body.map(body_digest),
         missing_body_reason,
@@ -396,6 +416,7 @@ struct GraphqlLabels {
 }
 #[derive(Debug, Deserialize)]
 struct GraphqlLabel {
+    id: String,
     name: String,
 }
 #[derive(Debug, Deserialize)]

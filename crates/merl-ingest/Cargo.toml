@@ -1,5 +1,5 @@
 [package]
-name = "merl-cli"
+name = "merl-ingest"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -10,9 +10,10 @@ publish = false
 [dependencies]
 merl-core = { path = "../merl-core" }
 merl-corpus = { path = "../merl-corpus" }
-merl-ingest = { path = "../merl-ingest" }
 merl-store = { path = "../merl-store" }
+sha2.workspace = true
 serde_json.workspace = true
+time.workspace = true
 
 [lints]
 workspace = true

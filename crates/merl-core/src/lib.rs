@@ -88,6 +88,87 @@ identifier!(
     SourceVersionId,
     "The stable identity of one immutable source version."
 );
+identifier!(
+    SourceBindingId,
+    "The project-specific identity of one attached source namespace."
+);
+identifier!(
+    SourceKind,
+    "A bounded source classification, such as `issue_comment`."
+);
+identifier!(SourceProvider, "A bounded provider name, such as `github`.");
+identifier!(
+    CapturePolicyVersion,
+    "The version of the binding policy effective at source capture."
+);
+
+/// Whether capture schedules semantic extraction from prose.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompilationMode {
+    /// Keep the source cold until an authorized later action selects it.
+    CaptureOnly,
+    /// Compile only after an explicit authorized request.
+    OnDemand,
+    /// Schedule compilation after capture.
+    Eager,
+}
+
+impl CompilationMode {
+    /// Returns the bounded value stored with an immutable source capture.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CaptureOnly => "capture_only",
+            Self::OnDemand => "on_demand",
+            Self::Eager => "eager",
+        }
+    }
+}
+
+impl TryFrom<&str> for CompilationMode {
+    type Error = InvalidIdentifier;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "capture_only" => Ok(Self::CaptureOnly),
+            "on_demand" => Ok(Self::OnDemand),
+            "eager" => Ok(Self::Eager),
+            _ => Err(InvalidIdentifier),
+        }
+    }
+}
+
+/// Whether an unprocessed source leaves a semantic-coverage gap.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CoverageRequirement {
+    /// Processing is needed before claiming semantic completeness.
+    Required,
+    /// Retain the source without weakening completeness.
+    Optional,
+}
+
+impl CoverageRequirement {
+    /// Returns the bounded value stored with an immutable source capture.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Required => "required",
+            Self::Optional => "optional",
+        }
+    }
+}
+
+impl TryFrom<&str> for CoverageRequirement {
+    type Error = InvalidIdentifier;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "required" => Ok(Self::Required),
+            "optional" => Ok(Self::Optional),
+            _ => Err(InvalidIdentifier),
+        }
+    }
+}
 identifier!(PolicyInputId, "The identity of one immutable policy input.");
 
 /// A project-scoped link between two accepted objects.
@@ -125,6 +206,63 @@ pub enum PolicyInput {
     ProviderObservation(PolicyInputId),
     /// An authorized maintenance action, including future purge operations.
     AdministrativeAction(PolicyInputId),
+}
+
+/// Provider-owned Issue state observed through an attached source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderIssueState {
+    /// The provider reports the Issue as open.
+    Open,
+    /// The provider reports the Issue as closed.
+    Closed,
+}
+
+impl ProviderIssueState {
+    /// Returns the bounded value used in structural provider records.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Closed => "closed",
+        }
+    }
+}
+
+impl TryFrom<&str> for ProviderIssueState {
+    type Error = InvalidIdentifier;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "open" => Ok(Self::Open),
+            "closed" => Ok(Self::Closed),
+            _ => Err(InvalidIdentifier),
+        }
+    }
+}
+
+/// A typed provider fact proposed for deterministic acceptance.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderObservation {
+    /// Stable identity of the policy input.
+    pub id: PolicyInputId,
+    /// Project binding through which the provider fact arrived.
+    pub binding: SourceBindingId,
+    /// Provider-backed Issue mirror affected by the observation.
+    pub issue: ObjectId,
+    /// Provider-owned open or closed state.
+    pub state: ProviderIssueState,
+    /// Provider update time, independent of the local poll time.
+    pub upstream_updated_at_millis: Option<i64>,
+    /// Provider close time, if the Issue is closed.
+    pub closed_at_millis: Option<i64>,
+    /// Stable provider node IDs of current labels, or `None` for an older capture without IDs.
+    pub label_provider_ids: Option<Vec<String>>,
+    /// Stable provider node IDs of current assignees, or `None` when identity was unavailable.
+    pub assignee_provider_ids: Option<Vec<String>>,
+    /// Protected snapshot payload containing display names and prose.
+    pub snapshot_payload: PayloadId,
+    /// Time the authority observed this provider snapshot.
+    pub observed_at_millis: i64,
 }
 
 /// Monotonic sequence of accepted batches within one project.

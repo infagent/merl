@@ -135,6 +135,65 @@ impl GithubCapture {
         self
     }
 
+    pub fn then_uses_the_new_schema(self) -> Self {
+        assert_eq!(self.fixture().schema, "merl.corpus-fixture/v2");
+        self
+    }
+
+    pub fn when_read_as_a_legacy_capture(mut self) -> Self {
+        let fixture = self.fixture.as_mut().expect("capture should run first");
+        "merl.corpus-fixture/v1".clone_into(&mut fixture.schema);
+        fixture.provider_snapshot.updated_at = None;
+        fixture.provider_snapshot.label_refs.clear();
+        for observation in &mut fixture.observations {
+            observation.updated_at = None;
+        }
+        fixture.capture.source_sha256 =
+            source_digest(&fixture.provider_snapshot, &fixture.observations);
+        self
+    }
+
+    pub fn then_remains_valid_without_new_provider_facts(self) -> Self {
+        validate(self.fixture()).expect("the old schema remains readable");
+        self
+    }
+
+    pub fn then_does_not_invent_missing_provider_facts(self) -> Self {
+        let fixture = self.fixture();
+        let project = merl_core::ProjectId::try_from("legacy").expect("project ID");
+        let mut store = merl_store::Store::open_in_memory().expect("store");
+        store.create_project(&project).expect("project");
+        merl_ingest::import_fixture(&mut store, &project, fixture).expect("legacy import");
+        let issue = merl_ingest::fixture_issue_id(fixture).expect("Issue ID");
+        let head = store
+            .provider_issue_head(&project, &issue)
+            .expect("provider head")
+            .expect("accepted observation");
+        assert_eq!(head.input.upstream_updated_at_millis, None);
+        assert_eq!(head.input.label_provider_ids, None);
+        assert_eq!(
+            head.input.assignee_provider_ids,
+            Some(vec!["user-2".to_owned()])
+        );
+        for sequence in 1..=4 {
+            let version = store
+                .source_version_at(&project, sequence)
+                .expect("source lookup")
+                .expect("legacy version");
+            assert_eq!(version.upstream_updated_at_millis, None);
+        }
+        self
+    }
+
+    pub fn then_cannot_claim_the_new_schema_without_them(self) {
+        let mut fixture = self.fixture().clone();
+        "merl.corpus-fixture/v2".clone_into(&mut fixture.schema);
+        assert_eq!(
+            validate(&fixture),
+            Err(ValidationError::InvalidProviderSnapshot)
+        );
+    }
+
     pub fn then_rejects_exact_replay_across_the_gap(self) {
         assert_eq!(
             require_exact_source_bodies_through(self.fixture(), 2),

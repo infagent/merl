@@ -76,6 +76,14 @@ merl help session checkpoint --format json
 
 Top-level help lists command groups, not every flag and example. Subcommand help describes arguments, outcomes, error codes, examples, and related commands. JSON help uses a versioned schema so an agent can inspect one operation without loading the whole command surface.
 
+Import a development fixture without GitHub credentials:
+
+```bash
+merl issue import-fixture --project project-a --database project.sqlite --fixture issue.json --format json
+```
+
+It reports the number of new source versions, the observation head, and the accepted revision. A repeat import does not create another observation or accepted provider snapshot. The fixture's terminal provider facts enter at capture time; Merl does not place them at earlier historical cutoffs.
+
 With `--format json`, every command returns one result envelope. The envelope identifies the schema, action, outcome, project, accepted revision if one exists, affected objects, warnings, and error details. For example:
 
 ```json

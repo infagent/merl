@@ -330,6 +330,8 @@ Policy applies authority as well as confidence. Merl may accept a deterministic 
 
 Trusted provider facts follow a deterministic policy path. For example, an authenticated GitHub observation that an Issue is closed requires provenance and monotonic-version checks, not model interpretation. The accepted `provider_issue_state_observed` event updates the provider mirror, advances the same project revision used by semantic changes, and reaches agents through the normal delta and inbox path.
 
+If a later poll confirms the same provider facts, Merl updates the mirror's last-seen time without advancing the project revision. A different snapshot observed before that last-seen time cannot replace the current mirror.
+
 Replay and evaluation results do not enter accepted state on their own. Promotion creates a new policy evaluation against current state. The original inputs remain unchanged.
 
 ### Actors and commands
@@ -857,6 +859,7 @@ crates/
   merl-corpus      evaluation fixture capture and validation
   merl-core        IDs, events, objects, relations, policies, transitions
   merl-store       persistence interfaces, SQLite, migrations, replay
+  merl-ingest      offline source-version import and provider snapshots
   merl-compiler    compiler protocol and deterministic extraction
   merl-daemon      project authority, ingestion, subscriptions, dispatch
   merl-client      authority client, local cache, pending commands
