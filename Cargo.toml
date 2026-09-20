@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/merl-corpus", "crates/merl-core", "crates/merl-store", "crates/merl-cli"]
+members = ["crates/merl-corpus", "crates/merl-core", "crates/merl-store", "crates/merl-cli", "crates/merl-ingest"]
 
 [workspace.package]
 edition = "2024"
@@ -40,6 +40,7 @@ merl-corpus = { path = "crates/merl-corpus" }
 serde_json.workspace = true
 merl-core = { path = "crates/merl-core" }
 merl-store = { path = "crates/merl-store" }
+merl-ingest = { path = "crates/merl-ingest" }
 
 [lints]
 workspace = true

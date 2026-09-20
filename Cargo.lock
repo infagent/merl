@@ -186,6 +186,7 @@ dependencies = [
  "merl-cli",
  "merl-core",
  "merl-corpus",
+ "merl-ingest",
  "merl-store",
  "serde_json",
 ]
@@ -195,6 +196,8 @@ name = "merl-cli"
 version = "0.1.0"
 dependencies = [
  "merl-core",
+ "merl-corpus",
+ "merl-ingest",
  "merl-store",
  "serde_json",
 ]
@@ -208,6 +211,18 @@ name = "merl-corpus"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
+ "sha2",
+ "time",
+]
+
+[[package]]
+name = "merl-ingest"
+version = "0.1.0"
+dependencies = [
+ "merl-core",
+ "merl-corpus",
+ "merl-store",
  "serde_json",
  "sha2",
  "time",

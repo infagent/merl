@@ -60,6 +60,7 @@ flowchart TB
 The slice performs these actions:
 
 1. Capture one Issue description, its comments, and edits as immutable source metadata with separately erasable content.
+   An offline fixture may contain only the provider's terminal Issue snapshot. In that case, Merl records the snapshot at capture time; it does not invent earlier provider-state transitions.
 2. Replay those observations sequentially. Build each bounded compiler context from state available at its `interpretation_basis_revision`, a recent source window ending at `source_observation_cutoff`, relevant unresolved objects, and the triggering event.
 3. Record the exact context manifest, cutoff, renderer version, selection policy, object revisions, rendered-input hash, and input and output budgets.
 4. Validate a bounded structured compiler response, then store its assertions without granting them authority.
