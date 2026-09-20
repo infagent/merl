@@ -255,10 +255,10 @@ pub struct ProviderObservation {
     pub upstream_updated_at_millis: Option<i64>,
     /// Provider close time, if the Issue is closed.
     pub closed_at_millis: Option<i64>,
-    /// Stable provider node IDs of current labels.
-    pub label_provider_ids: Vec<String>,
-    /// Stable provider node IDs of current assignees.
-    pub assignee_provider_ids: Vec<String>,
+    /// Stable provider node IDs of current labels, or `None` for an older capture without IDs.
+    pub label_provider_ids: Option<Vec<String>>,
+    /// Stable provider node IDs of current assignees, or `None` when identity was unavailable.
+    pub assignee_provider_ids: Option<Vec<String>>,
     /// Protected snapshot payload containing display names and prose.
     pub snapshot_payload: PayloadId,
     /// Time the authority observed this provider snapshot.

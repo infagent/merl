@@ -57,6 +57,8 @@ CREATE TABLE provider_observations (
     issue_state TEXT NOT NULL CHECK (issue_state IN ('open', 'closed')),
     upstream_updated_at_millis INTEGER,
     closed_at_millis INTEGER,
+    label_ids_known INTEGER NOT NULL CHECK (label_ids_known IN (0, 1)),
+    assignee_ids_known INTEGER NOT NULL CHECK (assignee_ids_known IN (0, 1)),
     snapshot_payload_id TEXT NOT NULL,
     observed_at_millis INTEGER NOT NULL,
     accepted_batch_id TEXT NOT NULL,

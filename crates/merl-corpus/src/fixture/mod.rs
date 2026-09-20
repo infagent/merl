@@ -8,7 +8,12 @@ use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 /// Schema understood by this version of the corpus tooling.
-pub const FIXTURE_SCHEMA: &str = "merl.corpus-fixture/v1";
+/// Frozen corpus contract used by existing development and natural fixtures.
+pub const FIXTURE_SCHEMA_V1: &str = "merl.corpus-fixture/v1";
+/// Captures upstream update time and stable label and assignee identities.
+pub const FIXTURE_SCHEMA_V2: &str = "merl.corpus-fixture/v2";
+/// Schema emitted by new corpus captures.
+pub const FIXTURE_SCHEMA: &str = FIXTURE_SCHEMA_V2;
 
 /// A versioned evaluation fixture.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -744,44 +749,44 @@ fn is_false(value: &bool) -> bool {
     reason = "fixture integrity is checked as one public boundary"
 )]
 pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
-    if fixture.schema != FIXTURE_SCHEMA {
+    if fixture.schema != FIXTURE_SCHEMA_V1 && fixture.schema != FIXTURE_SCHEMA_V2 {
         return Err(ValidationError::UnsupportedSchema(fixture.schema.clone()));
     }
 
     let captured_at = parse_timestamp(&fixture.capture.captured_at)?;
     let snapshot = &fixture.provider_snapshot;
-    if snapshot
-        .updated_at
-        .as_deref()
-        .map(parse_timestamp)
-        .transpose()?
-        .is_some_and(|time| time > captured_at)
-        || snapshot
-            .closed_at
+    if fixture.schema == FIXTURE_SCHEMA_V2
+        && (snapshot
+            .updated_at
             .as_deref()
             .map(parse_timestamp)
             .transpose()?
             .is_some_and(|time| time > captured_at)
-        || (matches!(fixture.origin, Origin::Natural)
-            && (snapshot.updated_at.is_none()
-                || snapshot.labels.len() != snapshot.label_refs.len()
-                || snapshot
-                    .assignees
-                    .iter()
-                    .any(|actor| actor.provider_id.is_none())))
+            || snapshot
+                .closed_at
+                .as_deref()
+                .map(parse_timestamp)
+                .transpose()?
+                .is_some_and(|time| time > captured_at)
+            || (matches!(fixture.origin, Origin::Natural)
+                && (snapshot.updated_at.is_none()
+                    || snapshot.labels.len() != snapshot.label_refs.len()
+                    || snapshot
+                        .assignees
+                        .iter()
+                        .any(|actor| actor.provider_id.is_none()))))
     {
         return Err(ValidationError::InvalidProviderSnapshot);
     }
     let mut label_ids = HashSet::new();
-    if snapshot
-        .label_refs
-        .iter()
-        .any(|label| label.provider_id.is_empty() || !label_ids.insert(label.provider_id.as_str()))
-        || snapshot
+    if fixture.schema == FIXTURE_SCHEMA_V2
+        && (snapshot.label_refs.iter().any(|label| {
+            label.provider_id.is_empty() || !label_ids.insert(label.provider_id.as_str())
+        }) || snapshot
             .labels
             .iter()
             .zip(&snapshot.label_refs)
-            .any(|(name, label)| name != &label.name)
+            .any(|(name, label)| name != &label.name))
     {
         return Err(ValidationError::InvalidProviderSnapshot);
     }

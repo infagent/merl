@@ -6,62 +6,91 @@ use std::{
 
 #[test]
 fn an_issue_fixture_import_is_offline_and_retryable() {
-    let directory = TestDirectory::new();
-    let database = directory.path.join("project.sqlite");
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/development/DEV-C3.json");
+    CliIssueHistory::new()
+        .given_a_new_project()
+        .when_importing_an_issue()
+        .then_four_versions_are_captured()
+        .when_importing_the_same_issue_again()
+        .then_nothing_new_is_captured();
+}
 
-    let initialized = merl(&[
-        "project",
-        "init",
-        "--id",
-        "P1",
-        "--database",
-        path(&database),
-        "--json",
-    ]);
-    assert!(initialized.status.success());
+struct CliIssueHistory {
+    directory: TestDirectory,
+    latest: Option<serde_json::Value>,
+}
 
-    let first = merl(&[
-        "issue",
-        "import-fixture",
-        "--project",
-        "P1",
-        "--database",
-        path(&database),
-        "--fixture",
-        path(&fixture),
-        "--json",
-    ]);
-    assert!(
-        first.status.success(),
-        "{}",
-        String::from_utf8_lossy(&first.stderr)
-    );
-    let first: serde_json::Value = serde_json::from_slice(&first.stdout).expect("first result");
-    assert_eq!(first["action"], "issue.import-fixture");
-    assert_eq!(first["outcome"], "captured");
-    assert_eq!(first["captured"], 4);
-    assert_eq!(first["observation_head"], 4);
-    assert_eq!(first["revision"], 1);
+impl CliIssueHistory {
+    fn new() -> Self {
+        Self {
+            directory: TestDirectory::new(),
+            latest: None,
+        }
+    }
 
-    let repeated = merl(&[
-        "issue",
-        "import-fixture",
-        "--project",
-        "P1",
-        "--database",
-        path(&database),
-        "--fixture",
-        path(&fixture),
-        "--json",
-    ]);
-    assert!(repeated.status.success());
-    let repeated: serde_json::Value =
-        serde_json::from_slice(&repeated.stdout).expect("retry result");
-    assert_eq!(repeated["captured"], 0);
-    assert_eq!(repeated["outcome"], "unchanged");
-    assert_eq!(repeated["observation_head"], 4);
-    assert_eq!(repeated["revision"], 1);
+    fn database(&self) -> PathBuf {
+        self.directory.path.join("project.sqlite")
+    }
+
+    fn given_a_new_project(&mut self) -> &mut Self {
+        let database = self.database();
+        let initialized = merl(&[
+            "project",
+            "init",
+            "--id",
+            "P1",
+            "--database",
+            path(&database),
+            "--json",
+        ]);
+        assert!(initialized.status.success());
+        self
+    }
+
+    fn when_importing_an_issue(&mut self) -> &mut Self {
+        let database = self.database();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus/development/DEV-C3.json");
+        let output = merl(&[
+            "issue",
+            "import-fixture",
+            "--project",
+            "P1",
+            "--database",
+            path(&database),
+            "--fixture",
+            path(&fixture),
+            "--json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        self.latest = Some(serde_json::from_slice(&output.stdout).expect("import result"));
+        self
+    }
+
+    fn when_importing_the_same_issue_again(&mut self) -> &mut Self {
+        self.when_importing_an_issue()
+    }
+
+    fn then_four_versions_are_captured(&mut self) -> &mut Self {
+        let result = self.latest.as_ref().expect("import result");
+        assert_eq!(result["action"], "issue.import-fixture");
+        assert_eq!(result["outcome"], "captured");
+        assert_eq!(result["captured"], 4);
+        assert_eq!(result["observation_head"], 4);
+        assert_eq!(result["revision"], 1);
+        self
+    }
+
+    fn then_nothing_new_is_captured(&mut self) -> &mut Self {
+        let result = self.latest.as_ref().expect("import result");
+        assert_eq!(result["captured"], 0);
+        assert_eq!(result["outcome"], "unchanged");
+        assert_eq!(result["observation_head"], 4);
+        assert_eq!(result["revision"], 1);
+        self
+    }
 }
 
 fn merl(arguments: &[&str]) -> std::process::Output {

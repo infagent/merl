@@ -763,11 +763,12 @@ impl Store {
         project: &ProjectId,
         issue: &ObjectId,
     ) -> Result<Option<AcceptedProviderObservation>, StoreError> {
-        let row: Option<(String, String, String, String, Option<i64>, Option<i64>, i64, i64)> = self
+        let row: Option<(String, String, String, String, Option<i64>, Option<i64>, i64, i64, i64, i64)> = self
             .connection
             .query_row(
                 "SELECT o.id, o.binding_id, o.issue_state, o.snapshot_payload_id,
-                    o.upstream_updated_at_millis, o.closed_at_millis, o.observed_at_millis, b.revision
+                    o.upstream_updated_at_millis, o.closed_at_millis, o.observed_at_millis, b.revision,
+                    o.label_ids_known, o.assignee_ids_known
              FROM provider_issue_heads h
              JOIN provider_observations o
                ON o.project_id = h.project_id AND o.id = h.observation_id
@@ -785,6 +786,8 @@ impl Store {
                         row.get(5)?,
                         row.get(6)?,
                         row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
                     ))
                 },
             )
@@ -799,6 +802,8 @@ impl Store {
                 closed_at_millis,
                 observed_at_millis,
                 revision,
+                label_ids_known,
+                assignee_ids_known,
             )| {
                 let label_provider_ids = provider_fact_ids(
                     &self.connection,
@@ -814,6 +819,11 @@ impl Store {
                     project,
                     &id,
                 )?;
+                if (label_ids_known == 0 && !label_provider_ids.is_empty())
+                    || (assignee_ids_known == 0 && !assignee_provider_ids.is_empty())
+                {
+                    return Err(StoreError::CorruptHistory);
+                }
                 Ok(AcceptedProviderObservation {
                     input: ProviderObservation {
                         id: merl_core::PolicyInputId::try_from(id.as_str())
@@ -825,8 +835,9 @@ impl Store {
                             .map_err(|_| StoreError::CorruptHistory)?,
                         upstream_updated_at_millis,
                         closed_at_millis,
-                        label_provider_ids,
-                        assignee_provider_ids,
+                        label_provider_ids: (label_ids_known == 1).then_some(label_provider_ids),
+                        assignee_provider_ids: (assignee_ids_known == 1)
+                            .then_some(assignee_provider_ids),
                         snapshot_payload: PayloadId::try_from(payload.as_str())
                             .map_err(|_| StoreError::CorruptHistory)?,
                         observed_at_millis,
@@ -956,8 +967,7 @@ fn validate_provider_batch(
         || kind.as_str() != "provider_issue"
         || payload != &observation.snapshot_payload
         || batch.occurred_at_millis != observation.observed_at_millis
-        || observation.closed_at_millis.is_some()
-            != (observation.state == ProviderIssueState::Closed)
+        || (observation.state == ProviderIssueState::Open && observation.closed_at_millis.is_some())
         || observation
             .upstream_updated_at_millis
             .is_some_and(|updated| updated > observation.observed_at_millis)
@@ -967,10 +977,12 @@ fn validate_provider_batch(
         || observation
             .label_provider_ids
             .iter()
+            .flatten()
             .any(|id| !valid_provider_id(id))
         || observation
             .assignee_provider_ids
             .iter()
+            .flatten()
             .any(|id| !valid_provider_id(id))
     {
         return Err(StoreError::InvalidBatch);
@@ -980,7 +992,7 @@ fn validate_provider_batch(
         &observation.assignee_provider_ids,
     ] {
         let mut distinct = std::collections::HashSet::new();
-        if !ids.iter().all(|id| distinct.insert(id)) {
+        if !ids.iter().flatten().all(|id| distinct.insert(id)) {
             return Err(StoreError::InvalidBatch);
         }
     }
@@ -1004,6 +1016,7 @@ fn ensure_fresh_provider_observation(
         .optional()?;
     if prior.is_some_and(|(seen, updated)| {
         seen >= observation.observed_at_millis
+            || (updated.is_some() && observation.upstream_updated_at_millis.is_none())
             || updated
                 .zip(observation.upstream_updated_at_millis)
                 .is_some_and(|(previous, incoming)| incoming <= previous)
@@ -1022,8 +1035,9 @@ fn insert_provider_observation(
         "INSERT INTO provider_observations (
             project_id, id, binding_id, issue_id, issue_state,
             upstream_updated_at_millis, closed_at_millis,
+            label_ids_known, assignee_ids_known,
             snapshot_payload_id, observed_at_millis, accepted_batch_id
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             batch.project.as_str(),
             observation.id.as_str(),
@@ -1032,18 +1046,20 @@ fn insert_provider_observation(
             observation.state.as_str(),
             observation.upstream_updated_at_millis,
             observation.closed_at_millis,
+            i64::from(observation.label_provider_ids.is_some()),
+            i64::from(observation.assignee_provider_ids.is_some()),
             observation.snapshot_payload.as_str(),
             observation.observed_at_millis,
             batch.id.as_str()
         ],
     )?;
-    for label in &observation.label_provider_ids {
+    for label in observation.label_provider_ids.iter().flatten() {
         transaction.execute(
             "INSERT INTO provider_observation_labels (project_id, observation_id, provider_label_id) VALUES (?1, ?2, ?3)",
             params![batch.project.as_str(), observation.id.as_str(), label],
         )?;
     }
-    for actor in &observation.assignee_provider_ids {
+    for actor in observation.assignee_provider_ids.iter().flatten() {
         transaction.execute(
             "INSERT INTO provider_observation_assignees (project_id, observation_id, provider_actor_id) VALUES (?1, ?2, ?3)",
             params![batch.project.as_str(), observation.id.as_str(), actor],

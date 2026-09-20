@@ -320,17 +320,21 @@ fn observe_terminal_issue_snapshot(
             .as_deref()
             .map(utc_millis)
             .transpose()?,
-        label_provider_ids: fixture
-            .provider_snapshot
-            .label_refs
-            .iter()
-            .map(|label| label.provider_id.clone())
-            .collect(),
+        label_provider_ids: (fixture.provider_snapshot.labels.len()
+            == fixture.provider_snapshot.label_refs.len())
+        .then(|| {
+            fixture
+                .provider_snapshot
+                .label_refs
+                .iter()
+                .map(|label| label.provider_id.clone())
+                .collect()
+        }),
         assignee_provider_ids: fixture
             .provider_snapshot
             .assignees
             .iter()
-            .filter_map(|actor| actor.provider_id.clone())
+            .map(|actor| actor.provider_id.clone())
             .collect(),
         snapshot_payload: payload,
         observed_at_millis: captured_at_millis,
