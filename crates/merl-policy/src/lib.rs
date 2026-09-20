@@ -163,6 +163,8 @@ impl From<StoreError> for PolicyError {
 ///
 /// One evaluation can assign different dispositions to several assertions.
 /// The store checks its recorded reads and writes again at commit time.
+/// Accepted input IDs are deduplicated. A rejected or candidate input with the
+/// same ID and content may receive a new evaluation under later policy rules.
 ///
 /// # Errors
 /// Rejects missing or mismatched source provenance, duplicate proposal targets,

@@ -39,6 +39,8 @@ fn a_rejected_command_cannot_reuse_its_identity_with_new_content() {
     PolicyScenario::given_an_agent_without_decision_authority()
         .when_the_agent_requests_a_decision()
         .then_the_request_is_rejected_without_a_project_change()
+        .when_the_agent_retries_the_same_rejected_command()
+        .then_the_retry_records_another_rejection_without_a_project_change()
         .when_the_agent_reuses_the_command_id_for_another_decision()
         .then_the_second_request_conflicts_without_a_project_change()
         .when_an_administrator_performs_a_maintenance_action()

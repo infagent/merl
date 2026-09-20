@@ -84,7 +84,7 @@ impl HistoricalIssue {
             .put_payload(&self.project, &payload, b"Gain fixed for run A")
             .expect("decision payload");
         self.store
-            .commit(&DomainEventBatch {
+            .commit_unchecked_bootstrap(&DomainEventBatch {
                 id: BatchId::try_from("accepted-after-O2").expect("batch"),
                 project: self.project.clone(),
                 actor: ActorId::try_from("owner").expect("actor"),
@@ -114,7 +114,7 @@ impl HistoricalIssue {
             .put_payload(&self.project, &payload, b"Future decision")
             .expect("payload");
         self.store
-            .commit(&DomainEventBatch {
+            .commit_unchecked_bootstrap(&DomainEventBatch {
                 id: BatchId::try_from("future-batch").expect("batch"),
                 project: self.project.clone(),
                 actor: ActorId::try_from("owner").expect("actor"),
@@ -201,7 +201,7 @@ impl CompilationScenario {
             .expect("payload");
         scenario
             .store
-            .commit(&DomainEventBatch {
+            .commit_unchecked_bootstrap(&DomainEventBatch {
                 id: BatchId::try_from("later-batch").expect("batch"),
                 project: scenario.project.clone(),
                 actor: ActorId::try_from("owner").expect("actor"),
@@ -233,7 +233,7 @@ impl CompilationScenario {
             .collect();
         scenario
             .store
-            .commit(&DomainEventBatch {
+            .commit_unchecked_bootstrap(&DomainEventBatch {
                 id: BatchId::try_from("many-objects").expect("batch"),
                 project: scenario.project.clone(),
                 actor: ActorId::try_from("owner").expect("actor"),

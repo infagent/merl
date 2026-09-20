@@ -48,7 +48,9 @@ impl ProjectScenario {
                 payload: self.statement.clone(),
             }],
         };
-        self.store.commit(&batch).expect("accept batch");
+        self.store
+            .commit_unchecked_bootstrap(&batch)
+            .expect("accept batch");
         self
     }
 
@@ -128,7 +130,7 @@ impl ProjectScenario {
                 })
                 .collect(),
         };
-        self.rejected_batch = Some(self.store.commit(&batch).is_err());
+        self.rejected_batch = Some(self.store.commit_unchecked_bootstrap(&batch).is_err());
         self
     }
 

@@ -350,7 +350,7 @@ A structured command may carry an optional supplemental prose payload. The comma
 
 When supplemental prose compiles later, its context includes those lineage edges and the semantics already represented by the structured action. The compiler extracts new evidence, constraints, corrections, and other acts rather than recreating the origin. A repeated act may still be emitted for safety, but policy records it as covered or duplicate through strong lineage instead of creating another task or decision.
 
-The authority stores command receipt and outcome so a client can retry the same command ID without applying it twice. A command ID cannot be reused with another payload. The command remains immutable; append-only outcome records mark it accepted, rejected, conflicted, or pending review. The command enters policy as a typed input and may produce a domain-event batch.
+The authority stores command receipts and outcomes. Retrying an accepted command cannot apply it twice, and reusing its ID with different content is an identity conflict. A retry with the same evaluation ID returns that evaluation's recorded outcome. A rejected or candidate command may receive a new evaluation under later policy rules without changing its original receipt or outcome. The command enters policy as a typed input and may produce a domain-event batch.
 
 A disconnected client queues commands, not domain events. On reconnect, the authority checks the basis revision, authenticates the actor, applies current policy, and either commits a new domain-event batch or returns a conflict. Only the project authority creates accepted domain events.
 
@@ -716,7 +716,7 @@ sequenceDiagram
     end
 ```
 
-An unrelated project change does not invalidate an evaluation when every recorded dependency still holds and the write set does not conflict. A changed dependency forces policy reevaluation or a visible command conflict. Compilation output remains immutable and need not run again merely because policy reevaluates it.
+An unrelated project change does not invalidate an evaluation when every recorded dependency still holds and the write set does not conflict. If a dependency changes before commit, the authority records the attempted evaluation and the failed guard without advancing project revision or notifying agents. The client receives a conflict and may request reevaluation. Compilation output remains immutable and need not run again merely because policy reevaluates it.
 
 Object IDs alone cannot describe every dependency. A policy that depends on the absence of an object records a predicate or collection guard so a concurrent insertion invalidates the evaluation. The authority serializes the final transaction after these checks.
 
