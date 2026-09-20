@@ -2053,15 +2053,18 @@ impl Store {
             .transpose()
     }
 
-    /// Seeds a nonempty accepted batch without policy provenance for kernel fixtures.
+    /// Seeds a kernel fixture without policy provenance.
     ///
-    /// Application mutations use `commit_policy_evaluation`; this older seam
-    /// remains for pre-policy bootstrap tests and must not accept client commands.
+    /// This bypass exists for pre-policy bootstrap tests. Application mutations
+    /// use `commit_policy_evaluation` so accepted objects retain their policy path.
     ///
     /// # Errors
     /// Returns an error for missing projects, invalid references, duplicate IDs,
     /// or a failed SQLite transaction. No partial revision becomes visible.
-    pub fn commit(&mut self, batch: &DomainEventBatch) -> Result<ProjectRevision, StoreError> {
+    pub fn commit_unchecked_bootstrap(
+        &mut self,
+        batch: &DomainEventBatch,
+    ) -> Result<ProjectRevision, StoreError> {
         self.commit_inner(batch)
     }
 
@@ -2539,12 +2542,7 @@ fn insert_policy_record(
             evaluation.batch.as_ref().filter(|_| conflict.is_none()).map(|batch| batch.id.as_str()), revision],
     )?;
     if let Some(conflict) = conflict {
-        transaction.execute(
-            "INSERT INTO policy_conflicts (project_id,evaluation_id,reason_code,target_id,expected_revision,actual_revision)
-             VALUES (?1,?2,?3,?4,?5,?6)",
-            params![evaluation.project.as_str(), evaluation.id.as_str(), conflict.reason_code,
-                conflict.target_id, conflict.expected_revision, conflict.actual_revision],
-        )?;
+        insert_policy_conflict(transaction, evaluation, conflict)?;
     }
     for (index, input) in evaluation.inputs.iter().enumerate() {
         let disposition = if conflict.is_some() && input.disposition == PolicyDisposition::Accepted
@@ -2632,6 +2630,20 @@ fn insert_policy_record(
             )?;
         }
     }
+    Ok(())
+}
+
+fn insert_policy_conflict(
+    transaction: &Transaction<'_>,
+    evaluation: &PolicyEvaluation,
+    conflict: &PolicyConflictDetail,
+) -> Result<(), StoreError> {
+    transaction.execute(
+        "INSERT INTO policy_conflicts (project_id,evaluation_id,reason_code,target_id,expected_revision,actual_revision)
+         VALUES (?1,?2,?3,?4,?5,?6)",
+        params![evaluation.project.as_str(), evaluation.id.as_str(), conflict.reason_code,
+            conflict.target_id, conflict.expected_revision, conflict.actual_revision],
+    )?;
     Ok(())
 }
 

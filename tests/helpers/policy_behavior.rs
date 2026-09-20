@@ -372,7 +372,7 @@ impl PolicyScenario {
 
     fn seed(&mut self, batch: &str, object: &str, kind: &str) {
         self.store
-            .commit(&DomainEventBatch {
+            .commit_unchecked_bootstrap(&DomainEventBatch {
                 id: id(batch),
                 project: self.project.clone(),
                 actor: id("alice"),
@@ -743,6 +743,45 @@ impl PolicyScenario {
             .policy_evaluation(&self.project, &id("denied-eval"))
             .expect("policy record")
             .expect("evaluation");
+        assert_eq!(record.inputs[0].disposition, PolicyDisposition::Rejected);
+        assert_eq!(
+            self.store
+                .project_revision(&self.project)
+                .expect("revision")
+                .get(),
+            0
+        );
+        self
+    }
+
+    pub fn when_the_agent_retries_the_same_rejected_command(&mut self) -> &mut Self {
+        let prepared = evaluate(
+            &self.store,
+            &self.project,
+            &id("agent"),
+            id("denied-retry-eval"),
+            id("denied-retry-batch"),
+            NOW + 1,
+            &self.rules,
+            &[Proposal::Command {
+                id: id("same-command"),
+                event: event("denied-event", "D1", "decision", None),
+            }],
+        )
+        .expect("reevaluate rejected command");
+        self.stale_result = Some(prepared.commit(&mut self.store));
+        self
+    }
+
+    pub fn then_the_retry_records_another_rejection_without_a_project_change(
+        &mut self,
+    ) -> &mut Self {
+        assert!(matches!(self.stale_result, Some(Ok(None))));
+        let record = self
+            .store
+            .policy_evaluation(&self.project, &id("denied-retry-eval"))
+            .expect("policy record")
+            .expect("retry evaluation");
         assert_eq!(record.inputs[0].disposition, PolicyDisposition::Rejected);
         assert_eq!(
             self.store
