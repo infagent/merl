@@ -11,7 +11,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -34,6 +34,8 @@ pub enum StoreError {
     InvalidSource,
     /// An older provider snapshot cannot replace a newer accepted mirror.
     StaleProviderObservation,
+    /// A compiler record refers to unavailable history or exceeds structural limits.
+    InvalidCompilation,
 }
 
 impl fmt::Display for StoreError {
@@ -56,6 +58,7 @@ impl fmt::Display for StoreError {
             Self::StaleProviderObservation => {
                 formatter.write_str("provider observation is older than the accepted mirror")
             }
+            Self::InvalidCompilation => formatter.write_str("invalid compilation record"),
         }
     }
 }
@@ -140,6 +143,8 @@ pub struct SourceCapture<'a> {
     pub source: SourceId,
     /// Upstream entity ID, shared by its edits.
     pub provider_entity_id: &'a str,
+    /// Issue or conversation that supplies nearby causal source context.
+    pub context_scope_id: &'a str,
     /// Stable identity of this external version.
     pub version: SourceVersionId,
     /// Upstream edit or version identity.
@@ -187,6 +192,8 @@ pub struct StoredSourceVersion {
     pub source: SourceId,
     /// Upstream entity identity, preserved separately from mutable display names.
     pub provider_entity_id: String,
+    /// Conversation selected for bounded recent-source context.
+    pub context_scope_id: String,
     /// Upstream version identity.
     pub provider_version_id: String,
     /// Binding that selected this capture.
@@ -199,6 +206,10 @@ pub struct StoredSourceVersion {
     pub ambiguous_order_with_previous: bool,
     /// Project observation sequence, independent of accepted revision.
     pub sequence: u64,
+    /// Accepted revision visible immediately before this source was captured.
+    pub interpretation_basis_revision: ProjectRevision,
+    /// False for pre-migration captures whose historical accepted basis was not recorded.
+    pub interpretation_basis_known: bool,
     /// Provider time at which this version became visible.
     pub occurred_at_millis: i64,
     /// Provider creation time of the external entity.
@@ -234,6 +245,147 @@ pub struct AcceptedProviderObservation {
     pub input: ProviderObservation,
     /// Project revision at which the fact was accepted.
     pub revision: ProjectRevision,
+}
+
+/// Immutable intent and causal input for one compiler attempt.
+#[derive(Debug)]
+pub struct CompilationIntent<'a> {
+    /// Stable identity of this attempt.
+    pub id: &'a str,
+    /// Source version that triggered the context.
+    pub source: &'a SourceVersionId,
+    /// Exact rendered input, retained behind an erasable payload reference.
+    pub context: &'a [u8],
+    /// Recent source versions in their rendered order.
+    pub source_window: &'a [SourceVersionId],
+    /// Accepted objects visible at the historical interpretation basis.
+    pub objects: &'a [(ObjectId, ObjectRevision)],
+    /// The historical accepted revision, independent of later policy evaluation.
+    pub interpretation_basis_revision: ProjectRevision,
+    /// Inclusive source-observation cutoff.
+    pub source_observation_cutoff: u64,
+    /// Bounded structural protocol identifiers.
+    pub renderer_version: &'a str,
+    /// Bounded structural selection-rule identifier.
+    pub selector_version: &'a str,
+    /// Compiler implementation identity.
+    pub compiler_id: &'a str,
+    /// Compiler implementation version.
+    pub compiler_version: &'a str,
+    /// Model identity, or `deterministic` for an offline extractor.
+    pub model_id: &'a str,
+    /// Digest of the externally managed prompt; no prompt prose enters the log.
+    pub prompt_digest: [u8; 32],
+    /// `live`, `replay`, `eval`, or `hindsight`.
+    pub mode: &'a str,
+    /// Hard limits used for this attempt.
+    pub max_input_bytes: usize,
+    /// Hard limit on encoded response bytes.
+    pub max_output_bytes: usize,
+    /// Provider-facing limit on generated model tokens.
+    pub max_output_tokens: usize,
+    /// Hard limit on assertion count.
+    pub max_assertions: usize,
+    /// Hard limit on expansion requests.
+    pub max_context_requests: usize,
+    /// Hard limit on expansion rounds.
+    pub max_expansion_rounds: usize,
+    /// Hard limit on referenced payload bytes.
+    pub max_payload_bytes: usize,
+    /// Time at which work became durable and recoverable.
+    pub started_at_millis: i64,
+}
+
+/// Immutable outcome of a prepared compiler attempt.
+#[derive(Debug)]
+pub struct CompilationResult<'a> {
+    /// Identity of the prepared attempt.
+    pub run_id: &'a str,
+    /// Stable error code on failure, absent on success.
+    pub failure_code: Option<&'a str>,
+    /// Validated structured response, protected because values may later include text.
+    pub response: Option<&'a [u8]>,
+    /// Validated structural assertions emitted by a successful response.
+    pub assertions: &'a [StructuralAssertion],
+    /// Completion time, including failures.
+    pub completed_at_millis: i64,
+}
+
+/// A compiler assertion without copied source prose or arbitrary inline text.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StructuralAssertion {
+    /// Source version and exact byte span that support the assertion.
+    pub source: SourceVersionId,
+    /// Inclusive start byte in the protected source body.
+    pub span_start: usize,
+    /// Exclusive end byte in the protected source body.
+    pub span_end: usize,
+    /// Bounded structural subject identifier.
+    pub subject: String,
+    /// Bounded predicate identifier.
+    pub predicate: String,
+    /// Bounded structural value identifier or payload reference.
+    pub value: String,
+    /// Speech act, epistemic basis, and polarity remain separate policy axes.
+    pub act: String,
+    /// `observed`, `inferred`, or `reported`.
+    pub epistemic_basis: String,
+    /// `positive` or `negative`.
+    pub polarity: String,
+    /// Confidence in thousandths, avoiding float ambiguity in the event log.
+    pub confidence_millis: u16,
+    /// Speaker who made this assertion, not a quoted authority.
+    pub asserted_by: String,
+    /// Quoted or relayed actor, if one was named.
+    pub attributed_to: Option<String>,
+    /// Whether the attribution was independently verified.
+    pub attribution_verified: bool,
+}
+
+/// A view of required coverage that does not confuse cold optional material with gaps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SemanticCoverage {
+    /// Latest captured observation.
+    pub observation_head: u64,
+    /// Number of required versions with no successful compilation.
+    pub required_gaps: u64,
+    /// Required versions whose latest live compiler attempt failed.
+    pub required_failed: u64,
+    /// Number of optional versions retained without successful compilation.
+    pub optional_cold: u64,
+}
+
+/// Inspectable outcome of a retained compiler attempt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompilationRunStatus {
+    /// Source interpreted by the run.
+    pub source: SourceVersionId,
+    /// Live, replay, eval, or hindsight.
+    pub mode: String,
+    /// Whether a bounded response was persisted.
+    pub succeeded: bool,
+    /// Whether this run has an immutable outcome. Pending work survives restart.
+    pub completed: bool,
+    /// Durable scheduling time, used to reject impossible completion times.
+    pub started_at_millis: i64,
+    /// Stable failure code, when no response was accepted.
+    pub failure_code: Option<String>,
+    /// Historical accepted-state basis used to interpret the source.
+    pub interpretation_basis_revision: ProjectRevision,
+    /// Highest source observation made available to the compiler.
+    pub source_observation_cutoff: u64,
+    /// Digest of exact rendered input bytes.
+    pub context_digest: [u8; 32],
+    /// Versioned compiler implementation identity.
+    pub compiler_id: String,
+    /// Compiler implementation version.
+    pub compiler_version: String,
+    /// Model identity used by the adapter.
+    pub model_id: String,
+    /// Prompt or ruleset digest.
+    pub prompt_digest: [u8; 32],
+    /// Exact compiler budgets fixed by the first attempt with this run ID.
+    pub limits: [usize; 7],
 }
 
 /// One SQLite connection used as a local serialized project authority.
@@ -277,12 +429,20 @@ impl Store {
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             transaction.execute_batch(include_str!("../migrations/0001_initial.sql"))?;
             transaction.execute_batch(include_str!("../migrations/0002_sources.sql"))?;
+            transaction.execute_batch(include_str!("../migrations/0003_compilation.sql"))?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         } else if version == 1 {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             transaction.execute_batch(include_str!("../migrations/0002_sources.sql"))?;
+            transaction.execute_batch(include_str!("../migrations/0003_compilation.sql"))?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.commit()?;
+        } else if version == 2 {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            transaction.execute_batch(include_str!("../migrations/0003_compilation.sql"))?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         }
@@ -393,26 +553,32 @@ impl Store {
         project: &ProjectId,
         capture: &SourceCapture<'_>,
     ) -> Result<bool, StoreError> {
-        if capture.created_at_millis > capture.occurred_at_millis
-            || capture.occurred_at_millis > capture.observed_at_millis
-            || capture.upstream_updated_at_millis.is_some_and(|updated| {
-                updated < capture.occurred_at_millis || updated > capture.observed_at_millis
-            })
-            || capture.edit_deleted_at_millis.is_some_and(|deleted| {
-                deleted < capture.occurred_at_millis || deleted > capture.observed_at_millis
-            })
-            || capture.body.is_some() == capture.missing_body_reason.is_some()
-            || !valid_provider_id(&capture.binding.provider_namespace_id)
-            || !valid_provider_id(capture.provider_entity_id)
-            || !valid_provider_id(capture.provider_version_id)
-            || capture
-                .provider_actor_id
-                .is_some_and(|id| !valid_provider_id(id))
-            || Sha256::digest(capture.binding.provider_namespace_id.as_bytes()).as_slice()
-                != capture.binding.namespace_digest
-        {
-            return Err(StoreError::InvalidSource);
-        }
+        self.capture_source_version_with_basis(project, capture, true)
+    }
+
+    /// Captures historical bytes without pretending the current accepted revision
+    /// was available when the source was authored.
+    ///
+    /// The sequential replay runner supplies a basis after it processes each
+    /// earlier observation. This method belongs only to isolated historical imports.
+    ///
+    /// # Errors
+    /// Uses the same identity and lineage checks as ordinary source capture.
+    pub fn capture_historical_source_version(
+        &mut self,
+        project: &ProjectId,
+        capture: &SourceCapture<'_>,
+    ) -> Result<bool, StoreError> {
+        self.capture_source_version_with_basis(project, capture, false)
+    }
+
+    fn capture_source_version_with_basis(
+        &mut self,
+        project: &ProjectId,
+        capture: &SourceCapture<'_>,
+        basis_known: bool,
+    ) -> Result<bool, StoreError> {
+        validate_source_capture(capture)?;
         let body_digest = capture.body.map(Sha256::digest);
         let edit_diff_digest = capture.edit_diff.map(Sha256::digest);
         let capture_digest =
@@ -454,6 +620,10 @@ impl Store {
             return Err(StoreError::InvalidSource);
         }
         let sequence = head.checked_add(1).ok_or(StoreError::CorruptHistory)?;
+        let basis = CaptureBasis {
+            revision: current_revision_in_transaction(&transaction, project)?,
+            known: basis_known,
+        };
         let payload = capture
             .body
             .map(|_| PayloadId::try_from(format!("src_{}", capture.version).as_str()))
@@ -477,6 +647,7 @@ impl Store {
             project,
             capture,
             sequence,
+            basis,
             &capture_digest,
             SourcePayloadRefs {
                 body_digest: body_digest.as_ref(),
@@ -523,11 +694,12 @@ impl Store {
             .connection
             .query_row(
                 "SELECT source_id, provider_entity_id, provider_version_id, binding_id, kind,
-                    supersedes_id, ambiguous_order_with_previous, sequence,
+                    supersedes_id, ambiguous_order_with_previous, sequence, interpretation_basis_revision,
+                    interpretation_basis_known,
                     occurred_at_millis, created_at_millis, upstream_updated_at_millis, observed_at_millis,
                     provider_actor_id, compilation_mode, coverage_requirement,
                     capture_policy_version, body_digest, missing_body_reason, payload_id,
-                    edit_diff_payload_id, edit_deleted_at_millis
+                    edit_diff_payload_id, edit_deleted_at_millis, context_scope_id
              FROM source_versions WHERE project_id = ?1 AND id = ?2",
                 params![project.as_str(), id.as_str()],
                 RawSourceVersion::from_row,
@@ -539,6 +711,11 @@ impl Store {
                 source: SourceId::try_from(row.source_id.as_str())
                     .map_err(|_| StoreError::CorruptHistory)?,
                 provider_entity_id: row.provider_entity_id,
+                context_scope_id: if row.context_scope_id.is_empty() {
+                    row.source_id.clone()
+                } else {
+                    row.context_scope_id
+                },
                 provider_version_id: row.provider_version_id,
                 binding: SourceBindingId::try_from(row.binding_id.as_str())
                     .map_err(|_| StoreError::CorruptHistory)?,
@@ -551,6 +728,11 @@ impl Store {
                     .map_err(|_| StoreError::CorruptHistory)?,
                 ambiguous_order_with_previous: row.ambiguous_order_with_previous != 0,
                 sequence: u64::try_from(row.sequence).map_err(|_| StoreError::CorruptHistory)?,
+                interpretation_basis_revision: ProjectRevision::from(
+                    u64::try_from(row.interpretation_basis_revision)
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                ),
+                interpretation_basis_known: row.interpretation_basis_known != 0,
                 occurred_at_millis: row.occurred_at_millis,
                 created_at_millis: row.created_at_millis,
                 upstream_updated_at_millis: row.upstream_updated_at_millis,
@@ -613,6 +795,529 @@ impl Store {
                 .ok_or(StoreError::CorruptHistory)
         })
         .transpose()
+    }
+
+    /// Selects recent source versions from the same conversation at a causal cutoff.
+    ///
+    /// # Errors
+    /// Rejects invalid limits or corrupt stored identities.
+    pub fn recent_source_versions_in_scope(
+        &self,
+        project: &ProjectId,
+        scope: &str,
+        cutoff: u64,
+        limit: usize,
+    ) -> Result<Vec<SourceVersionId>, StoreError> {
+        if !valid_provider_id(scope) || limit == 0 {
+            return Err(StoreError::InvalidCompilation);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT id FROM source_versions
+             WHERE project_id=?1 AND COALESCE(NULLIF(context_scope_id,''),source_id)=?2
+               AND sequence<=?3 ORDER BY sequence DESC LIMIT ?4",
+        )?;
+        let cutoff = i64::try_from(cutoff).map_err(|_| StoreError::InvalidCompilation)?;
+        let limit = i64::try_from(limit).map_err(|_| StoreError::InvalidCompilation)?;
+        let rows = statement.query_map(params![project.as_str(), scope, cutoff, limit], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let mut selected = rows
+            .map(|row| {
+                SourceVersionId::try_from(row?.as_str()).map_err(|_| StoreError::CorruptHistory)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        selected.reverse();
+        Ok(selected)
+    }
+
+    /// Lists accepted object revisions as they stood at a historical revision.
+    ///
+    /// # Errors
+    /// Fails if the requested revision is in the future or history is damaged.
+    pub fn objects_at_revision(
+        &self,
+        project: &ProjectId,
+        revision: ProjectRevision,
+        limit: usize,
+    ) -> Result<Vec<(ObjectId, ObjectRevision, Option<PayloadId>)>, StoreError> {
+        if revision > self.project_revision(project)? || limit == 0 {
+            return Err(StoreError::InvalidCompilation);
+        }
+        let limit = i64::try_from(limit).map_err(|_| StoreError::InvalidCompilation)?;
+        let mut statement = self.connection.prepare(
+            "WITH history AS (
+               SELECT domain_events.object_id, domain_events.payload_id,
+                      COUNT(*) OVER (PARTITION BY domain_events.object_id) AS object_revision,
+                      ROW_NUMBER() OVER (PARTITION BY domain_events.object_id
+                        ORDER BY domain_event_batches.revision DESC, domain_events.event_index DESC) AS rank
+               FROM domain_events JOIN domain_event_batches
+                 ON domain_event_batches.project_id = domain_events.project_id
+                AND domain_event_batches.id = domain_events.batch_id
+               WHERE domain_events.project_id = ?1 AND domain_event_batches.revision <= ?2
+             ) SELECT object_id, payload_id, object_revision FROM history
+               WHERE rank = 1 ORDER BY object_id LIMIT ?3",
+        )?;
+        let basis = i64::try_from(revision.get()).map_err(|_| StoreError::InvalidCompilation)?;
+        let mut rows = statement.query(params![project.as_str(), basis, limit + 1])?;
+        let mut objects = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let payload: Option<String> = row.get(1)?;
+            let count: i64 = row.get(2)?;
+            objects.push((
+                ObjectId::try_from(id.as_str()).map_err(|_| StoreError::CorruptHistory)?,
+                ObjectRevision::try_from(
+                    u64::try_from(count).map_err(|_| StoreError::CorruptHistory)?,
+                )
+                .map_err(|_| StoreError::CorruptHistory)?,
+                payload
+                    .map(|value| PayloadId::try_from(value.as_str()))
+                    .transpose()
+                    .map_err(|_| StoreError::CorruptHistory)?,
+            ));
+        }
+        if objects.len() > usize::try_from(limit).map_err(|_| StoreError::InvalidCompilation)? {
+            return Err(StoreError::InvalidCompilation);
+        }
+        Ok(objects)
+    }
+
+    /// Persists work and its exact causal input before the compiler runs.
+    ///
+    /// # Errors
+    /// Rejects noncausal contexts, invalid structural metadata, or storage failures.
+    pub fn prepare_compilation(
+        &mut self,
+        project: &ProjectId,
+        record: &CompilationIntent<'_>,
+    ) -> Result<(), StoreError> {
+        validate_compilation_intent(self, project, record)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let context_payload = format!("ctx_{}", record.id);
+        let context_digest: [u8; 32] = Sha256::digest(record.context).into();
+        insert_protected_payload(
+            &transaction,
+            project,
+            &PayloadId::try_from(context_payload.as_str())
+                .map_err(|_| StoreError::InvalidCompilation)?,
+            record.context,
+            &Sha256::digest(record.context),
+        )?;
+        let interpretation_basis = i64::try_from(record.interpretation_basis_revision.get())
+            .map_err(|_| StoreError::InvalidCompilation)?;
+        let cutoff = i64::try_from(record.source_observation_cutoff)
+            .map_err(|_| StoreError::InvalidCompilation)?;
+        let max_input =
+            i64::try_from(record.max_input_bytes).map_err(|_| StoreError::InvalidCompilation)?;
+        let max_output =
+            i64::try_from(record.max_output_bytes).map_err(|_| StoreError::InvalidCompilation)?;
+        let max_tokens =
+            i64::try_from(record.max_output_tokens).map_err(|_| StoreError::InvalidCompilation)?;
+        let max_assertions =
+            i64::try_from(record.max_assertions).map_err(|_| StoreError::InvalidCompilation)?;
+        let max_requests = i64::try_from(record.max_context_requests)
+            .map_err(|_| StoreError::InvalidCompilation)?;
+        let max_rounds = i64::try_from(record.max_expansion_rounds)
+            .map_err(|_| StoreError::InvalidCompilation)?;
+        let max_payload =
+            i64::try_from(record.max_payload_bytes).map_err(|_| StoreError::InvalidCompilation)?;
+        transaction.execute(
+            "INSERT INTO compilation_runs (
+              project_id,id,source_version_id,context_digest,context_payload_id,
+              interpretation_basis_revision,source_observation_cutoff,renderer_version,selector_version,
+              max_input_bytes,max_output_bytes,max_output_tokens,max_assertions,max_context_requests,max_expansion_rounds,max_payload_bytes,
+              compiler_id,compiler_version,model_id,prompt_digest,mode,started_at_millis
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
+            params![project.as_str(), record.id, record.source.as_str(), context_digest.as_slice(),
+                context_payload, interpretation_basis, cutoff,
+                record.renderer_version, record.selector_version, max_input, max_output,
+                max_tokens, max_assertions, max_requests, max_rounds, max_payload,
+                record.compiler_id, record.compiler_version, record.model_id, record.prompt_digest.as_slice(),
+                record.mode, record.started_at_millis],
+        )?;
+        insert_context_references(&transaction, project, record)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Finishes a prepared attempt without mutating its run intent or accepted state.
+    ///
+    /// # Errors
+    /// Rejects an unknown, already completed, or structurally invalid result.
+    pub fn complete_compilation(
+        &mut self,
+        project: &ProjectId,
+        result: &CompilationResult<'_>,
+    ) -> Result<(), StoreError> {
+        let status = self
+            .compilation_run_status(project, result.run_id)?
+            .ok_or(StoreError::InvalidCompilation)?;
+        if status.completed
+            || result.completed_at_millis < status.started_at_millis
+            || (result.failure_code.is_none() != result.response.is_some())
+            || result
+                .response
+                .is_some_and(|bytes| bytes.len() > status.limits[1])
+            || result.assertions.len() > status.limits[3]
+            || (result.response.is_none() && !result.assertions.is_empty())
+            || result
+                .failure_code
+                .is_some_and(|code| !valid_record_id(code))
+        {
+            return Err(StoreError::InvalidCompilation);
+        }
+        let source_window = self.compilation_context_sources(project, result.run_id)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let response_payload = format!("rsp_{}", result.run_id);
+        let response_digest = result.response.map(Sha256::digest);
+        if let Some(response) = result.response {
+            insert_protected_payload(
+                &transaction,
+                project,
+                &PayloadId::try_from(response_payload.as_str())
+                    .map_err(|_| StoreError::InvalidCompilation)?,
+                response,
+                response_digest
+                    .as_ref()
+                    .ok_or(StoreError::InvalidCompilation)?,
+            )?;
+        }
+        transaction.execute(
+            "INSERT INTO compilation_results (project_id,run_id,outcome,failure_code,
+             response_digest,response_payload_id,completed_at_millis)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![
+                project.as_str(),
+                result.run_id,
+                if result.failure_code.is_some() {
+                    "failed"
+                } else {
+                    "succeeded"
+                },
+                result.failure_code,
+                response_digest.as_ref().map(AsRef::<[u8]>::as_ref),
+                result.response.map(|_| response_payload.as_str()),
+                result.completed_at_millis
+            ],
+        )?;
+        insert_assertions(&transaction, project, result, &source_window)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Reports semantic coverage without loading or interpreting cold payloads.
+    ///
+    /// # Errors
+    /// Returns a storage error if the project is unavailable.
+    pub fn semantic_coverage(&self, project: &ProjectId) -> Result<SemanticCoverage, StoreError> {
+        let observation_head = self.source_observation_head(project)?;
+        let (required_gaps, required_failed, optional_cold): (i64, i64, i64) =
+            self.connection.query_row(
+                "SELECT
+              COALESCE(SUM(CASE WHEN coverage_requirement='required' AND NOT EXISTS (
+                SELECT 1 FROM compilation_runs JOIN compilation_results
+                  ON compilation_results.project_id=compilation_runs.project_id
+                 AND compilation_results.run_id=compilation_runs.id
+                WHERE compilation_runs.project_id=source_versions.project_id
+                  AND source_version_id=source_versions.id AND compilation_results.outcome='succeeded' AND mode='live'
+              ) THEN 1 ELSE 0 END),0),
+              COALESCE(SUM(CASE WHEN coverage_requirement='required' AND EXISTS (
+                SELECT 1 FROM compilation_runs JOIN compilation_results
+                  ON compilation_results.project_id=compilation_runs.project_id
+                 AND compilation_results.run_id=compilation_runs.id
+                WHERE compilation_runs.project_id=source_versions.project_id
+                  AND source_version_id=source_versions.id AND compilation_results.outcome='failed' AND mode='live'
+              ) AND NOT EXISTS (
+                SELECT 1 FROM compilation_runs JOIN compilation_results
+                  ON compilation_results.project_id=compilation_runs.project_id
+                 AND compilation_results.run_id=compilation_runs.id
+                WHERE compilation_runs.project_id=source_versions.project_id
+                  AND source_version_id=source_versions.id AND compilation_results.outcome='succeeded' AND mode='live'
+              ) THEN 1 ELSE 0 END),0),
+              COALESCE(SUM(CASE WHEN coverage_requirement='optional' AND NOT EXISTS (
+                SELECT 1 FROM compilation_runs JOIN compilation_results
+                  ON compilation_results.project_id=compilation_runs.project_id
+                 AND compilation_results.run_id=compilation_runs.id
+                WHERE compilation_runs.project_id=source_versions.project_id
+                  AND source_version_id=source_versions.id AND compilation_results.outcome='succeeded' AND mode='live'
+              ) THEN 1 ELSE 0 END),0)
+             FROM source_versions WHERE project_id=?1",
+                [project.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        Ok(SemanticCoverage {
+            observation_head,
+            required_gaps: u64::try_from(required_gaps).map_err(|_| StoreError::CorruptHistory)?,
+            required_failed: u64::try_from(required_failed)
+                .map_err(|_| StoreError::CorruptHistory)?,
+            optional_cold: u64::try_from(optional_cold).map_err(|_| StoreError::CorruptHistory)?,
+        })
+    }
+
+    /// Finds the source associated with a prior run identity, if any.
+    ///
+    /// # Errors
+    /// Returns an error if stored identity is corrupt or SQLite cannot read it.
+    pub fn compilation_run_source(
+        &self,
+        project: &ProjectId,
+        id: &str,
+    ) -> Result<Option<SourceVersionId>, StoreError> {
+        let source: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT source_version_id FROM compilation_runs WHERE project_id=?1 AND id=?2",
+                params![project.as_str(), id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        source
+            .map(|value| {
+                SourceVersionId::try_from(value.as_str()).map_err(|_| StoreError::CorruptHistory)
+            })
+            .transpose()
+    }
+
+    /// Returns the provenance and outcome needed to inspect or reuse a run.
+    ///
+    /// # Errors
+    /// Rejects corrupt structural metadata or a failed SQLite read.
+    pub fn compilation_run_status(
+        &self,
+        project: &ProjectId,
+        id: &str,
+    ) -> Result<Option<CompilationRunStatus>, StoreError> {
+        type RawStatus = (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            i64,
+            i64,
+            Vec<u8>,
+            String,
+            String,
+            String,
+            Vec<u8>,
+            [i64; 7],
+            i64,
+        );
+        let raw: Option<RawStatus> = self.connection.query_row(
+            "SELECT source_version_id,mode,compilation_results.outcome,compilation_results.failure_code,interpretation_basis_revision,
+                    source_observation_cutoff,context_digest,compiler_id,compiler_version,model_id,prompt_digest,
+                    max_input_bytes,max_output_bytes,max_output_tokens,max_assertions,
+                    max_context_requests,max_expansion_rounds,max_payload_bytes,started_at_millis
+             FROM compilation_runs LEFT JOIN compilation_results
+               ON compilation_results.project_id=compilation_runs.project_id
+              AND compilation_results.run_id=compilation_runs.id
+             WHERE compilation_runs.project_id=?1 AND compilation_runs.id=?2",
+            params![project.as_str(), id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?,
+                row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,
+                row.get(8)?, row.get(9)?, row.get(10)?,
+                [row.get(11)?, row.get(12)?, row.get(13)?, row.get(14)?,
+                 row.get(15)?, row.get(16)?, row.get(17)?], row.get(18)?)),
+        ).optional()?;
+        raw.map(
+            |(
+                source,
+                mode,
+                outcome,
+                failure_code,
+                basis,
+                cutoff,
+                digest,
+                compiler_id,
+                compiler_version,
+                model_id,
+                prompt_digest,
+                limits,
+                started_at_millis,
+            )| {
+                Ok(CompilationRunStatus {
+                    source: SourceVersionId::try_from(source.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    mode,
+                    succeeded: outcome.as_deref() == Some("succeeded"),
+                    completed: outcome.is_some(),
+                    started_at_millis,
+                    failure_code,
+                    interpretation_basis_revision: ProjectRevision::from(
+                        u64::try_from(basis).map_err(|_| StoreError::CorruptHistory)?,
+                    ),
+                    source_observation_cutoff: u64::try_from(cutoff)
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    context_digest: digest.try_into().map_err(|_| StoreError::CorruptHistory)?,
+                    compiler_id,
+                    compiler_version,
+                    model_id,
+                    prompt_digest: prompt_digest
+                        .try_into()
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    limits: limits
+                        .map(|value| usize::try_from(value).map_err(|_| StoreError::CorruptHistory))
+                        .into_iter()
+                        .collect::<Result<Vec<_>, _>>()?
+                        .try_into()
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                })
+            },
+        )
+        .transpose()
+    }
+
+    fn compilation_context_sources(
+        &self,
+        project: &ProjectId,
+        run_id: &str,
+    ) -> Result<Vec<SourceVersionId>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT source_version_id FROM compilation_context_sources
+             WHERE project_id=?1 AND run_id=?2 ORDER BY window_index",
+        )?;
+        let rows = statement.query_map(params![project.as_str(), run_id], |row| {
+            row.get::<_, String>(0)
+        })?;
+        rows.map(|row| {
+            SourceVersionId::try_from(row?.as_str()).map_err(|_| StoreError::CorruptHistory)
+        })
+        .collect()
+    }
+
+    /// Lists durable compiler work that has no recorded result yet.
+    ///
+    /// # Errors
+    /// Returns an error if a stored identity is invalid or SQLite cannot read it.
+    pub fn pending_compilation_runs(
+        &self,
+        project: &ProjectId,
+    ) -> Result<Vec<(String, SourceVersionId)>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT compilation_runs.id,source_version_id FROM compilation_runs
+             LEFT JOIN compilation_results
+               ON compilation_results.project_id=compilation_runs.project_id
+              AND compilation_results.run_id=compilation_runs.id
+             WHERE compilation_runs.project_id=?1 AND compilation_results.run_id IS NULL
+             ORDER BY compilation_runs.started_at_millis,compilation_runs.id",
+        )?;
+        let rows = statement.query_map([project.as_str()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.map(|row| {
+            let (run_id, source) = row?;
+            Ok((
+                run_id,
+                SourceVersionId::try_from(source.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
+            ))
+        })
+        .collect()
+    }
+
+    /// Counts recorded attempts for one source, regardless of delivery fan-out.
+    ///
+    /// # Errors
+    /// Returns a storage error if the query fails.
+    pub fn compilation_run_count(
+        &self,
+        project: &ProjectId,
+        source: &SourceVersionId,
+    ) -> Result<u64, StoreError> {
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM compilation_runs WHERE project_id=?1 AND source_version_id=?2",
+            params![project.as_str(), source.as_str()],
+            |row| row.get(0),
+        )?;
+        u64::try_from(count).map_err(|_| StoreError::CorruptHistory)
+    }
+
+    /// Counts the typed assertions retained for one compiler run.
+    ///
+    /// # Errors
+    /// Returns a storage error if the query fails.
+    pub fn observed_assertion_count(
+        &self,
+        project: &ProjectId,
+        run_id: &str,
+    ) -> Result<u64, StoreError> {
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM observed_assertions WHERE project_id=?1 AND run_id=?2",
+            params![project.as_str(), run_id],
+            |row| row.get(0),
+        )?;
+        u64::try_from(count).map_err(|_| StoreError::CorruptHistory)
+    }
+
+    /// Reads the structural assertions from one run for later policy evaluation.
+    ///
+    /// # Errors
+    /// Rejects corrupt source identities or numeric fields.
+    pub fn observed_assertions(
+        &self,
+        project: &ProjectId,
+        run_id: &str,
+    ) -> Result<Vec<StructuralAssertion>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT source_version_id,span_start,span_end,subject_id,predicate_id,value_id,
+                    act,epistemic_basis,polarity,confidence_millis,asserted_by,attributed_to,
+                    attribution_verified
+             FROM observed_assertions WHERE project_id=?1 AND run_id=?2 ORDER BY assertion_index",
+        )?;
+        let rows = statement.query_map(params![project.as_str(), run_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, Option<String>>(11)?,
+                row.get::<_, i64>(12)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (
+                source,
+                span_start,
+                span_end,
+                subject,
+                predicate,
+                value,
+                act,
+                epistemic_basis,
+                polarity,
+                confidence,
+                asserted_by,
+                attributed_to,
+                verified,
+            ) = row?;
+            Ok(StructuralAssertion {
+                source: SourceVersionId::try_from(source.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                span_start: usize::try_from(span_start).map_err(|_| StoreError::CorruptHistory)?,
+                span_end: usize::try_from(span_end).map_err(|_| StoreError::CorruptHistory)?,
+                subject,
+                predicate,
+                value,
+                act,
+                epistemic_basis,
+                polarity,
+                confidence_millis: u16::try_from(confidence)
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                asserted_by,
+                attributed_to,
+                attribution_verified: verified != 0,
+            })
+        })
+        .collect()
     }
 
     /// Commits a nonempty accepted batch and its projection in one transaction.
@@ -1179,19 +1884,21 @@ fn insert_source_version(
     project: &ProjectId,
     capture: &SourceCapture<'_>,
     sequence: i64,
+    basis: CaptureBasis,
     capture_digest: &[u8; 32],
     payloads: SourcePayloadRefs<'_>,
 ) -> Result<(), StoreError> {
     transaction.execute(
         "INSERT INTO source_versions (
-             project_id, id, source_id, provider_entity_id, provider_version_id, binding_id, kind, supersedes_id, ambiguous_order_with_previous, sequence,
+             project_id, id, source_id, provider_entity_id, context_scope_id, provider_version_id, binding_id, kind, supersedes_id, ambiguous_order_with_previous, sequence,
              occurred_at_millis, created_at_millis, upstream_updated_at_millis, observed_at_millis, actor_id, provider_actor_id,
              body_digest, edit_diff_digest, capture_digest, payload_id, edit_diff_payload_id, edit_deleted_at_millis, missing_body_reason,
-             compilation_mode, coverage_requirement, capture_policy_version
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
+             compilation_mode, coverage_requirement, capture_policy_version, interpretation_basis_revision,
+             interpretation_basis_known
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
         params![
             project.as_str(), capture.version.as_str(), capture.source.as_str(),
-            capture.provider_entity_id, capture.provider_version_id,
+            capture.provider_entity_id, capture.context_scope_id, capture.provider_version_id,
             capture.binding.id.as_str(), capture.kind.as_str(),
             capture.supersedes.as_ref().map(SourceVersionId::as_str), i64::from(capture.ambiguous_order_with_previous), sequence,
             capture.occurred_at_millis, capture.created_at_millis, capture.upstream_updated_at_millis, capture.observed_at_millis,
@@ -1202,7 +1909,7 @@ fn insert_source_version(
             payloads.edit_diff.map(PayloadId::as_str), capture.edit_deleted_at_millis,
             capture.missing_body_reason.map(MissingSourceBody::as_str),
             capture.compilation_mode.as_str(), capture.coverage_requirement.as_str(),
-            capture.policy_version.as_str()
+            capture.policy_version.as_str(), basis.revision, i64::from(basis.known)
         ],
     )?;
     Ok(())
@@ -1211,12 +1918,15 @@ fn insert_source_version(
 struct RawSourceVersion {
     source_id: String,
     provider_entity_id: String,
+    context_scope_id: String,
     provider_version_id: String,
     binding_id: String,
     kind: String,
     supersedes_id: Option<String>,
     ambiguous_order_with_previous: i64,
     sequence: i64,
+    interpretation_basis_revision: i64,
+    interpretation_basis_known: i64,
     occurred_at_millis: i64,
     created_at_millis: i64,
     upstream_updated_at_millis: Option<i64>,
@@ -1243,25 +1953,200 @@ impl RawSourceVersion {
             supersedes_id: row.get(5)?,
             ambiguous_order_with_previous: row.get(6)?,
             sequence: row.get(7)?,
-            occurred_at_millis: row.get(8)?,
-            created_at_millis: row.get(9)?,
-            upstream_updated_at_millis: row.get(10)?,
-            observed_at_millis: row.get(11)?,
-            provider_actor_id: row.get(12)?,
-            compilation_mode: row.get(13)?,
-            coverage_requirement: row.get(14)?,
-            capture_policy_version: row.get(15)?,
-            body_digest: row.get(16)?,
-            missing_body_reason: row.get(17)?,
-            payload_id: row.get(18)?,
-            edit_diff_payload_id: row.get(19)?,
-            edit_deleted_at_millis: row.get(20)?,
+            interpretation_basis_revision: row.get(8)?,
+            interpretation_basis_known: row.get(9)?,
+            occurred_at_millis: row.get(10)?,
+            created_at_millis: row.get(11)?,
+            upstream_updated_at_millis: row.get(12)?,
+            observed_at_millis: row.get(13)?,
+            provider_actor_id: row.get(14)?,
+            compilation_mode: row.get(15)?,
+            coverage_requirement: row.get(16)?,
+            capture_policy_version: row.get(17)?,
+            body_digest: row.get(18)?,
+            missing_body_reason: row.get(19)?,
+            payload_id: row.get(20)?,
+            edit_diff_payload_id: row.get(21)?,
+            edit_deleted_at_millis: row.get(22)?,
+            context_scope_id: row.get(23)?,
         })
     }
 }
 
 fn valid_provider_id(value: &str) -> bool {
     !value.is_empty() && value.len() <= 512 && value.bytes().all(|byte| byte.is_ascii_graphic())
+}
+
+fn current_revision_in_transaction(
+    transaction: &Transaction<'_>,
+    project: &ProjectId,
+) -> Result<i64, StoreError> {
+    Ok(transaction.query_row(
+        "SELECT current_revision FROM projects WHERE id = ?1",
+        [project.as_str()],
+        |row| row.get(0),
+    )?)
+}
+
+#[derive(Clone, Copy)]
+struct CaptureBasis {
+    revision: i64,
+    known: bool,
+}
+
+fn validate_source_capture(capture: &SourceCapture<'_>) -> Result<(), StoreError> {
+    if capture.created_at_millis > capture.occurred_at_millis
+        || capture.occurred_at_millis > capture.observed_at_millis
+        || capture.upstream_updated_at_millis.is_some_and(|updated| {
+            updated < capture.occurred_at_millis || updated > capture.observed_at_millis
+        })
+        || capture.edit_deleted_at_millis.is_some_and(|deleted| {
+            deleted < capture.occurred_at_millis || deleted > capture.observed_at_millis
+        })
+        || capture.body.is_some() == capture.missing_body_reason.is_some()
+        || !valid_provider_id(&capture.binding.provider_namespace_id)
+        || !valid_provider_id(capture.provider_entity_id)
+        || !valid_provider_id(capture.context_scope_id)
+        || !valid_provider_id(capture.provider_version_id)
+        || capture
+            .provider_actor_id
+            .is_some_and(|id| !valid_provider_id(id))
+        || Sha256::digest(capture.binding.provider_namespace_id.as_bytes()).as_slice()
+            != capture.binding.namespace_digest
+    {
+        return Err(StoreError::InvalidSource);
+    }
+    Ok(())
+}
+
+fn validate_compilation_intent(
+    store: &Store,
+    project: &ProjectId,
+    record: &CompilationIntent<'_>,
+) -> Result<(), StoreError> {
+    let source = store
+        .source_version(project, record.source)?
+        .ok_or(StoreError::InvalidCompilation)?;
+    if record.interpretation_basis_revision > store.project_revision(project)?
+        || (!source.interpretation_basis_known && record.mode == "live")
+        || record.source_observation_cutoff != source.sequence
+        || (source.interpretation_basis_known
+            && record.interpretation_basis_revision != source.interpretation_basis_revision)
+        || record.context.len() > record.max_input_bytes
+        || record.source_window.last() != Some(record.source)
+        || record
+            .objects
+            .iter()
+            .any(|(_, revision)| revision.get() == 0)
+        || ![
+            record.id,
+            record.renderer_version,
+            record.selector_version,
+            record.compiler_id,
+            record.compiler_version,
+            record.model_id,
+        ]
+        .iter()
+        .all(|value| valid_record_id(value))
+        || !matches!(record.mode, "live" | "replay" | "eval" | "hindsight")
+    {
+        return Err(StoreError::InvalidCompilation);
+    }
+    for version in record.source_window {
+        let item = store
+            .source_version(project, version)?
+            .ok_or(StoreError::InvalidCompilation)?;
+        if item.sequence > source.sequence {
+            return Err(StoreError::InvalidCompilation);
+        }
+    }
+    Ok(())
+}
+
+fn insert_context_references(
+    transaction: &Transaction<'_>,
+    project: &ProjectId,
+    record: &CompilationIntent<'_>,
+) -> Result<(), StoreError> {
+    for (index, version) in record.source_window.iter().enumerate() {
+        transaction.execute(
+            "INSERT INTO compilation_context_sources (project_id,run_id,window_index,source_version_id) VALUES (?1,?2,?3,?4)",
+            params![project.as_str(), record.id,
+                i64::try_from(index).map_err(|_| StoreError::InvalidCompilation)?, version.as_str()],
+        )?;
+    }
+    for (object, revision) in record.objects {
+        transaction.execute(
+            "INSERT INTO compilation_context_objects (project_id,run_id,object_id,object_revision) VALUES (?1,?2,?3,?4)",
+            params![project.as_str(), record.id, object.as_str(),
+                i64::try_from(revision.get()).map_err(|_| StoreError::InvalidCompilation)?],
+        )?;
+    }
+    Ok(())
+}
+
+fn insert_assertions(
+    transaction: &Transaction<'_>,
+    project: &ProjectId,
+    result: &CompilationResult<'_>,
+    source_window: &[SourceVersionId],
+) -> Result<(), StoreError> {
+    for (index, assertion) in result.assertions.iter().enumerate() {
+        if !source_window.contains(&assertion.source)
+            || assertion.span_start >= assertion.span_end
+            || assertion.confidence_millis > 1000
+            || ![
+                assertion.subject.as_str(),
+                assertion.predicate.as_str(),
+                assertion.value.as_str(),
+                assertion.act.as_str(),
+                assertion.epistemic_basis.as_str(),
+                assertion.polarity.as_str(),
+                assertion.asserted_by.as_str(),
+            ]
+            .iter()
+            .all(|value| valid_record_id(value))
+            || assertion
+                .attributed_to
+                .as_deref()
+                .is_some_and(|value| !valid_record_id(value))
+        {
+            return Err(StoreError::InvalidCompilation);
+        }
+        transaction.execute(
+            "INSERT INTO observed_assertions (project_id,run_id,assertion_index,source_version_id,
+              span_start,span_end,subject_id,predicate_id,value_id,act,epistemic_basis,polarity,
+              confidence_millis,asserted_by,attributed_to,attribution_verified)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+            params![
+                project.as_str(),
+                result.run_id,
+                i64::try_from(index).map_err(|_| StoreError::InvalidCompilation)?,
+                assertion.source.as_str(),
+                i64::try_from(assertion.span_start).map_err(|_| StoreError::InvalidCompilation)?,
+                i64::try_from(assertion.span_end).map_err(|_| StoreError::InvalidCompilation)?,
+                assertion.subject,
+                assertion.predicate,
+                assertion.value,
+                assertion.act,
+                assertion.epistemic_basis,
+                assertion.polarity,
+                assertion.confidence_millis,
+                assertion.asserted_by,
+                assertion.attributed_to,
+                i64::from(assertion.attribution_verified)
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn valid_record_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':')
+        })
 }
 
 fn source_capture_digest(
@@ -1275,6 +2160,7 @@ fn source_capture_digest(
         capture.binding.provider_namespace_id.as_str(),
         capture.source.as_str(),
         capture.provider_entity_id,
+        capture.context_scope_id,
         capture.version.as_str(),
         capture.provider_version_id,
         capture.kind.as_str(),
@@ -1324,7 +2210,9 @@ mod tests {
             .expect("set future version");
 
         let error = Store::from_connection(connection).expect_err("reject future schema");
-        assert!(matches!(error, StoreError::UnsupportedSchema(3)));
+        assert!(
+            matches!(error, StoreError::UnsupportedSchema(version) if version == SCHEMA_VERSION + 1)
+        );
     }
 
     #[test]
