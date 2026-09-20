@@ -1268,6 +1268,89 @@ impl Store {
         self.objects_at_revision_with_scope(project, revision, limit, None)
     }
 
+    /// Selects current semantic objects by caller-provided relevance before a bounded view.
+    ///
+    /// The scan does not impose an ID prefix: a high-priority object remains visible
+    /// even when the project has many lower-priority objects.
+    ///
+    /// # Errors
+    /// Rejects invalid limits or damaged projected object identities.
+    pub fn current_objects_ranked(
+        &self,
+        project: &ProjectId,
+        limit: usize,
+        priority: impl Fn(&str, &str) -> u8,
+    ) -> Result<(Vec<ProjectedObject>, bool), StoreError> {
+        if limit == 0 || limit > 100 {
+            return Err(StoreError::InvalidBatch);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT id,kind FROM objects WHERE project_id=?1 AND kind!='provider_issue' AND lifecycle!='superseded'",
+        )?;
+        let rows = statement.query_map(params![project.as_str()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut selected = Vec::with_capacity(limit + 1);
+        for row in rows {
+            let (id, kind) = row?;
+            selected.push((priority(&id, &kind), id));
+            selected.sort_unstable();
+            selected.truncate(limit + 1);
+        }
+        let truncated = selected.len() > limit;
+        selected.truncate(limit);
+        let objects = selected
+            .into_iter()
+            .map(|(_, id)| {
+                let id = ObjectId::try_from(id.as_str()).map_err(|_| StoreError::CorruptHistory)?;
+                self.object(project, &id)?.ok_or(StoreError::CorruptHistory)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((objects, truncated))
+    }
+
+    /// Returns direct structural neighbors of a focused object.
+    ///
+    /// # Errors
+    /// Rejects invalid limits or damaged relation endpoints.
+    pub fn focus_neighbors(
+        &self,
+        project: &ProjectId,
+        focus: &ObjectId,
+        limit: usize,
+    ) -> Result<(Vec<ObjectId>, bool), StoreError> {
+        if limit == 0 || limit > 100 {
+            return Err(StoreError::InvalidBatch);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT subject_id,object_id FROM relations WHERE project_id=?1 AND (subject_id=?2 OR object_id=?2) ORDER BY id LIMIT ?3",
+        )?;
+        let rows = statement.query_map(
+            params![
+                project.as_str(),
+                focus.as_str(),
+                i64::try_from(limit + 1).map_err(|_| StoreError::InvalidBatch)?
+            ],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?;
+        let mut endpoints = rows.collect::<Result<Vec<_>, _>>()?;
+        let truncated = endpoints.len() > limit;
+        endpoints.truncate(limit);
+        let mut neighbors = Vec::new();
+        for (subject, object) in endpoints {
+            let other = if subject == focus.as_str() {
+                object
+            } else {
+                subject
+            };
+            let id = ObjectId::try_from(other.as_str()).map_err(|_| StoreError::CorruptHistory)?;
+            if !neighbors.contains(&id) {
+                neighbors.push(id);
+            }
+        }
+        Ok((neighbors, truncated))
+    }
+
     /// Selects Issue-owned accepted objects first, without crossing the causal revision.
     ///
     /// # Errors
@@ -1915,14 +1998,23 @@ impl Store {
         project: &ProjectId,
         agent: &AgentId,
     ) -> Result<(), StoreError> {
-        self.connection.execute(
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let revision: i64 = transaction.query_row(
+            "SELECT current_revision FROM projects WHERE id=?1",
+            params![project.as_str()],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
             "INSERT OR IGNORE INTO inbox_subscriptions (project_id, agent_id) VALUES (?1, ?2)",
             params![project.as_str(), agent.as_str()],
         )?;
-        self.connection.execute(
-            "INSERT OR IGNORE INTO inbox_cursors (project_id, agent_id, revision) VALUES (?1, ?2, 0)",
-            params![project.as_str(), agent.as_str()],
+        transaction.execute(
+            "INSERT OR IGNORE INTO inbox_cursors (project_id, agent_id, revision) VALUES (?1, ?2, ?3)",
+            params![project.as_str(), agent.as_str(), revision],
         )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -2054,21 +2146,45 @@ impl Store {
         batch: &merl_core::BatchId,
         limit: usize,
     ) -> Result<(Vec<DeltaChange>, bool), StoreError> {
+        self.batch_changes_page(project, batch, 0, limit)
+    }
+
+    /// Resolves one bounded page of accepted changes in a batch.
+    ///
+    /// # Errors
+    /// Rejects invalid bounds or damaged accepted event identities.
+    pub fn batch_changes_page(
+        &self,
+        project: &ProjectId,
+        batch: &merl_core::BatchId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<DeltaChange>, bool), StoreError> {
         if limit == 0 || limit > 100 {
+            return Err(StoreError::InvalidBatch);
+        }
+        let offset = i64::try_from(offset).map_err(|_| StoreError::InvalidBatch)?;
+        let exists: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM domain_event_batches WHERE project_id=?1 AND id=?2)",
+            params![project.as_str(), batch.as_str()],
+            |row| row.get(0),
+        )?;
+        if !exists {
             return Err(StoreError::InvalidBatch);
         }
         let mut statement = self.connection.prepare(
             "SELECT id,object_id,event_kind,event_index FROM domain_events WHERE project_id=?1 AND batch_id=?2
              UNION ALL
              SELECT id,relation_id,'put_relation',event_index FROM relation_events WHERE project_id=?1 AND batch_id=?2
-             ORDER BY event_index LIMIT ?3",
+             ORDER BY event_index LIMIT ?3 OFFSET ?4",
         )?;
         let mut changes = statement
             .query_map(
                 params![
                     project.as_str(),
                     batch.as_str(),
-                    i64::try_from(limit + 1).map_err(|_| StoreError::InvalidBatch)?
+                    i64::try_from(limit + 1).map_err(|_| StoreError::InvalidBatch)?,
+                    offset
                 ],
                 |row| {
                     Ok((
@@ -2093,6 +2209,33 @@ impl Store {
             changes.pop();
         }
         Ok((changes, truncated))
+    }
+
+    /// Finds a subscribed agent's accepted batch at a specific revision, even after ack.
+    ///
+    /// # Errors
+    /// Rejects unreadable storage or invalid stored batch identities.
+    pub fn inbox_entry_at(
+        &self,
+        project: &ProjectId,
+        agent: &AgentId,
+        revision: ProjectRevision,
+    ) -> Result<Option<InboxEntry>, StoreError> {
+        let batch: Option<String> = self.connection.query_row(
+            "SELECT batch_id FROM inbox_entries WHERE project_id=?1 AND agent_id=?2 AND project_revision=?3",
+            params![project.as_str(), agent.as_str(), to_sql_revision(revision)?],
+            |row| row.get(0),
+        ).optional()?;
+        batch
+            .map(|batch| {
+                Ok(InboxEntry {
+                    agent: agent.clone(),
+                    batch: merl_core::BatchId::try_from(batch.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    revision,
+                })
+            })
+            .transpose()
     }
 
     /// Returns durable inbox references after a subscriber's project cursor.
