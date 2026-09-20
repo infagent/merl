@@ -3,6 +3,10 @@ ALTER TABLE source_versions ADD COLUMN interpretation_basis_revision INTEGER NOT
 ALTER TABLE source_versions ADD COLUMN interpretation_basis_known INTEGER NOT NULL DEFAULT 0
     CHECK (interpretation_basis_known IN (0, 1));
 ALTER TABLE source_versions ADD COLUMN context_scope_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE source_versions ADD COLUMN source_author_id TEXT
+    CHECK (source_author_id IS NULL OR (length(source_author_id) BETWEEN 1 AND 128 AND source_author_id NOT GLOB '*[^A-Za-z0-9_-]*'));
+ALTER TABLE source_versions ADD COLUMN provider_source_author_id TEXT
+    CHECK (provider_source_author_id IS NULL OR length(provider_source_author_id) BETWEEN 1 AND 512);
 CREATE INDEX source_versions_by_context_scope
     ON source_versions(project_id, context_scope_id, sequence);
 
@@ -97,7 +101,7 @@ CREATE TABLE observed_assertions (
     epistemic_basis TEXT NOT NULL,
     polarity TEXT NOT NULL,
     confidence_millis INTEGER NOT NULL,
-    asserted_by TEXT NOT NULL,
+    asserted_by TEXT,
     attributed_to TEXT,
     attribution_verified INTEGER NOT NULL,
     PRIMARY KEY (project_id, run_id, assertion_index),

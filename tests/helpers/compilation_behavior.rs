@@ -249,6 +249,90 @@ impl CompilationScenario {
         scenario
     }
 
+    pub fn given_an_edited_issue_with_a_different_editor() -> Self {
+        let mut scenario = Self::new();
+        let fixture = merl_corpus::github::fixture_from_graphql_pages(
+            "DEV-FAKE",
+            "2026-01-02T00:00:00Z",
+            include_bytes!("../fixtures/github_two_page_edit.json"),
+        )
+        .expect("GitHub fixture");
+        merl_ingest::import_fixture(&mut scenario.store, &scenario.project, &fixture)
+            .expect("import edited Issue");
+        scenario.note = merl_ingest::fixture_version_id("edit-1").expect("edited version");
+        scenario
+    }
+
+    pub fn when_the_edited_version_is_compiled(&mut self) -> &mut Self {
+        let mut budget = limits();
+        budget.source_window = 1;
+        let context =
+            build_context(&self.store, &self.project, &self.note, budget).expect("edited context");
+        self.context = Some(serde_json::from_slice(&context.rendered).expect("context JSON"));
+        let response = format!(
+            r#"{{"schema":"merl.compiler-response/v1","assertions":[{{"source":"{}","span_start":0,"span_end":3,"subject":"D1","predicate":"gain","value":"variable","act":"report","epistemic_basis":"reported","polarity":"positive","confidence_millis":900,"attributed_to":"user-2"}}]}}"#,
+            self.note
+        );
+        let adapter = ProcessCompiler {
+            program: "sh".into(),
+            args: vec![
+                "-c".into(),
+                format!("read -r request; printf '%s' '{response}'"),
+            ],
+            version: "v1".into(),
+            model: "test-model".into(),
+            prompt_digest: Sha256::digest(b"edited-issue-prompt").into(),
+        };
+        run_compiler(
+            &mut self.store,
+            &self.project,
+            &self.note,
+            &adapter,
+            RunRequest {
+                id: "edited-run",
+                limits: budget,
+                mode: RunMode::Live,
+                now_millis: 1_767_300_000_000,
+            },
+        )
+        .expect("compile edited version");
+        self
+    }
+
+    pub fn then_the_assertion_uses_source_authorship_without_verifying_a_relay(
+        &mut self,
+    ) -> &mut Self {
+        let captured = self
+            .store
+            .source_version(&self.project, &self.note)
+            .expect("source lookup")
+            .expect("edited source");
+        assert_eq!(
+            captured.provider_source_author_id.as_deref(),
+            Some("user-1")
+        );
+        assert_eq!(captured.provider_actor_id.as_deref(), Some("user-2"));
+        let source = &self.context.as_ref().expect("context")["sources"][0];
+        let author = source["source_author_id"].as_str().expect("source author");
+        let editor = source["version_actor_id"].as_str().expect("version editor");
+        assert_ne!(author, editor);
+        assert!(
+            source["occurred_at_millis"].as_i64().expect("version time")
+                > source["created_at_millis"].as_i64().expect("creation time")
+        );
+        let assertion = self
+            .store
+            .observed_assertions(&self.project, "edited-run")
+            .expect("assertions")
+            .into_iter()
+            .next()
+            .expect("one assertion");
+        assert_eq!(assertion.asserted_by.as_deref(), Some(author));
+        assert_eq!(assertion.attributed_to.as_deref(), Some("user-2"));
+        assert!(!assertion.attribution_verified);
+        self
+    }
+
     pub fn when_the_note_is_compiled_with_hindsight(&mut self) -> &mut Self {
         let prepared = prepare_compilation(
             &mut self.store,
@@ -306,6 +390,7 @@ impl CompilationScenario {
             context["objects"].as_array().expect("objects").len(),
             limits().objects
         );
+        assert_eq!(context["objects_truncated"], true);
         self
     }
 
@@ -388,7 +473,7 @@ impl CompilationScenario {
     }
 
     pub fn when_the_configured_compiler_runs(&mut self) -> &mut Self {
-        let response = r#"{"schema":"merl.compiler-response/v1","assertions":[{"source":"note-v1","span_start":2,"span_end":9,"subject":"T1","predicate":"blocked","value":"true","act":"report","epistemic_basis":"observed","polarity":"positive","confidence_millis":900,"asserted_by":"alice","attributed_to":null,"attribution_verified":false}]}"#;
+        let response = r#"{"schema":"merl.compiler-response/v1","assertions":[{"source":"note-v1","span_start":2,"span_end":9,"subject":"T1","predicate":"blocked","value":"true","act":"report","epistemic_basis":"observed","polarity":"positive","confidence_millis":900,"attributed_to":null}]}"#;
         let adapter = ProcessCompiler {
             program: "sh".into(),
             args: vec![
@@ -580,6 +665,7 @@ impl CompilationScenario {
         assert_eq!(assertions[0].predicate, "blocked");
         assert_eq!(assertions[0].span_start, 2);
         assert_eq!(assertions[0].span_end, 9);
+        assert_eq!(assertions[0].asserted_by, None);
         self
     }
 
@@ -620,6 +706,8 @@ impl CompilationScenario {
                     observed_at_millis: 10,
                     actor: None,
                     provider_actor_id: None,
+                    source_author: None,
+                    provider_source_author_id: None,
                     body: Some(body.as_bytes()),
                     edit_diff: None,
                     edit_deleted_at_millis: None,

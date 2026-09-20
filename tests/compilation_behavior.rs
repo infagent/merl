@@ -94,3 +94,10 @@ fn pending_compiler_work_records_every_selection_limit() {
         .when_the_authority_prepares_the_compiler_run()
         .then_all_nine_limits_are_retained();
 }
+
+#[test]
+fn an_edited_comment_keeps_its_author_separate_from_its_editor() {
+    CompilationScenario::given_an_edited_issue_with_a_different_editor()
+        .when_the_edited_version_is_compiled()
+        .then_the_assertion_uses_source_authorship_without_verifying_a_relay();
+}

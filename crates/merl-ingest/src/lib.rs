@@ -153,12 +153,12 @@ fn import_fixture_inner(
             .as_ref()
             .map_or(observation.author.as_ref(), |edit| edit.editor.as_ref());
         let provider_actor_id = actor_ref.and_then(|actor| actor.provider_id.as_deref());
-        let actor = provider_actor_id
-            .map(|provider_id| {
-                ActorId::try_from(digest_id("actor", provider_id).as_str())
-                    .map_err(|_| ImportError::InvalidIdentity)
-            })
-            .transpose()?;
+        let actor = actor_identity(provider_actor_id)?;
+        let provider_source_author_id = observation
+            .author
+            .as_ref()
+            .and_then(|author| author.provider_id.as_deref());
+        let source_author = actor_identity(provider_source_author_id)?;
         let kind = match observation.kind {
             ObservationKind::Issue => "issue",
             ObservationKind::IssueComment => "issue_comment",
@@ -184,6 +184,8 @@ fn import_fixture_inner(
             observed_at_millis,
             actor,
             provider_actor_id,
+            source_author,
+            provider_source_author_id,
             body: observation.body.as_deref().map(str::as_bytes),
             edit_diff: observation
                 .edit
@@ -218,6 +220,15 @@ fn import_fixture_inner(
         accepted_revision: store.project_revision(project)?.get(),
         provider_changed,
     })
+}
+
+fn actor_identity(provider_id: Option<&str>) -> Result<Option<ActorId>, ImportError> {
+    provider_id
+        .map(|id| {
+            ActorId::try_from(digest_id("actor", id).as_str())
+                .map_err(|_| ImportError::InvalidIdentity)
+        })
+        .transpose()
 }
 
 fn fixture_binding(fixture: &Fixture) -> Result<SourceBinding, ImportError> {
