@@ -23,7 +23,8 @@ fn a_pending_retry_replaces_a_prior_failure_in_coverage() {
     CompilationScenario::given_required_and_optional_notes()
         .when_the_required_note_fails_its_output_budget()
         .when_a_retry_is_prepared()
-        .then_coverage_reports_pending_instead_of_failed();
+        .then_coverage_reports_pending_instead_of_failed()
+        .then_the_retry_has_a_later_durable_attempt_order();
 }
 
 #[test]

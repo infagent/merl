@@ -1005,12 +1005,27 @@ impl CompilationScenario {
         self
     }
 
-    pub fn then_coverage_reports_pending_instead_of_failed(&mut self) {
+    pub fn then_coverage_reports_pending_instead_of_failed(&mut self) -> &mut Self {
         let coverage = self.coverage.expect("coverage");
         assert_eq!(coverage.required_gaps, 1);
         assert_eq!(coverage.required_pending, 1);
         assert_eq!(coverage.required_failed, 0);
         assert_eq!(coverage.optional_cold, 1);
+        self
+    }
+
+    pub fn then_the_retry_has_a_later_durable_attempt_order(&mut self) {
+        let failed = self
+            .store
+            .compilation_run_status(&self.project, "budget-run")
+            .expect("failed run")
+            .expect("run");
+        let pending = self
+            .store
+            .compilation_run_status(&self.project, "retry-run")
+            .expect("pending run")
+            .expect("run");
+        assert!(pending.attempt_order > failed.attempt_order);
     }
 
     pub fn when_the_required_note_is_compiled_for_evaluation(&mut self) -> &mut Self {
