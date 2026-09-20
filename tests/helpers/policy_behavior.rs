@@ -306,6 +306,10 @@ impl PolicyScenario {
         assert_eq!(recorded.inputs[0].disposition, PolicyDisposition::Accepted);
         assert_eq!(recorded.inputs[1].disposition, PolicyDisposition::Candidate);
         assert_eq!(recorded.version.as_str(), "policy-v1");
+        assert_eq!(
+            recorded.configuration_digest,
+            self.rules.configuration_digest()
+        );
         assert_eq!(recorded.basis_project_revision.get(), 0);
         assert_eq!(recorded.reads.len(), 1);
         assert_eq!(recorded.writes.len(), 1);

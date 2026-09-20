@@ -3,6 +3,7 @@ CREATE TABLE policy_evaluations (
     id TEXT NOT NULL,
     actor_id TEXT NOT NULL,
     policy_version TEXT NOT NULL,
+    policy_config_digest BLOB NOT NULL CHECK (length(policy_config_digest) = 32),
     basis_project_revision INTEGER NOT NULL CHECK (basis_project_revision >= 0),
     evaluation_digest BLOB NOT NULL CHECK (length(evaluation_digest) = 32),
     batch_id TEXT,
