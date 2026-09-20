@@ -62,6 +62,6 @@ fn old_natural_captures_stay_valid_while_new_captures_require_stable_provider_fa
         .then_uses_the_new_schema()
         .when_read_as_a_legacy_capture()
         .then_remains_valid_without_new_provider_facts()
-        .then_does_not_invent_missing_label_ids()
+        .then_does_not_invent_missing_provider_facts()
         .then_cannot_claim_the_new_schema_without_them();
 }

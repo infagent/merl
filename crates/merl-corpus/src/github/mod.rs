@@ -204,6 +204,7 @@ fn add_versions(
     includes_created_edit: bool,
     edits: &[GraphqlEdit],
 ) -> Result<(), String> {
+    let first_version_index = observations.len();
     let created = timestamp(created_at)?;
     let updated = timestamp(updated_at)?;
     if updated < created {
@@ -308,7 +309,12 @@ fn add_versions(
             None,
         ));
     }
-    // updatedAt may reflect metadata changes; lastEditedAt locates body changes.
+    // GitHub exposes the current entity update time, not the timestamp of
+    // each historical body version. Earlier versions keep that field unknown.
+    observations[first_version_index..]
+        .last_mut()
+        .expect("add_versions always captures an initial version")
+        .updated_at = Some(updated_at.to_owned());
     Ok(())
 }
 
@@ -347,6 +353,7 @@ fn observation(
         author,
         occurred_at: occurred_at.to_owned(),
         created_at: created_at.to_owned(),
+        updated_at: None,
         body: body.map(str::to_owned),
         body_sha256: body.map(body_digest),
         missing_body_reason,

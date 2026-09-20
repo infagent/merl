@@ -29,6 +29,7 @@ pub struct IssueHistory {
     store: Store,
     project: ProjectId,
     last_import_result: Option<Result<(), merl_ingest::ImportError>>,
+    fixture: Option<merl_corpus::fixture::Fixture>,
 }
 
 impl IssueHistory {
@@ -40,7 +41,49 @@ impl IssueHistory {
             store,
             project,
             last_import_result: None,
+            fixture: None,
         }
+    }
+
+    pub fn given_a_github_issue_with_an_edit(&mut self) -> &mut Self {
+        self.fixture = Some(two_page_github_issue());
+        self
+    }
+
+    pub fn when_the_issue_is_imported(&mut self) -> &mut Self {
+        import_fixture(
+            &mut self.store,
+            &self.project,
+            self.fixture.as_ref().expect("GitHub issue fixture"),
+        )
+        .expect("import GitHub issue");
+        self
+    }
+
+    pub fn then_current_issue_and_comment_updates_are_queryable(&mut self) -> &mut Self {
+        for (sequence, expected) in [
+            (2, 1_767_261_600_000),
+            (3, 1_767_265_200_000),
+            (4, 1_767_268_800_000),
+        ] {
+            let version = self
+                .store
+                .source_version_at(&self.project, sequence)
+                .expect("source lookup")
+                .expect("captured source");
+            assert_eq!(version.upstream_updated_at_millis, Some(expected));
+        }
+        self
+    }
+
+    pub fn then_the_earlier_issue_version_has_no_future_update_time(&mut self) -> &mut Self {
+        let version = self
+            .store
+            .source_version_at(&self.project, 1)
+            .expect("source lookup")
+            .expect("first Issue version");
+        assert_eq!(version.upstream_updated_at_millis, None);
+        self
     }
 
     pub fn when_importing(&mut self, fixture: &merl_corpus::fixture::Fixture) -> &mut Self {
@@ -161,6 +204,7 @@ impl IssueHistory {
             ambiguous_order_with_previous: false,
             created_at_millis: 1,
             occurred_at_millis: 1,
+            upstream_updated_at_millis: Some(1),
             observed_at_millis: 2,
             actor: None,
             provider_actor_id: None,
@@ -179,6 +223,7 @@ impl IssueHistory {
         );
         let retry = SourceCapture {
             observed_at_millis: 3,
+            upstream_updated_at_millis: Some(2),
             compilation_mode: CompilationMode::CaptureOnly,
             coverage_requirement: CoverageRequirement::Optional,
             policy_version: CapturePolicyVersion::try_from("new_policy").unwrap(),
@@ -203,6 +248,7 @@ impl IssueHistory {
             .unwrap()
             .expect("first version");
         assert_eq!(captured.observed_at_millis, 2);
+        assert_eq!(captured.upstream_updated_at_millis, Some(1));
         assert_eq!(captured.compilation_mode, CompilationMode::Eager);
         assert_eq!(captured.coverage_requirement, CoverageRequirement::Required);
         assert_eq!(captured.policy_version.as_str(), "initial");

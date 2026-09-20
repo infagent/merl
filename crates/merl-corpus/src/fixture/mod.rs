@@ -206,6 +206,10 @@ pub struct Observation {
     pub occurred_at: String,
     /// Original provider creation time for the external entity.
     pub created_at: String,
+    /// Entity update time at capture, which may follow this body edit.
+    /// Earlier versions leave it unknown unless a separate capture established it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
     /// Exact source text, absent when the provider cannot reconstruct it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
@@ -476,6 +480,8 @@ pub enum ValidationError {
     ObservationBeforeCreation(u64),
     /// A source version is placed after the fixture was captured.
     ObservationAfterCapture(u64),
+    /// A recorded upstream update predates its source version or follows capture.
+    InvalidSourceUpdate(u64),
     /// Two observations claim the same immutable version identity.
     DuplicateVersionIdentity(u64),
     /// A source version occurs before the observation preceding it.
@@ -562,6 +568,12 @@ impl fmt::Display for ValidationError {
             }
             Self::ObservationAfterCapture(sequence) => {
                 write!(formatter, "observation {sequence} follows fixture capture")
+            }
+            Self::InvalidSourceUpdate(sequence) => {
+                write!(
+                    formatter,
+                    "source update for observation {sequence} is out of time"
+                )
             }
             Self::DuplicateVersionIdentity(sequence) => {
                 write!(
@@ -812,6 +824,11 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
         }
         let occurred_at = parse_timestamp(&observation.occurred_at)?;
         let created_at = parse_timestamp(&observation.created_at)?;
+        let updated_at = observation
+            .updated_at
+            .as_deref()
+            .map(parse_timestamp)
+            .transpose()?;
         if occurred_at < created_at {
             return Err(ValidationError::ObservationBeforeCreation(
                 observation.sequence,
@@ -821,6 +838,9 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
             return Err(ValidationError::ObservationAfterCapture(
                 observation.sequence,
             ));
+        }
+        if updated_at.is_some_and(|updated| updated < occurred_at || updated > captured_at) {
+            return Err(ValidationError::InvalidSourceUpdate(observation.sequence));
         }
         if let Some(edit) = &observation.edit {
             let edited_at = parse_timestamp(&edit.edited_at)?;

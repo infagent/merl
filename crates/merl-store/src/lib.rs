@@ -154,6 +154,8 @@ pub struct SourceCapture<'a> {
     pub created_at_millis: i64,
     /// Time this version became visible upstream.
     pub occurred_at_millis: i64,
+    /// Entity update time known at capture, not the time of this body edit.
+    pub upstream_updated_at_millis: Option<i64>,
     /// Time Merl captured this provider snapshot.
     pub observed_at_millis: i64,
     /// Stable provider actor identity when one is available.
@@ -201,6 +203,8 @@ pub struct StoredSourceVersion {
     pub occurred_at_millis: i64,
     /// Provider creation time of the external entity.
     pub created_at_millis: i64,
+    /// Entity update time retained by the first capture, when known.
+    pub upstream_updated_at_millis: Option<i64>,
     /// Time Merl captured the provider snapshot.
     pub observed_at_millis: i64,
     /// Stable upstream actor ID, if available.
@@ -391,6 +395,9 @@ impl Store {
     ) -> Result<bool, StoreError> {
         if capture.created_at_millis > capture.occurred_at_millis
             || capture.occurred_at_millis > capture.observed_at_millis
+            || capture.upstream_updated_at_millis.is_some_and(|updated| {
+                updated < capture.occurred_at_millis || updated > capture.observed_at_millis
+            })
             || capture.edit_deleted_at_millis.is_some_and(|deleted| {
                 deleted < capture.occurred_at_millis || deleted > capture.observed_at_millis
             })
@@ -517,7 +524,7 @@ impl Store {
             .query_row(
                 "SELECT source_id, provider_entity_id, provider_version_id, binding_id, kind,
                     supersedes_id, ambiguous_order_with_previous, sequence,
-                    occurred_at_millis, created_at_millis, observed_at_millis,
+                    occurred_at_millis, created_at_millis, upstream_updated_at_millis, observed_at_millis,
                     provider_actor_id, compilation_mode, coverage_requirement,
                     capture_policy_version, body_digest, missing_body_reason, payload_id,
                     edit_diff_payload_id, edit_deleted_at_millis
@@ -546,6 +553,7 @@ impl Store {
                 sequence: u64::try_from(row.sequence).map_err(|_| StoreError::CorruptHistory)?,
                 occurred_at_millis: row.occurred_at_millis,
                 created_at_millis: row.created_at_millis,
+                upstream_updated_at_millis: row.upstream_updated_at_millis,
                 observed_at_millis: row.observed_at_millis,
                 provider_actor_id: row.provider_actor_id,
                 compilation_mode: CompilationMode::try_from(row.compilation_mode.as_str())
@@ -1177,16 +1185,16 @@ fn insert_source_version(
     transaction.execute(
         "INSERT INTO source_versions (
              project_id, id, source_id, provider_entity_id, provider_version_id, binding_id, kind, supersedes_id, ambiguous_order_with_previous, sequence,
-             occurred_at_millis, created_at_millis, observed_at_millis, actor_id, provider_actor_id,
+             occurred_at_millis, created_at_millis, upstream_updated_at_millis, observed_at_millis, actor_id, provider_actor_id,
              body_digest, edit_diff_digest, capture_digest, payload_id, edit_diff_payload_id, edit_deleted_at_millis, missing_body_reason,
              compilation_mode, coverage_requirement, capture_policy_version
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
         params![
             project.as_str(), capture.version.as_str(), capture.source.as_str(),
             capture.provider_entity_id, capture.provider_version_id,
             capture.binding.id.as_str(), capture.kind.as_str(),
             capture.supersedes.as_ref().map(SourceVersionId::as_str), i64::from(capture.ambiguous_order_with_previous), sequence,
-            capture.occurred_at_millis, capture.created_at_millis, capture.observed_at_millis,
+            capture.occurred_at_millis, capture.created_at_millis, capture.upstream_updated_at_millis, capture.observed_at_millis,
             capture.actor.as_ref().map(ActorId::as_str), capture.provider_actor_id,
             payloads.body_digest.map(AsRef::<[u8]>::as_ref),
             payloads.edit_diff_digest.map(AsRef::<[u8]>::as_ref),
@@ -1211,6 +1219,7 @@ struct RawSourceVersion {
     sequence: i64,
     occurred_at_millis: i64,
     created_at_millis: i64,
+    upstream_updated_at_millis: Option<i64>,
     observed_at_millis: i64,
     provider_actor_id: Option<String>,
     compilation_mode: String,
@@ -1236,16 +1245,17 @@ impl RawSourceVersion {
             sequence: row.get(7)?,
             occurred_at_millis: row.get(8)?,
             created_at_millis: row.get(9)?,
-            observed_at_millis: row.get(10)?,
-            provider_actor_id: row.get(11)?,
-            compilation_mode: row.get(12)?,
-            coverage_requirement: row.get(13)?,
-            capture_policy_version: row.get(14)?,
-            body_digest: row.get(15)?,
-            missing_body_reason: row.get(16)?,
-            payload_id: row.get(17)?,
-            edit_diff_payload_id: row.get(18)?,
-            edit_deleted_at_millis: row.get(19)?,
+            upstream_updated_at_millis: row.get(10)?,
+            observed_at_millis: row.get(11)?,
+            provider_actor_id: row.get(12)?,
+            compilation_mode: row.get(13)?,
+            coverage_requirement: row.get(14)?,
+            capture_policy_version: row.get(15)?,
+            body_digest: row.get(16)?,
+            missing_body_reason: row.get(17)?,
+            payload_id: row.get(18)?,
+            edit_diff_payload_id: row.get(19)?,
+            edit_deleted_at_millis: row.get(20)?,
         })
     }
 }
@@ -1281,8 +1291,8 @@ fn source_capture_digest(
         digest.update((value.len() as u64).to_be_bytes());
         digest.update(value.as_bytes());
     }
-    // Poll time and effective policy belong to the first capture. A later
-    // poll can see the same immutable version under a newer binding policy.
+    // Poll time, upstream update time, and effective policy belong to the first
+    // capture. A metadata-only provider update can leave the body version intact.
     for value in [capture.created_at_millis, capture.occurred_at_millis] {
         digest.update(value.to_be_bytes());
     }

@@ -95,20 +95,7 @@ pub fn import_fixture(
     fixture: &Fixture,
 ) -> Result<ImportReport, ImportError> {
     validate(fixture)?;
-    let provider = SourceProvider::try_from(fixture.source.provider.as_str())
-        .map_err(|_| ImportError::InvalidIdentity)?;
-    let namespace = fixture
-        .source
-        .repository_provider_id
-        .as_deref()
-        .unwrap_or(&fixture.source.issue_provider_id);
-    let binding = SourceBinding {
-        id: SourceBindingId::try_from(digest_id("sb", &format!("{provider}:{namespace}")).as_str())
-            .map_err(|_| ImportError::InvalidIdentity)?,
-        provider,
-        provider_namespace_id: namespace.to_owned(),
-        namespace_digest: Sha256::digest(namespace.as_bytes()).into(),
-    };
+    let binding = fixture_binding(fixture)?;
     let observed_at_millis = utc_millis(&fixture.capture.captured_at)?;
     let policy_version = CapturePolicyVersion::try_from(FIXTURE_CAPTURE_POLICY_VERSION)
         .map_err(|_| ImportError::InvalidIdentity)?;
@@ -160,6 +147,11 @@ pub fn import_fixture(
             ambiguous_order_with_previous: observation.ambiguous_order_with_previous,
             created_at_millis: utc_millis(&observation.created_at)?,
             occurred_at_millis: utc_millis(&observation.occurred_at)?,
+            upstream_updated_at_millis: observation
+                .updated_at
+                .as_deref()
+                .map(utc_millis)
+                .transpose()?,
             observed_at_millis,
             actor,
             provider_actor_id,
@@ -189,6 +181,23 @@ pub fn import_fixture(
         observation_head: store.source_observation_head(project)?,
         accepted_revision: store.project_revision(project)?.get(),
         provider_changed,
+    })
+}
+
+fn fixture_binding(fixture: &Fixture) -> Result<SourceBinding, ImportError> {
+    let provider = SourceProvider::try_from(fixture.source.provider.as_str())
+        .map_err(|_| ImportError::InvalidIdentity)?;
+    let namespace = fixture
+        .source
+        .repository_provider_id
+        .as_deref()
+        .unwrap_or(&fixture.source.issue_provider_id);
+    Ok(SourceBinding {
+        id: SourceBindingId::try_from(digest_id("sb", &format!("{provider}:{namespace}")).as_str())
+            .map_err(|_| ImportError::InvalidIdentity)?,
+        provider,
+        provider_namespace_id: namespace.to_owned(),
+        namespace_digest: Sha256::digest(namespace.as_bytes()).into(),
     })
 }
 

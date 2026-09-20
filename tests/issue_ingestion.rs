@@ -57,3 +57,12 @@ fn a_retry_keeps_the_first_capture_time_and_policy() {
         .when_a_source_is_recaptured_under_another_policy()
         .then_first_capture_metadata_still_applies();
 }
+
+#[test]
+fn github_source_update_times_remain_queryable_without_backdating_them() {
+    IssueHistory::new("P6")
+        .given_a_github_issue_with_an_edit()
+        .when_the_issue_is_imported()
+        .then_current_issue_and_comment_updates_are_queryable()
+        .then_the_earlier_issue_version_has_no_future_update_time();
+}

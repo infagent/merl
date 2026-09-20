@@ -23,6 +23,7 @@ CREATE TABLE source_versions (
     sequence INTEGER NOT NULL CHECK (sequence > 0),
     occurred_at_millis INTEGER NOT NULL,
     created_at_millis INTEGER NOT NULL,
+    upstream_updated_at_millis INTEGER,
     observed_at_millis INTEGER NOT NULL,
     actor_id TEXT CHECK (actor_id IS NULL OR (length(actor_id) BETWEEN 1 AND 128 AND actor_id NOT GLOB '*[^A-Za-z0-9_-]*')),
     provider_actor_id TEXT CHECK (provider_actor_id IS NULL OR length(provider_actor_id) BETWEEN 1 AND 512),

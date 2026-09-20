@@ -145,6 +145,9 @@ impl GithubCapture {
         "merl.corpus-fixture/v1".clone_into(&mut fixture.schema);
         fixture.provider_snapshot.updated_at = None;
         fixture.provider_snapshot.label_refs.clear();
+        for observation in &mut fixture.observations {
+            observation.updated_at = None;
+        }
         fixture.capture.source_sha256 =
             source_digest(&fixture.provider_snapshot, &fixture.observations);
         self
@@ -155,7 +158,7 @@ impl GithubCapture {
         self
     }
 
-    pub fn then_does_not_invent_missing_label_ids(self) -> Self {
+    pub fn then_does_not_invent_missing_provider_facts(self) -> Self {
         let fixture = self.fixture();
         let project = merl_core::ProjectId::try_from("legacy").expect("project ID");
         let mut store = merl_store::Store::open_in_memory().expect("store");
@@ -172,6 +175,13 @@ impl GithubCapture {
             head.input.assignee_provider_ids,
             Some(vec!["user-2".to_owned()])
         );
+        for sequence in 1..=4 {
+            let version = store
+                .source_version_at(&project, sequence)
+                .expect("source lookup")
+                .expect("legacy version");
+            assert_eq!(version.upstream_updated_at_millis, None);
+        }
         self
     }
 
