@@ -7,7 +7,7 @@ use merl_core::{
     PolicyDisposition, ProjectId, ProjectRevision, ProviderIssueState, ProviderObservation,
 };
 use merl_policy::{PolicyRules, PreparedPolicy, Proposal, evaluate};
-use merl_store::{SourceBinding, SourceCapture, Store, StoreError};
+use merl_store::{SourceBinding, SourceCapture, Store, StoreError, SupportStatus};
 use sha2::{Digest, Sha256};
 use std::{
     fs::OpenOptions,
@@ -55,6 +55,8 @@ fn event(id_value: &str, object: &str, kind: &str, payload: Option<PayloadId>) -
         object: id(object),
         kind: id(kind),
         payload,
+        issue_scope: None,
+        lifecycle: merl_core::ObjectLifecycle::Active,
     }
 }
 
@@ -121,9 +123,401 @@ pub struct PolicyScenario {
     retry_disposition: Option<PolicyDisposition>,
     persisted_file: Option<TempStoreFile>,
     invalid_result: Option<Result<Option<merl_core::ProjectRevision>, StoreError>>,
+    provider_collision_rejected: bool,
 }
 
 impl PolicyScenario {
+    pub fn given_a_decision_supported_by_an_issue_comment() -> Self {
+        let mut scenario = Self::new();
+        let body = "Use fixed gain";
+        scenario.capture("direct-v1", body, "alice");
+        scenario.compile("direct-v1", body.len(), None, "direct-run");
+        let accepted = evaluate(
+            &scenario.store,
+            &scenario.project,
+            &id("authority"),
+            id("support-eval"),
+            id("support-batch"),
+            NOW + 3,
+            &scenario.rules,
+            &[Proposal::ObservedAssertion {
+                id: id("support-assertion"),
+                run: id("direct-run"),
+                index: 0,
+                event: event("support-event", "D1", "decision", None),
+            }],
+        )
+        .expect("evaluate source assertion");
+        accepted
+            .commit(&mut scenario.store)
+            .expect("accept decision");
+        scenario
+    }
+
+    pub fn given_a_decision_compiled_with_an_earlier_comment() -> Self {
+        let mut scenario = Self::file_backed();
+        scenario.capture_in_scope("context-v1", "Keep the baseline.", "alice", "issue-204");
+        let body = "Use fixed gain";
+        scenario.capture_in_scope("direct-v1", body, "alice", "issue-204");
+        scenario.compile("direct-v1", body.len(), None, "context-dependent-run");
+        let accepted = evaluate(
+            &scenario.store,
+            &scenario.project,
+            &id("authority"),
+            id("context-eval"),
+            id("context-batch"),
+            NOW + 3,
+            &scenario.rules,
+            &[Proposal::ObservedAssertion {
+                id: id("context-assertion"),
+                run: id("context-dependent-run"),
+                index: 0,
+                event: event("context-event", "D1", "decision", None),
+            }],
+        )
+        .expect("evaluate context-dependent assertion");
+        accepted
+            .commit(&mut scenario.store)
+            .expect("accept decision");
+        scenario
+    }
+
+    pub fn when_the_earlier_comment_is_edited(&mut self) -> &mut Self {
+        self.capture_edit(
+            "context-v1",
+            "context-v2",
+            "Keep the baseline!",
+            "issue-204",
+        );
+        self
+    }
+
+    pub fn when_the_authority_restarts(&mut self) -> &mut Self {
+        let file = self.persisted_file.as_ref().expect("file-backed authority");
+        self.store = Store::open(&file.0).expect("reopen authority");
+        self
+    }
+
+    pub fn when_the_comment_is_edited(&mut self) -> &mut Self {
+        self.capture_edit("direct-v1", "direct-v2", "Use fixed gain.", "direct-v1");
+        self
+    }
+
+    fn capture_edit(&mut self, source: &str, version: &str, body: &str, scope: &str) {
+        self.store
+            .capture_source_version(
+                &self.project,
+                &SourceCapture {
+                    binding: binding(),
+                    source: id(source),
+                    provider_entity_id: source,
+                    context_scope_id: scope,
+                    version: id(version),
+                    provider_version_id: version,
+                    kind: id("issue_comment"),
+                    supersedes: Some(id(source)),
+                    ambiguous_order_with_previous: false,
+                    created_at_millis: NOW,
+                    occurred_at_millis: NOW + 4,
+                    upstream_updated_at_millis: Some(NOW + 4),
+                    observed_at_millis: NOW + 4,
+                    actor: Some(id("alice")),
+                    provider_actor_id: Some("alice"),
+                    source_author: Some(id("alice")),
+                    provider_source_author_id: Some("alice"),
+                    body: Some(body.as_bytes()),
+                    edit_diff: None,
+                    edit_deleted_at_millis: None,
+                    missing_body_reason: None,
+                    compilation_mode: CompilationMode::Eager,
+                    coverage_requirement: CoverageRequirement::Required,
+                    policy_version: id("capture-v1"),
+                },
+            )
+            .expect("capture edit");
+    }
+
+    pub fn then_the_decision_is_active_with_revalidation_pending(&mut self) -> &mut Self {
+        assert!(
+            self.store
+                .object(&self.project, &id("D1"))
+                .expect("decision")
+                .is_some()
+        );
+        assert_eq!(
+            self.store
+                .object_support_status(&self.project, &id("D1"))
+                .expect("support"),
+            SupportStatus::RevalidationPending,
+        );
+        assert_eq!(
+            self.store
+                .pending_revalidation_count(&self.project)
+                .expect("queue"),
+            1
+        );
+        let impacts = self
+            .store
+            .evidence_impacts_for_object(&self.project, &id("D1"))
+            .expect("impact trail");
+        assert_eq!(impacts.len(), 1);
+        assert_eq!(impacts[0].next_action, "recompile");
+        assert!(impacts[0].revalidated_by.is_none());
+        self
+    }
+
+    pub fn when_the_edit_confirms_the_same_decision(&mut self) -> &mut Self {
+        let body = "Use fixed gain.";
+        self.compile("direct-v2", body.len(), None, "edited-run");
+        let prepared = evaluate(
+            &self.store,
+            &self.project,
+            &id("authority"),
+            id("revalidation-eval"),
+            id("revalidation-batch"),
+            NOW + 6,
+            &self.rules,
+            &[Proposal::ObservedAssertion {
+                id: id("edited-assertion"),
+                run: id("edited-run"),
+                index: 0,
+                event: event("revalidation-event", "D1", "decision", None),
+            }],
+        )
+        .expect("evaluate edit");
+        prepared
+            .commit(&mut self.store)
+            .expect("revalidate decision");
+        self
+    }
+
+    pub fn when_the_affected_derivation_is_recompiled_and_confirmed(&mut self) -> &mut Self {
+        let body = "Use fixed gain";
+        let impact = self
+            .store
+            .evidence_impacts_for_object(&self.project, &id("D1"))
+            .expect("impact trail")
+            .into_iter()
+            .next()
+            .expect("impact");
+        let compiler = StatementCompiler {
+            version: "direct-v1",
+            body_len: body.len(),
+            attributed_to: None,
+        };
+        let prepared_run = prepare_compilation(
+            &mut self.store,
+            &self.project,
+            &id("direct-v1"),
+            &compiler,
+            RunRequest {
+                id: &impact.id,
+                limits: limits(),
+                mode: RunMode::Hindsight,
+                now_millis: NOW + 5,
+            },
+        )
+        .expect("prepare affected derivation")
+        .expect("new run");
+        let response = execute_compilation(&prepared_run, &compiler);
+        record_compilation_result(
+            &mut self.store,
+            &self.project,
+            &prepared_run,
+            response,
+            NOW + 6,
+        )
+        .expect("record revised interpretation");
+        let prepared = evaluate(
+            &self.store,
+            &self.project,
+            &id("authority"),
+            id("context-revalidation-eval"),
+            id("context-revalidation-batch"),
+            NOW + 6,
+            &self.rules,
+            &[Proposal::ObservedAssertion {
+                id: id("context-revalidation-assertion"),
+                run: id(&impact.id),
+                index: 0,
+                event: event("context-revalidation-event", "D1", "decision", None),
+            }],
+        )
+        .expect("evaluate revised context");
+        prepared.commit(&mut self.store).expect("confirm decision");
+        self
+    }
+
+    pub fn then_the_context_impact_is_resolved_and_support_is_current(&mut self) {
+        assert_eq!(
+            self.store
+                .object_support_status(&self.project, &id("D1"))
+                .expect("support"),
+            SupportStatus::Current,
+        );
+        assert_eq!(
+            self.store
+                .pending_revalidation_count(&self.project)
+                .expect("queue"),
+            0
+        );
+        let impacts = self
+            .store
+            .evidence_impacts_for_object(&self.project, &id("D1"))
+            .expect("impact trail");
+        assert_eq!(impacts.len(), 1);
+        assert_eq!(impacts[0].affected_run.as_str(), "context-dependent-run");
+        assert_eq!(impacts[0].trigger.as_str(), "direct-v1");
+        let revised = self
+            .store
+            .load_compilation_context(&self.project, &impacts[0].id)
+            .expect("revised compiler input");
+        assert!(
+            revised
+                .source_window
+                .iter()
+                .any(|item| item.as_str() == "context-v2")
+        );
+        assert!(
+            revised
+                .source_window
+                .iter()
+                .any(|item| item.as_str() == "direct-v1")
+        );
+        assert_eq!(
+            impacts[0]
+                .revalidated_by
+                .as_ref()
+                .map(merl_core::EventId::as_str),
+            Some("context-revalidation-event")
+        );
+    }
+
+    pub fn when_a_provider_observation_targets_that_decision(&mut self) -> &mut Self {
+        let payload = id("provider-collision-snapshot");
+        self.store
+            .put_payload(&self.project, &payload, b"provider snapshot")
+            .expect("snapshot");
+        let observation = ProviderObservation {
+            id: id("provider-collision-input"),
+            binding: binding().id,
+            issue: id("D1"),
+            state: ProviderIssueState::Open,
+            upstream_updated_at_millis: None,
+            closed_at_millis: None,
+            label_provider_ids: Some(Vec::new()),
+            assignee_provider_ids: Some(Vec::new()),
+            snapshot_payload: payload.clone(),
+            observed_at_millis: NOW + 7,
+        };
+        self.provider_collision_rejected = match evaluate(
+            &self.store,
+            &self.project,
+            &id("provider_observation"),
+            id("provider-collision-eval"),
+            id("provider-collision-batch"),
+            NOW + 7,
+            &self.rules,
+            &[Proposal::ProviderObservation {
+                observation,
+                event: event(
+                    "provider-collision-event",
+                    "D1",
+                    "provider_issue",
+                    Some(payload),
+                ),
+            }],
+        ) {
+            Ok(prepared) => prepared.commit(&mut self.store).is_err(),
+            Err(_) => true,
+        };
+        self
+    }
+
+    pub fn then_the_provider_observation_is_rejected_and_the_decision_remains(&mut self) {
+        assert!(self.provider_collision_rejected);
+        let object = self
+            .store
+            .object(&self.project, &id("D1"))
+            .expect("decision")
+            .expect("present");
+        assert_eq!(object.kind.as_str(), "decision");
+        assert!(
+            self.store
+                .provider_issue_head(&self.project, &id("D1"))
+                .expect("provider")
+                .is_none()
+        );
+        assert_eq!(
+            self.store
+                .project_revision(&self.project)
+                .expect("revision")
+                .get(),
+            1
+        );
+    }
+
+    pub fn when_the_object_projection_is_rebuilt(&mut self) -> &mut Self {
+        self.store
+            .rebuild_projection(&self.project)
+            .expect("rebuild projection");
+        self
+    }
+
+    pub fn then_the_decision_has_current_support_again(&mut self) {
+        assert_eq!(
+            self.store
+                .object_support_status(&self.project, &id("D1"))
+                .expect("support"),
+            SupportStatus::Current,
+        );
+        assert_eq!(
+            self.store
+                .pending_revalidation_count(&self.project)
+                .expect("queue"),
+            0
+        );
+        let impacts = self
+            .store
+            .evidence_impacts_for_object(&self.project, &id("D1"))
+            .expect("impact trail");
+        assert_eq!(
+            impacts[0]
+                .revalidated_by
+                .as_ref()
+                .map(merl_core::EventId::as_str),
+            Some("revalidation-event")
+        );
+    }
+
+    pub fn when_the_source_bytes_are_erased(&mut self) -> &mut Self {
+        self.store
+            .erase_payload(&self.project, &id("src_direct-v1"))
+            .expect("erase source bytes");
+        self
+    }
+
+    pub fn then_the_decision_remains_but_support_is_unsupported(&mut self) {
+        assert!(
+            self.store
+                .object(&self.project, &id("D1"))
+                .expect("decision")
+                .is_some()
+        );
+        assert_eq!(
+            self.store
+                .object_support_status(&self.project, &id("D1"))
+                .expect("support"),
+            SupportStatus::Unsupported,
+        );
+        assert_eq!(
+            self.store
+                .pending_revalidation_count(&self.project)
+                .expect("queue"),
+            1
+        );
+    }
+
     pub fn given_a_prepared_batch_with_one_competing_input() -> Self {
         let mut scenario = Self::new();
         scenario.prepared = Some(scenario.command(
@@ -380,6 +774,7 @@ impl PolicyScenario {
             retry_disposition: None,
             persisted_file: None,
             invalid_result: None,
+            provider_collision_rejected: false,
         }
     }
 
@@ -394,6 +789,16 @@ impl PolicyScenario {
     }
 
     fn capture(&mut self, version: &'static str, body: &'static str, author: &str) {
+        self.capture_in_scope(version, body, author, version);
+    }
+
+    fn capture_in_scope(
+        &mut self,
+        version: &'static str,
+        body: &'static str,
+        author: &str,
+        scope: &str,
+    ) {
         self.store
             .capture_source_version(
                 &self.project,
@@ -401,7 +806,7 @@ impl PolicyScenario {
                     binding: binding(),
                     source: id(version),
                     provider_entity_id: version,
-                    context_scope_id: version,
+                    context_scope_id: scope,
                     version: id(version),
                     provider_version_id: version,
                     kind: id("issue_comment"),

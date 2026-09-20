@@ -19,6 +19,14 @@ fn required_failures_are_visible_but_optional_cold_notes_do_not_block_coverage()
 }
 
 #[test]
+fn a_pending_retry_replaces_a_prior_failure_in_coverage() {
+    CompilationScenario::given_required_and_optional_notes()
+        .when_the_required_note_fails_its_output_budget()
+        .when_a_retry_is_prepared()
+        .then_coverage_reports_pending_instead_of_failed();
+}
+
+#[test]
 fn an_evaluation_run_does_not_claim_live_semantic_coverage() {
     CompilationScenario::given_required_and_optional_notes()
         .when_the_required_note_is_compiled_for_evaluation()
@@ -86,6 +94,29 @@ fn a_large_project_selects_only_the_budgeted_objects() {
     CompilationScenario::given_more_accepted_objects_than_the_context_budget()
         .when_the_latest_comment_context_is_built()
         .then_only_the_budgeted_objects_are_selected();
+}
+
+#[test]
+fn an_issue_comment_keeps_its_named_decision_in_bounded_context() {
+    CompilationScenario::given_many_unrelated_objects_and_a_named_decision()
+        .when_the_issue_comment_is_compiled()
+        .then_the_named_decision_is_selected_before_unrelated_objects();
+}
+
+#[test]
+fn an_issue_comment_gets_its_own_decision_without_naming_the_handle() {
+    CompilationScenario::given_many_other_issue_objects_and_one_local_decision()
+        .when_the_issue_comment_is_compiled()
+        .then_its_issue_decision_is_selected();
+}
+
+#[test]
+fn issue_coverage_excludes_other_threads_and_optional_notes() {
+    CompilationScenario::given_required_and_optional_issue_notes()
+        .when_issue_coverage_is_inspected()
+        .then_only_the_required_issue_note_is_a_gap()
+        .when_the_required_issue_note_is_compiled()
+        .then_issue_coverage_is_complete_with_an_optional_attachment();
 }
 
 #[test]

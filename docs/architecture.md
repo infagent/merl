@@ -237,7 +237,7 @@ The context manifest contains:
 - the renderer version and exact rendered-input digest;
 - a `PayloadRef` to the rendered input when retention policy permits retention.
 
-The context builder starts with the triggering event, materialized state as it existed at the interpretation-basis revision, relevant unresolved objects, and a bounded recent window ending at the observation cutoff. It may include only source observations and accepted state causally available at that position. A versioned selector may expand the set through relations without crossing the cutoff.
+The context builder starts with the triggering event, materialized state as it existed at the interpretation-basis revision, relevant unresolved objects, and a bounded recent window ending at the observation cutoff. It may include only source observations and accepted state causally available at that position. The first Issue selector puts objects named by a stable handle in the triggering text ahead of other objects, then favors accepted objects attached to that Issue. It records the chosen revisions and whether the budget left objects out. If the named objects cannot fit, context construction fails visibly. Later selectors may expand through relations without crossing the cutoff.
 
 Late `on_demand` compilation preserves the source's historical meaning. If a source arrived at observation 100 when the project was at revision 72, a compilation requested at revision 500 still uses `interpretation_basis_revision=72` and `source_observation_cutoff=100`. The resulting assertions then enter a new `PolicyEvaluation` with `basis_project_revision=500`. Interpretation asks what the source meant then; policy asks what that assertion may change now. A run that deliberately uses later knowledge to reinterpret the source is `hindsight`, not ordinary on-demand compilation.
 
@@ -302,7 +302,9 @@ An assertion remains a historical record of what one compiler inferred from one 
 
 Accepted-object lifecycle and evidence support are separate. An object may remain `active` while its support awaits revalidation. Individual support relations use `current`, `evidence_changed`, `revalidation_pending`, or `unsupported`. The object view derives an aggregate support status: `current`, `revalidation_pending`, `partially_supported`, or `unsupported`.
 
-Source supersession enqueues a new compilation context at the new causal position. Policy compares the resulting assertions with prior support and emits domain events that keep the object active with an updated support status, supersede it, or invalidate it. Until that work finishes, the object remains in its prior lifecycle state and its support status shows the pending revalidation. A cosmetic edit therefore need not erase an active decision, while a material correction cannot leave the old evidence looking current.
+Source supersession records one impact for each accepted support that cited the old source or used it in its compiler context. The impact names the affected compiler run, so a restarted authority can reconstruct the work. For a context edit, Merl replaces the changed version in that run's recorded source window and records a new hindsight run. The assertion may still cite the original trigger; Merl resolves the impact only after policy accepts the revised interpretation.
+
+The impact itself is the queryable `evidence_changed` fact. Its pending action remains visible until resolution, and neither record rewrites the original assertion. A material correction may instead supersede or invalidate the old object through policy. If the source bytes disappear, the view marks that support unavailable. The later administrative purge workflow must audit the erasure and its retention scope; low-level payload erasure alone does not make that claim.
 
 ### Policy evaluations
 
@@ -365,6 +367,8 @@ Every accepted transaction groups its domain events under one stable `DomainEven
 Domain events are append-only. A correction emits another event that supersedes or reverses the earlier effect. Merl does not rewrite the historical record.
 
 Materialized objects and relations are the current projection of accepted domain events. They exist for fast reads and compact rendering. Merl must be able to rebuild them from the domain log.
+
+An Issue view keeps provider-owned facts apart from Merl's decisions, questions, and other semantic objects. Each semantic object shows both its accepted lifecycle and the health of its supporting evidence. A source edit can leave a decision active while its evidence awaits revalidation; a later accepted decision can supersede it even when that original evidence remains sound. Relations such as `supersedes` record how those decisions connect. Rebuilding the projection must preserve all three: lifecycle, support, and relations.
 
 ## State planes
 

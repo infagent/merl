@@ -94,6 +94,8 @@ impl HistoricalIssue {
                     object: ObjectId::try_from("gain-decision").expect("object"),
                     kind: ObjectKind::try_from("decision").expect("kind"),
                     payload: Some(payload),
+                    issue_scope: None,
+                    lifecycle: merl_core::ObjectLifecycle::Active,
                 }],
             })
             .expect("accept decision");
@@ -124,6 +126,8 @@ impl HistoricalIssue {
                     object: ObjectId::try_from("future-decision").expect("object"),
                     kind: ObjectKind::try_from("decision").expect("kind"),
                     payload: Some(payload),
+                    issue_scope: None,
+                    lifecycle: merl_core::ObjectLifecycle::Active,
                 }],
             })
             .expect("accept future decision");
@@ -211,6 +215,8 @@ impl CompilationScenario {
                     object: ObjectId::try_from("future-decision").expect("object"),
                     kind: ObjectKind::try_from("decision").expect("kind"),
                     payload: Some(payload),
+                    issue_scope: None,
+                    lifecycle: merl_core::ObjectLifecycle::Active,
                 }],
             })
             .expect("accept later decision");
@@ -229,6 +235,8 @@ impl CompilationScenario {
                 object: ObjectId::try_from(format!("object-{index}").as_str()).expect("object"),
                 kind: ObjectKind::try_from("decision").expect("kind"),
                 payload: None,
+                issue_scope: None,
+                lifecycle: merl_core::ObjectLifecycle::Active,
             })
             .collect();
         scenario
@@ -247,6 +255,178 @@ impl CompilationScenario {
             CoverageRequirement::Required,
         );
         scenario
+    }
+
+    pub fn given_required_and_optional_issue_notes() -> Self {
+        let mut scenario = Self::new();
+        scenario.capture_in_scope(
+            "required-issue-note",
+            "A decision is needed.",
+            "issue-204",
+            CoverageRequirement::Required,
+        );
+        scenario.capture_in_scope(
+            "optional-issue-note",
+            "Background reading.",
+            "issue-204",
+            CoverageRequirement::Optional,
+        );
+        scenario.capture_in_scope(
+            "other-issue-note",
+            "Other issue needs work.",
+            "issue-999",
+            CoverageRequirement::Required,
+        );
+        scenario.note = SourceVersionId::try_from("required-issue-note").expect("source");
+        scenario
+    }
+
+    pub fn when_issue_coverage_is_inspected(&mut self) -> &mut Self {
+        self.coverage = Some(
+            self.store
+                .semantic_coverage_in_scope(&self.project, "issue-204")
+                .expect("Issue coverage"),
+        );
+        self
+    }
+
+    pub fn then_only_the_required_issue_note_is_a_gap(&mut self) -> &mut Self {
+        let coverage = self.coverage.expect("coverage");
+        assert_eq!(coverage.observation_head, 2);
+        assert_eq!(coverage.processed_through, 0);
+        assert_eq!(coverage.required_gaps, 1);
+        assert_eq!(coverage.required_pending, 0);
+        assert_eq!(coverage.optional_cold, 1);
+        self
+    }
+
+    pub fn when_the_required_issue_note_is_compiled(&mut self) -> &mut Self {
+        run_compiler(
+            &mut self.store,
+            &self.project,
+            &self.note,
+            &FakeCompiler,
+            RunRequest {
+                id: "required-issue-run",
+                limits: limits(),
+                mode: RunMode::Live,
+                now_millis: 30,
+            },
+        )
+        .expect("compile required note");
+        self.when_issue_coverage_is_inspected()
+    }
+
+    pub fn then_issue_coverage_is_complete_with_an_optional_attachment(&mut self) -> &mut Self {
+        let coverage = self.coverage.expect("coverage");
+        assert_eq!(coverage.observation_head, 2);
+        assert_eq!(coverage.processed_through, 2);
+        assert_eq!(coverage.required_gaps, 0);
+        assert_eq!(coverage.optional_cold, 1);
+        self
+    }
+
+    pub fn given_many_unrelated_objects_and_a_named_decision() -> Self {
+        let mut scenario = Self::new();
+        let mut events: Vec<_> = (0..9)
+            .map(|index| DomainEvent::PutObject {
+                id: EventId::try_from(format!("noise-event-{index}").as_str()).expect("event"),
+                object: ObjectId::try_from(format!("A{index}").as_str()).expect("object"),
+                kind: ObjectKind::try_from("fact").expect("kind"),
+                payload: None,
+                issue_scope: None,
+                lifecycle: merl_core::ObjectLifecycle::Active,
+            })
+            .collect();
+        events.push(DomainEvent::PutObject {
+            id: EventId::try_from("decision-event").expect("event"),
+            object: ObjectId::try_from("D18").expect("object"),
+            kind: ObjectKind::try_from("decision").expect("kind"),
+            payload: None,
+            issue_scope: None,
+            lifecycle: merl_core::ObjectLifecycle::Active,
+        });
+        scenario
+            .store
+            .commit_unchecked_bootstrap(&DomainEventBatch {
+                id: BatchId::try_from("project-state").expect("batch"),
+                project: scenario.project.clone(),
+                actor: ActorId::try_from("owner").expect("actor"),
+                occurred_at_millis: 5,
+                events,
+            })
+            .expect("accepted state");
+        scenario.capture_in_scope(
+            "issue-comment-v1",
+            "Does D18 still apply?",
+            "issue-204",
+            CoverageRequirement::Required,
+        );
+        scenario.note = SourceVersionId::try_from("issue-comment-v1").expect("source");
+        scenario
+    }
+
+    pub fn given_many_other_issue_objects_and_one_local_decision() -> Self {
+        let mut scenario = Self::new();
+        let mut events: Vec<_> = (0..9)
+            .map(|index| DomainEvent::PutObject {
+                id: EventId::try_from(format!("other-event-{index}").as_str()).expect("event"),
+                object: ObjectId::try_from(format!("A{index}").as_str()).expect("object"),
+                kind: ObjectKind::try_from("fact").expect("kind"),
+                payload: None,
+                issue_scope: Some("issue-999".into()),
+                lifecycle: merl_core::ObjectLifecycle::Active,
+            })
+            .collect();
+        events.push(DomainEvent::PutObject {
+            id: EventId::try_from("local-decision-event").expect("event"),
+            object: ObjectId::try_from("D18").expect("object"),
+            kind: ObjectKind::try_from("decision").expect("kind"),
+            payload: None,
+            issue_scope: Some("issue-204".into()),
+            lifecycle: merl_core::ObjectLifecycle::Active,
+        });
+        scenario
+            .store
+            .commit_unchecked_bootstrap(&DomainEventBatch {
+                id: BatchId::try_from("scoped-state").expect("batch"),
+                project: scenario.project.clone(),
+                actor: ActorId::try_from("owner").expect("actor"),
+                occurred_at_millis: 5,
+                events,
+            })
+            .expect("accepted state");
+        scenario.capture_in_scope(
+            "local-comment",
+            "Does the prior decision still apply?",
+            "issue-204",
+            CoverageRequirement::Required,
+        );
+        scenario.note = SourceVersionId::try_from("local-comment").expect("source");
+        scenario
+    }
+
+    pub fn then_its_issue_decision_is_selected(&mut self) -> &mut Self {
+        let context = self.context.as_ref().expect("context");
+        let objects = context["objects"].as_array().expect("objects");
+        assert!(objects.iter().any(|object| object["id"] == "D18"));
+        self
+    }
+
+    pub fn when_the_issue_comment_is_compiled(&mut self) -> &mut Self {
+        let context = build_context(&self.store, &self.project, &self.note, limits())
+            .expect("bounded issue context");
+        self.context = Some(serde_json::from_slice(&context.rendered).expect("context JSON"));
+        self
+    }
+
+    pub fn then_the_named_decision_is_selected_before_unrelated_objects(&mut self) -> &mut Self {
+        let context = self.context.as_ref().expect("context");
+        let objects = context["objects"].as_array().expect("objects");
+        assert_eq!(objects.len(), limits().objects);
+        assert!(objects.iter().any(|object| object["id"] == "D18"));
+        assert_eq!(context["objects_truncated"], true);
+        self
     }
 
     pub fn given_an_edited_issue_with_a_different_editor() -> Self {
@@ -800,6 +980,37 @@ impl CompilationScenario {
                 .expect("coverage"),
         );
         self
+    }
+
+    pub fn when_a_retry_is_prepared(&mut self) -> &mut Self {
+        prepare_compilation(
+            &mut self.store,
+            &self.project,
+            &self.note,
+            &FakeCompiler,
+            RunRequest {
+                id: "retry-run",
+                limits: limits(),
+                mode: RunMode::Live,
+                now_millis: 40,
+            },
+        )
+        .expect("prepare retry")
+        .expect("pending work");
+        self.coverage = Some(
+            self.store
+                .semantic_coverage(&self.project)
+                .expect("coverage"),
+        );
+        self
+    }
+
+    pub fn then_coverage_reports_pending_instead_of_failed(&mut self) {
+        let coverage = self.coverage.expect("coverage");
+        assert_eq!(coverage.required_gaps, 1);
+        assert_eq!(coverage.required_pending, 1);
+        assert_eq!(coverage.required_failed, 0);
+        assert_eq!(coverage.optional_cold, 1);
     }
 
     pub fn when_the_required_note_is_compiled_for_evaluation(&mut self) -> &mut Self {

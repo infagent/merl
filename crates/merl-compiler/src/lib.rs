@@ -1,6 +1,7 @@
 //! Causal source selection and a bounded, authority-free compiler boundary.
 
 use std::{
+    collections::BTreeSet,
     error::Error,
     fmt,
     io::{Read, Write},
@@ -9,7 +10,8 @@ use std::{
 
 use merl_core::{ObjectId, ObjectRevision, ProjectId, ProjectRevision, SourceVersionId};
 use merl_store::{
-    CompilationIntent, CompilationResult, PayloadRead, Store, StoreError, StructuralAssertion,
+    CompilationIntent, CompilationResult, PayloadRead, SelectedObjects, Store, StoreError,
+    StructuralAssertion,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -147,6 +149,12 @@ struct RenderedObject {
     body: Option<String>,
 }
 
+struct ObjectContext {
+    references: Vec<(ObjectId, ObjectRevision)>,
+    views: Vec<RenderedObject>,
+    truncated: bool,
+}
+
 /// Selects only observations and accepted state available at the trigger's position.
 ///
 /// # Errors
@@ -215,16 +223,52 @@ fn build_context_with_basis(
         source.sequence,
         limits.source_window,
     )?;
+    build_context_from_sources(
+        store,
+        project,
+        trigger,
+        basis,
+        source.sequence,
+        selected,
+        limits,
+    )
+}
+
+fn build_context_from_sources(
+    store: &Store,
+    project: &ProjectId,
+    trigger: &SourceVersionId,
+    basis: ProjectRevision,
+    cutoff: u64,
+    selected: Vec<SourceVersionId>,
+    limits: CompilerLimits,
+) -> Result<CompilationContext, CompileError> {
+    if selected.is_empty() || selected.len() > limits.source_window || limits.objects == 0 {
+        return Err(CompileError::InputBudget);
+    }
+    let source = store
+        .source_version(project, trigger)?
+        .ok_or(CompileError::NonCausalHistory)?;
+    if !selected.iter().any(|item| item == trigger) {
+        return Err(CompileError::NonCausalHistory);
+    }
     let mut sources = Vec::new();
     let mut source_window = Vec::new();
     let mut payload_bytes = 0usize;
+    let mut previous_sequence = 0_u64;
     for version in selected {
         let item = store
             .source_version(project, &version)?
             .ok_or(CompileError::NonCausalHistory)?;
-        if item.ambiguous_order_with_previous || item.payload.is_none() {
+        if item.ambiguous_order_with_previous
+            || item.payload.is_none()
+            || item.sequence > cutoff
+            || item.sequence <= previous_sequence
+            || item.context_scope_id != source.context_scope_id
+        {
             return Err(CompileError::NonCausalHistory);
         }
+        previous_sequence = item.sequence;
         let body = match store.read_payload(
             project,
             item.payload
@@ -251,41 +295,25 @@ fn build_context_with_basis(
             body: String::from_utf8(body).map_err(|_| CompileError::InvalidResponse)?,
         });
     }
-    let historical = store.objects_at_revision(project, basis, limits.objects)?;
-    let mut objects = Vec::new();
-    let mut object_views = Vec::new();
-    for (id, revision, payload) in historical.items {
-        let body = match payload {
-            Some(payload) => match store.read_payload(project, &payload)? {
-                PayloadRead::Available(bytes) => {
-                    payload_bytes = payload_bytes
-                        .checked_add(bytes.len())
-                        .ok_or(CompileError::InputBudget)?;
-                    if payload_bytes > limits.payload_bytes {
-                        return Err(CompileError::InputBudget);
-                    }
-                    Some(String::from_utf8(bytes).map_err(|_| CompileError::InvalidResponse)?)
-                }
-                PayloadRead::Unavailable => return Err(CompileError::NonCausalHistory),
-            },
-            None => None,
-        };
-        object_views.push(RenderedObject {
-            id: id.to_string(),
-            revision: revision.get(),
-            body,
-        });
-        objects.push((id, revision));
-    }
+    let selection = select_objects(
+        store,
+        project,
+        basis,
+        trigger,
+        &source.context_scope_id,
+        &sources,
+        limits.objects,
+    )?;
+    let object_context = render_objects(store, project, selection, &mut payload_bytes, limits)?;
     let rendered = serde_json::to_vec(&RenderedContext {
         schema: "merl.compilation-context/v1",
         context_scope_id: source.context_scope_id,
         interpretation_basis_revision: basis.get(),
-        source_observation_cutoff: source.sequence,
+        source_observation_cutoff: cutoff,
         trigger: trigger.to_string(),
         sources,
-        objects: object_views,
-        objects_truncated: historical.truncated,
+        objects: object_context.views,
+        objects_truncated: object_context.truncated,
     })
     .map_err(|_| CompileError::InvalidResponse)?;
     if rendered.len() > limits.input_bytes {
@@ -294,10 +322,163 @@ fn build_context_with_basis(
     Ok(CompilationContext {
         trigger: trigger.clone(),
         interpretation_basis_revision: basis,
-        source_observation_cutoff: source.sequence,
+        source_observation_cutoff: cutoff,
         source_window,
-        objects,
+        objects: object_context.references,
         rendered,
+    })
+}
+
+fn build_revalidation_context(
+    store: &Store,
+    project: &ProjectId,
+    trigger: &SourceVersionId,
+    impact: &merl_store::EvidenceImpact,
+    limits: CompilerLimits,
+) -> Result<CompilationContext, CompileError> {
+    if impact.next_action != "recompile" || impact.revalidated_by.is_some() {
+        return Err(CompileError::NonCausalHistory);
+    }
+    let replacement = impact
+        .replacement
+        .as_ref()
+        .ok_or(CompileError::NonCausalHistory)?;
+    let replacement_source = store
+        .source_version(project, replacement)?
+        .ok_or(CompileError::NonCausalHistory)?;
+    if replacement_source.supersedes.as_ref() != Some(&impact.changed_source) {
+        return Err(CompileError::NonCausalHistory);
+    }
+    let expected_trigger = if impact.trigger == impact.changed_source {
+        replacement
+    } else {
+        &impact.trigger
+    };
+    if trigger != expected_trigger {
+        return Err(CompileError::NonCausalHistory);
+    }
+    let mut selected = store.compilation_context_sources(project, impact.affected_run.as_str())?;
+    let changed = selected
+        .iter_mut()
+        .find(|version| **version == impact.changed_source)
+        .ok_or(CompileError::NonCausalHistory)?;
+    *changed = replacement.clone();
+    let mut ordered = Vec::with_capacity(selected.len());
+    for version in selected {
+        let source = store
+            .source_version(project, &version)?
+            .ok_or(CompileError::NonCausalHistory)?;
+        ordered.push((source.sequence, version));
+    }
+    ordered.sort_by_key(|item| item.0);
+    let selected = ordered.into_iter().map(|(_, version)| version).collect();
+    build_context_from_sources(
+        store,
+        project,
+        trigger,
+        store.project_revision(project)?,
+        store.source_observation_head(project)?,
+        selected,
+        limits,
+    )
+}
+
+fn render_objects(
+    store: &Store,
+    project: &ProjectId,
+    selection: SelectedObjects,
+    payload_bytes: &mut usize,
+    limits: CompilerLimits,
+) -> Result<ObjectContext, CompileError> {
+    let mut references = Vec::new();
+    let mut views = Vec::new();
+    for (id, revision, payload) in selection.items {
+        let body = match payload {
+            Some(payload) => match store.read_payload(project, &payload)? {
+                PayloadRead::Available(bytes) => {
+                    *payload_bytes = payload_bytes
+                        .checked_add(bytes.len())
+                        .ok_or(CompileError::InputBudget)?;
+                    if *payload_bytes > limits.payload_bytes {
+                        return Err(CompileError::InputBudget);
+                    }
+                    Some(String::from_utf8(bytes).map_err(|_| CompileError::InvalidResponse)?)
+                }
+                PayloadRead::Unavailable => return Err(CompileError::NonCausalHistory),
+            },
+            None => None,
+        };
+        views.push(RenderedObject {
+            id: id.to_string(),
+            revision: revision.get(),
+            body,
+        });
+        references.push((id, revision));
+    }
+    Ok(ObjectContext {
+        references,
+        views,
+        truncated: selection.truncated,
+    })
+}
+
+fn select_objects(
+    store: &Store,
+    project: &ProjectId,
+    basis: ProjectRevision,
+    trigger: &SourceVersionId,
+    scope: &str,
+    sources: &[RenderedSource],
+    budget: usize,
+) -> Result<SelectedObjects, CompileError> {
+    let mut named = Vec::new();
+    let mut seen = BTreeSet::new();
+    if let Some(trigger_source) = sources.iter().find(|item| item.id == trigger.as_str()) {
+        for token in trigger_source
+            .body
+            .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        {
+            // An uppercase handle with a number is a structural hint, not a semantic claim.
+            if !token.starts_with(|character: char| character.is_ascii_uppercase())
+                || !token.bytes().any(|byte| byte.is_ascii_digit())
+                || !seen.insert(token.to_owned())
+            {
+                continue;
+            }
+            if let Ok(id) = ObjectId::try_from(token)
+                && let Some((revision, payload)) = store.object_at_revision(project, &id, basis)?
+            {
+                named.push((id, revision, payload));
+                if named.len() > budget {
+                    return Err(CompileError::InputBudget);
+                }
+            }
+        }
+    }
+    let historical = store.objects_at_revision_for_scope(
+        project,
+        basis,
+        budget.saturating_add(named.len()),
+        scope,
+    )?;
+    let mut selected = named;
+    let total_visible = selected.len()
+        + historical
+            .items
+            .iter()
+            .filter(|item| !selected.iter().any(|(id, _, _)| id == &item.0))
+            .count();
+    for item in historical.items {
+        if selected.len() == budget {
+            break;
+        }
+        if !selected.iter().any(|(id, _, _)| id == &item.0) {
+            selected.push(item);
+        }
+    }
+    Ok(SelectedObjects {
+        items: selected,
+        truncated: historical.truncated || total_visible > budget,
     })
 }
 
@@ -680,14 +861,18 @@ pub fn prepare_compilation(
         }));
     }
     let context = if mode == RunMode::Hindsight {
-        build_context_with_basis(
-            store,
-            project,
-            source,
-            store.project_revision(project)?,
-            limits,
-            true,
-        )?
+        if let Some(impact) = store.evidence_impact(project, run_id)? {
+            build_revalidation_context(store, project, source, &impact, limits)?
+        } else {
+            build_context_with_basis(
+                store,
+                project,
+                source,
+                store.project_revision(project)?,
+                limits,
+                true,
+            )?
+        }
     } else {
         build_context(store, project, source, limits)?
     };
@@ -700,7 +885,7 @@ pub fn prepare_compilation(
         interpretation_basis_revision: context.interpretation_basis_revision,
         source_observation_cutoff: context.source_observation_cutoff,
         renderer_version: "json_v1",
-        selector_version: "object_id_prefix_v1",
+        selector_version: "issue_context_v1",
         compiler_id: adapter.id(),
         compiler_version: adapter.version(),
         model_id: adapter.model(),
