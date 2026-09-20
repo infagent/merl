@@ -1,11 +1,15 @@
 //! The public command-line boundary for local Merl projects.
 
-use std::{error::Error, fmt, fmt::Write as _, fs::File, io::Read, path::Path};
+use std::{
+    collections::BTreeSet, error::Error, fmt, fmt::Write as _, fs::File, io::Read, path::Path,
+};
 
 use merl_core::{AgentId, ObjectId, PolicyInput, ProjectId, ProjectRevision, SourceVersionId};
 use merl_corpus::fixture::Fixture;
 use merl_ingest::{ImportError, import_fixture};
-use merl_store::{IssueState, PayloadRead, ProjectDelta, Store, StoreError, SupportStatus};
+use merl_store::{
+    IssueState, ObjectHistoryEntry, PayloadRead, ProjectDelta, Store, StoreError, SupportStatus,
+};
 use serde_json::{Value, json};
 
 /// A CLI failure with a stable machine-readable code.
@@ -131,6 +135,9 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
     let mut agent = None;
     let mut since = None;
     let mut revision = None;
+    let mut batch = None;
+    let mut offset = None;
+    let mut focus = None;
     let mut version = None;
     let mut history = false;
     let mut expand_source = false;
@@ -184,6 +191,18 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 index += 1;
                 revision = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
             }
+            "--batch" => {
+                index += 1;
+                batch = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--offset" => {
+                index += 1;
+                offset = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--focus" => {
+                index += 1;
+                focus = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
             "--version" => {
                 index += 1;
                 version = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
@@ -213,9 +232,11 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
         ["help", "project", "revision"] => help("project revision", *json_output),
         ["help", "project", "view"] => help("project view", *json_output),
         ["help", "project", "delta"] => help("project delta", *json_output),
+        ["help", "project", "batch"] => help("project batch", *json_output),
         ["help", "issue"] => help("issue", *json_output),
         ["help", "inbox"] => help("inbox", *json_output),
         ["help", "inbox", "poll"] => help("inbox poll", *json_output),
+        ["help", "inbox", "show"] => help("inbox show", *json_output),
         ["help", "inbox", "subscribe"] => help("inbox subscribe", *json_output),
         ["help", "inbox", "ack"] => help("inbox ack", *json_output),
         ["help", "show"] => help("show", *json_output),
@@ -244,7 +265,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
             let database = database.ok_or_else(|| invalid_input("--database is required"))?;
             let store = Store::open(Path::new(database))?;
-            render_project_view(&store, &project, role, *json_output)
+            render_project_view(&store, &project, role, focus, *json_output)
         }
         ["project", "delta"] => {
             let project =
@@ -261,6 +282,21 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 store.semantic_coverage(&project)?,
                 *json_output,
             )
+        }
+        ["project", "batch"] => {
+            let project =
+                parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
+            let database = database.ok_or_else(|| invalid_input("--database is required"))?;
+            let batch = merl_core::BatchId::try_from(
+                batch.ok_or_else(|| invalid_input("--batch is required"))?,
+            )
+            .map_err(|error| CliError {
+                code: "INVALID_ID",
+                message: error.to_string(),
+            })?;
+            let offset = parse_offset(offset)?;
+            let store = Store::open(Path::new(database))?;
+            render_batch_page(&store, &project, &batch, offset, *json_output)
         }
         ["issue", "import-fixture"] => {
             let id = parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
@@ -322,7 +358,8 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 rendered.push(json!({
                     "id": format!("{}:{}", entry.batch, entry.agent),
                     "batch": entry.batch.as_str(), "revision": entry.revision.get(),
-                    "changes": changes_json(&changes), "changes_truncated": changes_truncated
+                    "changes": changes_json(&changes), "changes_truncated": changes_truncated,
+                    "next_offset": changes_truncated.then_some(changes.len())
                 }));
             }
             if *json_output {
@@ -348,11 +385,30 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                     )
                     .expect("String write");
                     if truncated {
-                        output.push_str("  More changes in this batch.\n");
+                        writeln!(
+                            output,
+                            "  More changes: merl inbox show --revision {} --offset 20",
+                            entry.revision.get()
+                        )
+                        .expect("String write");
                     }
                 }
                 Ok(output)
             }
+        }
+        ["inbox", "show"] => {
+            let project =
+                parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
+            let database = database.ok_or_else(|| invalid_input("--database is required"))?;
+            let agent = parse_agent(agent.ok_or_else(|| invalid_input("--agent is required"))?)?;
+            let revision =
+                parse_revision(revision.ok_or_else(|| invalid_input("--revision is required"))?)?;
+            let offset = parse_offset(offset)?;
+            let store = Store::open(Path::new(database))?;
+            let entry = store
+                .inbox_entry_at(&project, &agent, revision)?
+                .ok_or_else(|| invalid_input("inbox entry does not exist"))?;
+            render_batch_page(&store, &project, &entry.batch, offset, *json_output)
         }
         ["inbox", "subscribe"] => {
             let project =
@@ -478,29 +534,39 @@ fn render_project_view(
     store: &Store,
     project: &ProjectId,
     role: &str,
+    focus: Option<&str>,
     json_output: bool,
 ) -> Result<String, CliError> {
     let revision = store.project_revision(project)?;
-    let selected = store.objects_at_revision(project, revision, 100)?;
-    let mut objects = Vec::new();
-    for (id, _, _) in &selected.items {
-        let object = store
-            .object(project, id)?
-            .ok_or(StoreError::CorruptHistory)?;
-        if object.kind.as_str() != "provider_issue"
-            && object.lifecycle != merl_core::ObjectLifecycle::Superseded
-        {
-            objects.push(object);
+    let focus = focus
+        .map(|value| {
+            ObjectId::try_from(value).map_err(|error| CliError {
+                code: "INVALID_ID",
+                message: error.to_string(),
+            })
+        })
+        .transpose()?;
+    let mut neighbors = BTreeSet::new();
+    let mut focus_truncated = false;
+    if let Some(focus) = &focus {
+        if store.object(project, focus)?.is_none() {
+            return Err(invalid_input("focus object does not exist"));
         }
+        let (related, truncated) = store.focus_neighbors(project, focus, 100)?;
+        neighbors.extend(related.into_iter().map(|id| id.to_string()));
+        focus_truncated = truncated;
     }
-    objects.sort_by_key(|object| {
-        (
-            role_priority(object.kind.as_str(), role),
-            object.id.as_str().to_owned(),
-        )
-    });
-    let truncated = selected.truncated || objects.len() > 20;
-    objects.truncate(20);
+    let (objects, truncated) = store.current_objects_ranked(project, 20, |id, kind| {
+        if focus.as_ref().is_some_and(|focus| focus.as_str() == id) {
+            0
+        } else if neighbors.contains(id) {
+            1
+        } else if focus.is_some() {
+            2 + role_priority(kind, role)
+        } else {
+            role_priority(kind, role)
+        }
+    })?;
     let summaries = objects
         .iter()
         .map(|object| object_view_value(store, project, object))
@@ -510,10 +576,14 @@ fn render_project_view(
         render_json(&json!({
             "schema": "merl.project-view/v1", "project": project.as_str(), "role": role,
             "project_revision": revision.get(), "coverage": coverage_json(coverage),
-            "objects": summaries, "truncated": truncated
+            "objects": summaries, "truncated": truncated,
+            "focus": focus.as_ref().map(ObjectId::as_str), "focus_truncated": focus_truncated
         }))
     } else {
         let mut output = format!("{project}@{} ({role})\n", revision.get());
+        if let Some(focus) = &focus {
+            writeln!(output, "Focus: {focus}").expect("String write");
+        }
         writeln!(
             output,
             "Source head {}; required gaps {}",
@@ -612,24 +682,24 @@ fn render_object(
             "event": origin.event.as_str(), "evaluation": origin.evaluation.as_str(), "input": input_json
         });
     }
-    let history_json = if history {
-        Value::Array(
-            store
-                .object_history(project, object)?
-                .iter()
-                .map(|entry| {
-                    json!({
-                        "event": entry.event.as_str(), "batch": entry.batch.as_str(),
-                        "revision": entry.revision.get(), "lifecycle": entry.lifecycle.as_str(),
-                        "payload_ref": entry.payload.as_ref().map(merl_core::PayloadId::as_str),
-                        "evaluation": entry.evaluation.as_ref().map(merl_core::PolicyEvaluationId::as_str),
-                        "input": entry.input.as_ref().map(|input| json!({"kind": input.kind(), "id": input.id().as_str()}))
-                    })
-                })
-                .collect(),
-        )
+    let history_entries = if history || expand_source {
+        store.object_history(project, object)?
     } else {
-        Value::Null
+        Vec::new()
+    };
+    let history_json = history.then(|| object_history_json(&history_entries));
+    let evidence_history = if expand_source {
+        history_entries.iter().filter_map(|entry| {
+            match &entry.input {
+                Some(PolicyInput::ObservedAssertion { run, index, .. }) =>
+                    Some((entry.event.as_str(), run, *index)),
+                _ => None,
+            }
+        }).map(|(event, run, index)| {
+            Ok(json!({"event": event, "assertion": assertion_json(store, project, run, index, true)?}))
+        }).collect::<Result<Vec<_>, CliError>>()?
+    } else {
+        Vec::new()
     };
     if json_output {
         let mut result = json!({
@@ -641,7 +711,10 @@ fn render_object(
             "policy_origin": origin_json
         });
         if history {
-            result["history"] = history_json;
+            result["history"] = history_json.expect("history requested");
+        }
+        if expand_source {
+            result["evidence_history"] = json!(evidence_history);
         }
         render_json(&result)
     } else {
@@ -663,26 +736,48 @@ fn render_object(
             .expect("String write");
         }
         if expand_source {
-            let evidence = &origin_json["input"]["assertion"]["evidence"];
-            if evidence["status"] == "available" {
-                writeln!(
-                    output,
-                    "Evidence: {}",
-                    evidence["text"].as_str().unwrap_or("")
-                )
-                .expect("String write");
-            } else if evidence["status"] == "unavailable" {
-                output.push_str("Evidence: source bytes unavailable\n");
+            for support in &evidence_history {
+                let evidence = &support["assertion"]["evidence"];
+                if evidence["status"] == "available" {
+                    writeln!(
+                        output,
+                        "Evidence: {}",
+                        evidence["text"].as_str().unwrap_or("")
+                    )
+                    .expect("String write");
+                } else if evidence["status"] == "unavailable" {
+                    output.push_str("Evidence: source bytes unavailable\n");
+                }
             }
         }
         if history {
-            for entry in store.object_history(project, object)? {
+            for entry in history_entries {
                 writeln!(output, "Revision {}: {}", entry.revision.get(), entry.event)
                     .expect("String write");
             }
         }
         Ok(output)
     }
+}
+
+fn object_history_json(entries: &[ObjectHistoryEntry]) -> Value {
+    Value::Array(entries.iter().map(|entry| {
+        let input = entry.input.as_ref().map(|input| {
+            let mut detail = json!({"kind": input.kind(), "id": input.id().as_str()});
+            if let PolicyInput::ObservedAssertion { run, index, .. } = input {
+                detail["run"] = json!(run.as_str());
+                detail["index"] = json!(index);
+            }
+            detail
+        });
+        json!({
+            "event": entry.event.as_str(), "batch": entry.batch.as_str(),
+            "revision": entry.revision.get(), "lifecycle": entry.lifecycle.as_str(),
+            "payload_ref": entry.payload.as_ref().map(merl_core::PayloadId::as_str),
+            "evaluation": entry.evaluation.as_ref().map(merl_core::PolicyEvaluationId::as_str),
+            "input": input
+        })
+    }).collect())
 }
 
 fn assertion_json(
@@ -737,6 +832,41 @@ fn parse_revision(value: &str) -> Result<ProjectRevision, CliError> {
         .map_err(|_| invalid_input("revision must be a nonnegative integer"))
 }
 
+fn parse_offset(value: Option<&str>) -> Result<usize, CliError> {
+    value
+        .unwrap_or("0")
+        .parse::<usize>()
+        .map_err(|_| invalid_input("offset must be a nonnegative integer"))
+}
+
+fn render_batch_page(
+    store: &Store,
+    project: &ProjectId,
+    batch: &merl_core::BatchId,
+    offset: usize,
+    json_output: bool,
+) -> Result<String, CliError> {
+    let (changes, has_more) = store.batch_changes_page(project, batch, offset, 20)?;
+    if json_output {
+        render_json(&json!({
+            "schema": "merl.batch-page/v1", "project": project.as_str(),
+            "batch": batch.as_str(), "offset": offset,
+            "changes": changes_json(&changes),
+            "next_offset": has_more.then_some(offset + changes.len())
+        }))
+    } else {
+        let mut output = format!("{batch} changes from offset {offset}\n");
+        for change in &changes {
+            writeln!(output, "{} {}", change.kind, change.reference).expect("String write");
+        }
+        if has_more {
+            writeln!(output, "More changes at offset {}", offset + changes.len())
+                .expect("String write");
+        }
+        Ok(output)
+    }
+}
+
 fn coverage_json(coverage: merl_store::SemanticCoverage) -> Value {
     json!({
         "observation_head": coverage.observation_head,
@@ -775,7 +905,8 @@ fn render_delta(
             "batches": batches.iter().map(|batch| json!({
                 "batch": batch.batch.as_str(), "revision": batch.revision.get(),
                 "changes": changes_json(&batch.changes),
-                "changes_truncated": batch.changes_truncated
+                "changes_truncated": batch.changes_truncated,
+                "next_offset": batch.changes_truncated.then_some(batch.changes.len())
             })).collect::<Vec<_>>(),
             "coverage": coverage_json(coverage)
         }))
@@ -794,6 +925,15 @@ fn render_delta(
                     .join(", ")
             )
             .expect("String write");
+            if batch.changes_truncated {
+                writeln!(
+                    output,
+                    "  More changes: merl project batch --batch {} --offset {}",
+                    batch.batch,
+                    batch.changes.len()
+                )
+                .expect("String write");
+            }
         }
         Ok(output)
     }
@@ -968,12 +1108,13 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "project" => (
             "merl project <command>",
-            "Commands: init, revision, view, delta.",
+            "Commands: init, revision, view, delta, batch.",
             vec![
                 "project init",
                 "project revision",
                 "project view",
                 "project delta",
+                "project batch",
             ],
         ),
         "project init" => (
@@ -987,14 +1128,19 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             vec!["project init"],
         ),
         "project view" => (
-            "merl project view --project <id> --database <path> [--role researcher|engineer|pm] [--format json]",
-            "Read current accepted work in role order. Pull full evidence by reference.",
+            "merl project view --project <id> --database <path> [--role researcher|engineer|pm] [--focus <object-id>] [--format json]",
+            "Read focused work first, then current accepted work in role order. Pull evidence by reference.",
             vec!["issue view", "show", "project delta"],
         ),
         "project delta" => (
             "merl project delta --project <id> --database <path> --since <revision> [--format json]",
             "Read accepted changes after a project revision. Source text is omitted.",
-            vec!["project revision", "inbox poll"],
+            vec!["project revision", "project batch", "inbox poll"],
+        ),
+        "project batch" => (
+            "merl project batch --project <id> --database <path> --batch <id> [--offset <n>] [--format json]",
+            "Read a bounded page of references in one accepted batch, including after acknowledgement.",
+            vec!["project delta", "inbox poll"],
         ),
         "issue" => (
             "merl issue <command>",
@@ -1008,8 +1154,8 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "inbox" => (
             "merl inbox <command>",
-            "Commands: subscribe, poll, ack.",
-            vec!["inbox subscribe", "inbox poll", "inbox ack"],
+            "Commands: subscribe, poll, show, ack.",
+            vec!["inbox subscribe", "inbox poll", "inbox show", "inbox ack"],
         ),
         "inbox subscribe" => (
             "merl inbox subscribe --project <id> --database <path> --agent <id> [--format json]",
@@ -1019,7 +1165,12 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         "inbox poll" => (
             "merl inbox poll --project <id> --database <path> --agent <id> [--format json]",
             "Read pending accepted changes for a subscribed agent.",
-            vec!["inbox ack", "project delta"],
+            vec!["inbox show", "inbox ack", "project delta"],
+        ),
+        "inbox show" => (
+            "merl inbox show --project <id> --database <path> --agent <id> --revision <n> [--offset <n>] [--format json]",
+            "Read another bounded page of one inbox batch; older acknowledged entries remain readable.",
+            vec!["inbox poll", "inbox ack"],
         ),
         "inbox ack" => (
             "merl inbox ack --project <id> --database <path> --agent <id> --revision <n> [--format json]",
@@ -1059,6 +1210,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         "project delta" => {
             Some("merl project delta --project P1 --database project.sqlite --since 42 --json")
         }
+        "project batch" => Some(
+            "merl project batch --project P1 --database project.sqlite --batch DB42 --offset 20 --json",
+        ),
         "issue import-fixture" => Some(
             "merl issue import-fixture --project P1 --database project.sqlite --fixture issue.json --json",
         ),
@@ -1071,6 +1225,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         "inbox poll" => {
             Some("merl inbox poll --project P1 --database project.sqlite --agent dev --json")
         }
+        "inbox show" => Some(
+            "merl inbox show --project P1 --database project.sqlite --agent dev --revision 43 --offset 20 --json",
+        ),
         "inbox ack" => Some(
             "merl inbox ack --project P1 --database project.sqlite --agent dev --revision 43 --json",
         ),
