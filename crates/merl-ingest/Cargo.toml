@@ -11,6 +11,7 @@ publish = false
 merl-core = { path = "../merl-core" }
 merl-corpus = { path = "../merl-corpus" }
 merl-store = { path = "../merl-store" }
+merl-policy = { path = "../merl-policy" }
 sha2.workspace = true
 serde_json.workspace = true
 time.workspace = true

@@ -4,13 +4,14 @@ use std::{error::Error, fmt, fmt::Write as _};
 
 use merl_core::{
     ActorId, BatchId, CapturePolicyVersion, CompilationMode, CoverageRequirement, DomainEvent,
-    DomainEventBatch, EventId, ObjectId, ObjectKind, PayloadId, PolicyInputId, ProjectId,
-    ProviderIssueState, ProviderObservation, SourceBindingId, SourceId, SourceKind, SourceProvider,
-    SourceVersionId,
+    DomainEventBatch, EventId, ObjectId, ObjectKind, PayloadId, PolicyEvaluationId, PolicyInputId,
+    PolicyVersion, ProjectId, ProviderIssueState, ProviderObservation, SourceBindingId, SourceId,
+    SourceKind, SourceProvider, SourceVersionId,
 };
 use merl_corpus::fixture::{
     Fixture, MissingBodyReason, ObservationKind, ValidationError, validate,
 };
+use merl_policy::{PolicyError, PolicyRules, Proposal, evaluate};
 use merl_store::{MissingSourceBody, PayloadRead, SourceBinding, SourceCapture, Store, StoreError};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -30,6 +31,8 @@ pub enum ImportError {
     Serialization(String),
     /// The local project authority rejected or could not store a capture.
     Store(StoreError),
+    /// A provider fact did not pass the deterministic policy boundary.
+    Policy(PolicyError),
 }
 
 impl fmt::Display for ImportError {
@@ -41,6 +44,7 @@ impl fmt::Display for ImportError {
             Self::InvalidProviderState => formatter.write_str("invalid provider Issue state"),
             Self::Serialization(error) => write!(formatter, "snapshot encoding failed: {error}"),
             Self::Store(error) => write!(formatter, "{error}"),
+            Self::Policy(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -50,6 +54,12 @@ impl Error for ImportError {}
 impl From<StoreError> for ImportError {
     fn from(error: StoreError) -> Self {
         Self::Store(error)
+    }
+}
+
+impl From<PolicyError> for ImportError {
+    fn from(error: PolicyError) -> Self {
+        Self::Policy(error)
     }
 }
 
@@ -395,6 +405,35 @@ fn observe_terminal_issue_snapshot(
         snapshot_payload: payload,
         observed_at_millis: captured_at_millis,
     };
-    store.commit_provider_observation(&batch, &observation)?;
-    Ok(true)
+    accept_provider_snapshot(store, project, &batch, observation, &identity)
+}
+
+fn accept_provider_snapshot(
+    store: &mut Store,
+    project: &ProjectId,
+    batch: &DomainEventBatch,
+    observation: ProviderObservation,
+    identity: &str,
+) -> Result<bool, ImportError> {
+    let prepared = evaluate(
+        store,
+        project,
+        &batch.actor,
+        PolicyEvaluationId::try_from(digest_id("pv", identity).as_str())
+            .map_err(|_| ImportError::InvalidIdentity)?,
+        batch.id.clone(),
+        batch.occurred_at_millis,
+        &PolicyRules {
+            version: PolicyVersion::try_from("fixture_provider_v1")
+                .map_err(|_| ImportError::InvalidIdentity)?,
+            decision_authors: Vec::new(),
+            command_actors: Vec::new(),
+            administrators: Vec::new(),
+        },
+        &[Proposal::ProviderObservation {
+            observation,
+            event: batch.events[0].clone(),
+        }],
+    )?;
+    Ok(prepared.commit(store)?.is_some())
 }

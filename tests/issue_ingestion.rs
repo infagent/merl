@@ -11,6 +11,7 @@ fn issue_edits_are_captured_once_and_keep_their_source_lineage() {
         .then_has_four_source_versions()
         .then_source_versions_keep_their_order()
         .then_issue_is_open_without_duplicate_project_changes()
+        .then_provider_fact_has_a_policy_decision()
         .then_each_edit_supersedes_the_prior_version()
         .then_edit_provenance_remains_cold()
         .then_original_issue_body_remains_available()
