@@ -1698,7 +1698,6 @@ impl Store {
         if to_sql_revision(evaluation.basis_project_revision)? > current {
             return Err(StoreError::PolicyConflict);
         }
-        validate_policy_dependencies(&transaction, evaluation)?;
         for input in &evaluation.inputs {
             let receipt: Option<Vec<u8>> = transaction
                 .query_row(
@@ -1736,6 +1735,7 @@ impl Store {
                 validate_observed_input(&transaction, &evaluation.project, run, *index)?;
             }
         }
+        validate_policy_dependencies(&transaction, evaluation)?;
         let revision = if let Some(batch) = &evaluation.batch {
             let revision = current.checked_add(1).ok_or(StoreError::CorruptHistory)?;
             insert_accepted_batch(&transaction, batch, provider, revision)?;
