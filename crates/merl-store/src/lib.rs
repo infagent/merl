@@ -1690,6 +1690,21 @@ impl Store {
         }
         validate_policy_dependencies(&transaction, evaluation)?;
         for input in &evaluation.inputs {
+            let receipt: Option<Vec<u8>> = transaction
+                .query_row(
+                    "SELECT input_digest FROM policy_input_receipts
+                     WHERE project_id=?1 AND input_kind=?2 AND input_id=?3",
+                    params![
+                        evaluation.project.as_str(),
+                        input.input.kind(),
+                        input.input.id().as_str()
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if receipt.is_some_and(|digest| digest != input.input_digest) {
+                return Err(StoreError::PolicyInputConflict);
+            }
             if input.disposition == PolicyDisposition::Accepted {
                 let prior: Option<Vec<u8>> = transaction
                     .query_row(
@@ -1993,47 +2008,27 @@ impl Store {
             .transpose()
     }
 
-    /// Commits a nonempty accepted batch and its projection in one transaction.
+    /// Seeds a nonempty accepted batch without policy provenance for kernel fixtures.
+    ///
+    /// Application mutations use `commit_policy_evaluation`; this older seam
+    /// remains for pre-policy bootstrap tests and must not accept client commands.
     ///
     /// # Errors
     /// Returns an error for missing projects, invalid references, duplicate IDs,
     /// or a failed SQLite transaction. No partial revision becomes visible.
     pub fn commit(&mut self, batch: &DomainEventBatch) -> Result<ProjectRevision, StoreError> {
-        self.commit_inner(batch, None)
+        self.commit_inner(batch)
     }
 
-    /// Accepts a typed provider fact with its event batch in one transaction.
-    ///
-    /// A snapshot observed before the current provider mirror cannot replace
-    /// it, even if it arrived through a valid source binding.
-    ///
-    /// # Errors
-    /// Returns an error for a stale observation, a mismatched batch, invalid
-    /// references, or a failed SQLite transaction.
-    pub fn commit_provider_observation(
-        &mut self,
-        batch: &DomainEventBatch,
-        observation: &ProviderObservation,
-    ) -> Result<ProjectRevision, StoreError> {
-        self.commit_inner(batch, Some(observation))
-    }
-
-    fn commit_inner(
-        &mut self,
-        batch: &DomainEventBatch,
-        observation: Option<&ProviderObservation>,
-    ) -> Result<ProjectRevision, StoreError> {
+    fn commit_inner(&mut self, batch: &DomainEventBatch) -> Result<ProjectRevision, StoreError> {
         if batch.events.is_empty() {
             return Err(StoreError::InvalidBatch);
-        }
-        if let Some(observation) = observation {
-            validate_provider_batch(batch, observation)?;
         }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let revision = next_revision(&transaction, &batch.project)?;
-        insert_accepted_batch(&transaction, batch, observation, revision)?;
+        insert_accepted_batch(&transaction, batch, None, revision)?;
         transaction.commit()?;
         Ok(ProjectRevision::from(
             u64::try_from(revision).map_err(|_| StoreError::CorruptHistory)?,
@@ -2447,6 +2442,11 @@ fn insert_policy_record(
             params![evaluation.project.as_str(), evaluation.id.as_str(), i64::try_from(index).map_err(|_| StoreError::InvalidPolicyEvaluation)?,
                 input.input.kind(), input.input.id().as_str(), input.input_digest.as_slice(),
                 input.disposition.as_str(), input.reason.as_str()],
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO policy_input_receipts (project_id,input_kind,input_id,input_digest,first_evaluation_id)
+             VALUES (?1,?2,?3,?4,?5)",
+            params![evaluation.project.as_str(), input.input.kind(), input.input.id().as_str(), input.input_digest.as_slice(), evaluation.id.as_str()],
         )?;
         if let merl_core::PolicyInput::ObservedAssertion { id, run, index } = &input.input {
             transaction.execute(
