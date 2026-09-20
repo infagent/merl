@@ -27,6 +27,8 @@ Test through public boundaries. Prefer a CLI invocation, public Rust API, or oth
 
 Write acceptance tests so a non-developer can understand the rule they protect. Gherkin is welcome. A small domain-specific test language is also fine when it reads more clearly and keeps implementation details out of the scenario. Use `Given`, `When`, and `Then` to describe state and outcomes, not setup mechanics.
 
+Root `tests/*.rs` files contain short acceptance scenarios. Write their steps as `given_...`, `when_...`, and `then_...` calls in that order; put setup, commands, and assertions in `tests/helpers/`. CI checks this shape, but a passing convention check does not replace a readability review. Narrow unit tests inside crates do not need the scenario DSL.
+
 Keep integration tests under `tests/` when they exercise only public APIs. Use unit tests for narrow algorithms and invariants that need closer access. Every bug fix starts with a regression test.
 
 Use the fewest tests that prove the behavior and its distinct risks. Before adding a test, name the failure it would catch that the existing suite would miss. Prefer one table-driven test or readable scenario over several copies with different inputs. Do not repeat the same assertion at unit, integration, and CLI layers unless each layer protects a separate contract. Do not test the Rust compiler, a dependency's documented behavior, or private implementation steps. Add cases when boundaries carry different risk, not to make the suite look thorough.

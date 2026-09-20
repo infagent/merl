@@ -9,23 +9,25 @@ pub struct GithubCapture {
     source: String,
     captured_at: &'static str,
     fixture: Option<Fixture>,
+    capture_error: Option<String>,
 }
 
 impl GithubCapture {
-    pub fn two_pages_with_issue_edit() -> Self {
+    pub fn given_two_pages_with_issue_edit() -> Self {
         Self {
             source: include_str!("../fixtures/github_two_page_edit.json").to_owned(),
             captured_at: "2026-01-02T00:00:00Z",
             fixture: None,
+            capture_error: None,
         }
     }
 
-    pub fn with_capture_time(mut self, captured_at: &'static str) -> Self {
+    pub fn given_capture_time(mut self, captured_at: &'static str) -> Self {
         self.captured_at = captured_at;
         self
     }
 
-    pub fn with_issue_edit_tied_to_last_comment(mut self) -> Self {
+    pub fn given_issue_edit_tied_to_last_comment(mut self) -> Self {
         let mut pages: serde_json::Value = serde_json::from_str(&self.source).unwrap();
         for page in pages.as_array_mut().unwrap() {
             let issue = &mut page["data"]["repository"]["issue"];
@@ -37,7 +39,7 @@ impl GithubCapture {
         self
     }
 
-    pub fn with_offset_issue_creation_time(mut self) -> Self {
+    pub fn given_offset_issue_creation_time(mut self) -> Self {
         let mut pages: serde_json::Value = serde_json::from_str(&self.source).unwrap();
         for page in pages.as_array_mut().unwrap() {
             page["data"]["repository"]["issue"]["createdAt"] = "2026-01-01T11:00:00+02:00".into();
@@ -51,6 +53,12 @@ impl GithubCapture {
             fixture_from_graphql_pages("DEV-FAKE", self.captured_at, self.source.as_bytes())
                 .expect("two-page example should capture"),
         );
+        self
+    }
+
+    pub fn when_capture_is_attempted(mut self) -> Self {
+        self.capture_error =
+            fixture_from_graphql_pages("DEV-FAKE", self.captured_at, self.source.as_bytes()).err();
         self
     }
 
@@ -203,8 +211,9 @@ impl GithubCapture {
 
     pub fn then_capture_fails_for_timestamp(self) {
         assert!(
-            fixture_from_graphql_pages("DEV-FAKE", self.captured_at, self.source.as_bytes())
-                .is_err_and(|error| error.contains("RFC 3339"))
+            self.capture_error
+                .as_deref()
+                .is_some_and(|error| error.contains("RFC 3339"))
         );
     }
 

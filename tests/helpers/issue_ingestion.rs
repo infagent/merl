@@ -30,6 +30,8 @@ pub struct IssueHistory {
     project: ProjectId,
     last_import_result: Option<Result<(), merl_ingest::ImportError>>,
     fixture: Option<merl_corpus::fixture::Fixture>,
+    retry_capture: Option<SourceCapture<'static>>,
+    retry_was_new: Option<bool>,
 }
 
 impl IssueHistory {
@@ -42,7 +44,19 @@ impl IssueHistory {
             project,
             last_import_result: None,
             fixture: None,
+            retry_capture: None,
+            retry_was_new: None,
         }
+    }
+
+    pub fn given_a_report_format_issue(&mut self) -> &mut Self {
+        self.fixture = Some(report_format_issue());
+        self
+    }
+
+    pub fn given_a_two_page_github_issue(&mut self) -> &mut Self {
+        self.fixture = Some(two_page_github_issue());
+        self
     }
 
     pub fn given_a_github_issue_with_an_edit(&mut self) -> &mut Self {
@@ -91,7 +105,7 @@ impl IssueHistory {
         self
     }
 
-    pub fn when_importing_an_edit_by_another_person(&mut self) -> &mut Self {
+    pub fn given_an_edit_by_another_person(&mut self) -> &mut Self {
         let mut fixture = report_format_issue();
         let edit = fixture.observations[1].edit.as_mut().expect("staged edit");
         edit.editor = Some(merl_corpus::fixture::ActorRef {
@@ -100,7 +114,8 @@ impl IssueHistory {
         });
         edit.diff = Some("+ unless the consumer moves to Parquet".to_owned());
         refresh_source_digest(&mut fixture);
-        self.when_importing(&fixture)
+        self.fixture = Some(fixture);
+        self
     }
 
     pub fn then_keeps_the_editors_identity_and_diff(&mut self) -> &mut Self {
@@ -180,13 +195,13 @@ impl IssueHistory {
         self
     }
 
-    pub fn when_recapturing_later(&mut self, fixture: &merl_corpus::fixture::Fixture) -> &mut Self {
-        let mut later = fixture.clone();
+    pub fn when_recapturing_later(&mut self) -> &mut Self {
+        let mut later = self.fixture.as_ref().expect("Issue fixture").clone();
         "2026-09-20T00:00:00Z".clone_into(&mut later.capture.captured_at);
         self.when_importing(&later)
     }
 
-    pub fn when_a_source_is_recaptured_under_another_policy(&mut self) -> &mut Self {
+    pub fn given_a_captured_source(&mut self) -> &mut Self {
         let binding = SourceBinding {
             id: SourceBindingId::try_from("binding").unwrap(),
             provider: SourceProvider::try_from("github").unwrap(),
@@ -229,16 +244,26 @@ impl IssueHistory {
             policy_version: CapturePolicyVersion::try_from("new_policy").unwrap(),
             ..first
         };
-        assert!(
-            !self
-                .store
-                .capture_source_version(&self.project, &retry)
-                .unwrap()
+        self.retry_capture = Some(retry);
+        self
+    }
+
+    pub fn when_the_source_is_recaptured_under_another_policy(&mut self) -> &mut Self {
+        self.retry_was_new = Some(
+            self.store
+                .capture_source_version(
+                    &self.project,
+                    self.retry_capture
+                        .as_ref()
+                        .expect("source was captured first"),
+                )
+                .unwrap(),
         );
         self
     }
 
     pub fn then_first_capture_metadata_still_applies(&mut self) -> &mut Self {
+        assert_eq!(self.retry_was_new, Some(false));
         let captured = self
             .store
             .source_version(
@@ -269,10 +294,8 @@ impl IssueHistory {
         self
     }
 
-    pub fn then_source_versions_keep_their_order(
-        &mut self,
-        fixture: &merl_corpus::fixture::Fixture,
-    ) -> &mut Self {
+    pub fn then_source_versions_keep_their_order(&mut self) -> &mut Self {
+        let fixture = self.fixture.as_ref().expect("Issue fixture");
         for observation in &fixture.observations {
             let captured = self
                 .store
@@ -345,10 +368,8 @@ impl IssueHistory {
         self
     }
 
-    pub fn then_issue_is_open_without_duplicate_project_changes(
-        &mut self,
-        fixture: &merl_corpus::fixture::Fixture,
-    ) -> &mut Self {
+    pub fn then_issue_is_open_without_duplicate_project_changes(&mut self) -> &mut Self {
+        let fixture = self.fixture.as_ref().expect("Issue fixture");
         let issue = merl_ingest::fixture_issue_id(fixture).expect("Issue identity");
         let mirror = self
             .store
@@ -369,10 +390,8 @@ impl IssueHistory {
         self
     }
 
-    pub fn then_github_identity_and_edits_survive_import(
-        &mut self,
-        fixture: &merl_corpus::fixture::Fixture,
-    ) -> &mut Self {
+    pub fn then_github_identity_and_edits_survive_import(&mut self) -> &mut Self {
+        let fixture = self.fixture.as_ref().expect("Issue fixture");
         let kinds: Vec<_> = (1..=4)
             .map(|sequence| {
                 self.store
@@ -402,10 +421,8 @@ impl IssueHistory {
         self
     }
 
-    pub fn then_provider_facts_remain_available(
-        &mut self,
-        fixture: &merl_corpus::fixture::Fixture,
-    ) -> &mut Self {
+    pub fn then_provider_facts_remain_available(&mut self) -> &mut Self {
+        let fixture = self.fixture.as_ref().expect("Issue fixture");
         let issue = merl_ingest::fixture_issue_id(fixture).expect("Issue identity");
         let head = self
             .store
@@ -429,10 +446,8 @@ impl IssueHistory {
         self
     }
 
-    pub fn when_provider_snapshot_bytes_are_erased(
-        &mut self,
-        fixture: &merl_corpus::fixture::Fixture,
-    ) -> &mut Self {
+    pub fn when_provider_snapshot_bytes_are_erased(&mut self) -> &mut Self {
+        let fixture = self.fixture.as_ref().expect("Issue fixture");
         let issue = merl_ingest::fixture_issue_id(fixture).expect("Issue identity");
         let head = self
             .store
