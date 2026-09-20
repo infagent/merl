@@ -575,7 +575,8 @@ fn render_project_view(
     if json_output {
         render_json(&json!({
             "schema": "merl.project-view/v1", "project": project.as_str(), "role": role,
-            "project_revision": revision.get(), "coverage": coverage_json(coverage),
+            "project_revision": revision.get(), "coverage_scope": "project",
+            "coverage": coverage_json(coverage),
             "objects": summaries, "truncated": truncated,
             "focus": focus.as_ref().map(ObjectId::as_str), "focus_truncated": focus_truncated
         }))
@@ -586,7 +587,7 @@ fn render_project_view(
         }
         writeln!(
             output,
-            "Source head {}; required gaps {}",
+            "Project source head {}; required gaps {}",
             coverage.observation_head, coverage.required_gaps
         )
         .expect("String write");

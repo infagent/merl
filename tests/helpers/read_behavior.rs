@@ -603,6 +603,8 @@ impl InboxScenario {
             self.role_views[0]["project_revision"],
             self.role_views[1]["project_revision"]
         );
+        assert_eq!(self.role_views[0]["coverage_scope"], "project");
+        assert_eq!(self.role_views[1]["coverage_scope"], "project");
     }
 
     fn command(&self, command: &[&str]) -> serde_json::Value {
