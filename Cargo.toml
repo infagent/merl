@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/merl-corpus", "crates/merl-core", "crates/merl-store", "crates/merl-cli", "crates/merl-ingest"]
+members = ["crates/merl-corpus", "crates/merl-core", "crates/merl-store", "crates/merl-cli", "crates/merl-ingest", "crates/merl-compiler"]
 
 [workspace.package]
 edition = "2024"
@@ -14,6 +14,7 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 time = { version = "0.3.55", default-features = false, features = ["parsing"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+schemars = "1.2.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -41,6 +42,7 @@ serde_json.workspace = true
 merl-core = { path = "crates/merl-core" }
 merl-store = { path = "crates/merl-store" }
 merl-ingest = { path = "crates/merl-ingest" }
+merl-compiler = { path = "crates/merl-compiler" }
 sha2.workspace = true
 
 [lints]
