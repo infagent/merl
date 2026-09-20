@@ -1,0 +1,914 @@
+//! Causal source selection and a bounded, authority-free compiler boundary.
+
+use std::{
+    error::Error,
+    fmt,
+    io::{Read, Write},
+    process::{Command, Stdio},
+};
+
+use merl_core::{ObjectId, ObjectRevision, ProjectId, ProjectRevision, SourceVersionId};
+use merl_store::{
+    CompilationIntent, CompilationResult, PayloadRead, Store, StoreError, StructuralAssertion,
+};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+/// Failure to build or persist one source interpretation.
+#[derive(Debug)]
+pub enum CompileError {
+    /// The selected source or accepted history is unavailable.
+    Store(StoreError),
+    /// A historical version lacks exact bytes or has unresolved causal order.
+    NonCausalHistory,
+    /// The configured limit cannot fit the selected context.
+    InputBudget,
+    /// The adapter could not produce a valid bounded response.
+    OutputBudget,
+    /// The adapter emitted invalid or unauthorized output.
+    InvalidResponse,
+    /// The external compiler process failed to start or complete.
+    Adapter(String),
+}
+
+impl fmt::Display for CompileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Store(error) => write!(f, "{error}"),
+            Self::NonCausalHistory => f.write_str("exact causal source history is unavailable"),
+            Self::InputBudget => f.write_str("compiler context exceeds its input budget"),
+            Self::OutputBudget => f.write_str("compiler response exceeds its output budget"),
+            Self::InvalidResponse => {
+                f.write_str("compiler returned an invalid structured response")
+            }
+            Self::Adapter(message) => write!(f, "compiler adapter failed: {message}"),
+        }
+    }
+}
+
+impl Error for CompileError {}
+
+impl From<StoreError> for CompileError {
+    fn from(error: StoreError) -> Self {
+        Self::Store(error)
+    }
+}
+
+/// Limits applied before context construction and after the adapter responds.
+#[derive(Clone, Copy, Debug, JsonSchema, Serialize)]
+pub struct CompilerLimits {
+    /// Maximum encoded input size, including selected source text.
+    pub input_bytes: usize,
+    /// Maximum encoded output size.
+    pub output_bytes: usize,
+    /// Provider-facing output token cap.
+    pub output_tokens: usize,
+    /// Maximum number of assertions in one response.
+    pub assertions: usize,
+    /// Maximum context requests in one response.
+    pub context_requests: usize,
+    /// Maximum requested context expansion rounds.
+    pub expansion_rounds: usize,
+    /// Maximum bytes of source or referenced payload text in the context.
+    pub payload_bytes: usize,
+    /// Maximum number of recent source versions selected.
+    pub source_window: usize,
+    /// Maximum number of historical objects selected.
+    pub objects: usize,
+}
+
+impl CompilerLimits {
+    const fn recorded(self) -> [usize; 7] {
+        [
+            self.input_bytes,
+            self.output_bytes,
+            self.output_tokens,
+            self.assertions,
+            self.context_requests,
+            self.expansion_rounds,
+            self.payload_bytes,
+        ]
+    }
+}
+
+/// A historically bounded compiler input and its manifest.
+#[derive(Debug)]
+pub struct CompilationContext {
+    /// The source whose meaning is being interpreted.
+    pub trigger: SourceVersionId,
+    /// Project revision visible at its capture.
+    pub interpretation_basis_revision: ProjectRevision,
+    /// Inclusive source observation cutoff.
+    pub source_observation_cutoff: u64,
+    /// Exact source versions selected in observation order.
+    pub source_window: Vec<SourceVersionId>,
+    /// Object revisions selected from the historical accepted state.
+    pub objects: Vec<(ObjectId, ObjectRevision)>,
+    /// Exact bytes handed to the adapter.
+    pub rendered: Vec<u8>,
+}
+
+#[derive(JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RenderedContext {
+    schema: &'static str,
+    context_scope_id: String,
+    interpretation_basis_revision: u64,
+    source_observation_cutoff: u64,
+    trigger: String,
+    sources: Vec<RenderedSource>,
+    objects: Vec<RenderedObject>,
+}
+
+#[derive(JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RenderedSource {
+    id: String,
+    observation: u64,
+    body: String,
+}
+
+#[derive(JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RenderedObject {
+    id: String,
+    revision: u64,
+    body: Option<String>,
+}
+
+/// Selects only observations and accepted state available at the trigger's position.
+///
+/// # Errors
+/// Rejects missing source bytes, ambiguous ordering, or an over-budget context.
+pub fn build_context(
+    store: &Store,
+    project: &ProjectId,
+    trigger: &SourceVersionId,
+    limits: CompilerLimits,
+) -> Result<CompilationContext, CompileError> {
+    let source = store
+        .source_version(project, trigger)?
+        .ok_or(CompileError::NonCausalHistory)?;
+    if !source.interpretation_basis_known {
+        return Err(CompileError::NonCausalHistory);
+    }
+    build_context_at_basis(
+        store,
+        project,
+        trigger,
+        source.interpretation_basis_revision,
+        limits,
+    )
+}
+
+/// Builds one context at a basis supplied by an isolated sequential replay.
+///
+/// The replay runner must process observations in order. A bulk historical
+/// import cannot prove that an arbitrary current revision existed at an old
+/// source position.
+///
+/// # Errors
+/// Rejects future or mismatched live bases and unavailable historical bytes.
+pub fn build_context_at_basis(
+    store: &Store,
+    project: &ProjectId,
+    trigger: &SourceVersionId,
+    basis: ProjectRevision,
+    limits: CompilerLimits,
+) -> Result<CompilationContext, CompileError> {
+    let source = store
+        .source_version(project, trigger)?
+        .ok_or(CompileError::NonCausalHistory)?;
+    if basis > store.project_revision(project)?
+        || (source.interpretation_basis_known && basis != source.interpretation_basis_revision)
+    {
+        return Err(CompileError::NonCausalHistory);
+    }
+    if limits.source_window == 0 || limits.objects == 0 {
+        return Err(CompileError::InputBudget);
+    }
+    let selected = store.recent_source_versions_in_scope(
+        project,
+        &source.context_scope_id,
+        source.sequence,
+        limits.source_window,
+    )?;
+    let mut sources = Vec::new();
+    let mut source_window = Vec::new();
+    let mut payload_bytes = 0usize;
+    for version in selected {
+        let item = store
+            .source_version(project, &version)?
+            .ok_or(CompileError::NonCausalHistory)?;
+        if item.ambiguous_order_with_previous || item.payload.is_none() {
+            return Err(CompileError::NonCausalHistory);
+        }
+        let body = match store.read_payload(
+            project,
+            item.payload
+                .as_ref()
+                .ok_or(CompileError::NonCausalHistory)?,
+        )? {
+            PayloadRead::Available(bytes) => bytes,
+            PayloadRead::Unavailable => return Err(CompileError::NonCausalHistory),
+        };
+        payload_bytes = payload_bytes
+            .checked_add(body.len())
+            .ok_or(CompileError::InputBudget)?;
+        if payload_bytes > limits.payload_bytes {
+            return Err(CompileError::InputBudget);
+        }
+        source_window.push(item.id.clone());
+        sources.push(RenderedSource {
+            id: item.id.to_string(),
+            observation: item.sequence,
+            body: String::from_utf8(body).map_err(|_| CompileError::InvalidResponse)?,
+        });
+    }
+    let historical = store.objects_at_revision(project, basis, limits.objects)?;
+    let mut objects = Vec::new();
+    let mut object_views = Vec::new();
+    for (id, revision, payload) in historical {
+        let body = match payload {
+            Some(payload) => match store.read_payload(project, &payload)? {
+                PayloadRead::Available(bytes) => {
+                    payload_bytes = payload_bytes
+                        .checked_add(bytes.len())
+                        .ok_or(CompileError::InputBudget)?;
+                    if payload_bytes > limits.payload_bytes {
+                        return Err(CompileError::InputBudget);
+                    }
+                    Some(String::from_utf8(bytes).map_err(|_| CompileError::InvalidResponse)?)
+                }
+                PayloadRead::Unavailable => return Err(CompileError::NonCausalHistory),
+            },
+            None => None,
+        };
+        object_views.push(RenderedObject {
+            id: id.to_string(),
+            revision: revision.get(),
+            body,
+        });
+        objects.push((id, revision));
+    }
+    let rendered = serde_json::to_vec(&RenderedContext {
+        schema: "merl.compilation-context/v1",
+        context_scope_id: source.context_scope_id,
+        interpretation_basis_revision: basis.get(),
+        source_observation_cutoff: source.sequence,
+        trigger: trigger.to_string(),
+        sources,
+        objects: object_views,
+    })
+    .map_err(|_| CompileError::InvalidResponse)?;
+    if rendered.len() > limits.input_bytes {
+        return Err(CompileError::InputBudget);
+    }
+    Ok(CompilationContext {
+        trigger: trigger.clone(),
+        interpretation_basis_revision: basis,
+        source_observation_cutoff: source.sequence,
+        source_window,
+        objects,
+        rendered,
+    })
+}
+
+/// A typed compiler response; unknown prose fields are rejected.
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompilerResponse {
+    /// Protocol discriminator.
+    pub schema: String,
+    /// Independent assertions; policy later decides whether any become accepted.
+    pub assertions: Vec<Assertion>,
+    /// Limited requests for another explicit context-selection round.
+    #[serde(default)]
+    pub context_required: Vec<ContextRequest>,
+    /// Explicit inability to resolve a referent from the supplied context.
+    #[serde(default)]
+    pub unresolved: Vec<Unresolved>,
+    /// Typed semantic relations, without copied source prose.
+    #[serde(default)]
+    pub relations: Vec<TypedRelation>,
+}
+
+/// A bounded relation inferred from a source span.
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypedRelation {
+    /// Source or object identifier at the start of the relation.
+    pub subject: String,
+    /// Relation predicate, such as `supports` or `disputes`.
+    pub predicate: String,
+    /// Source or object identifier at the end of the relation.
+    pub object: String,
+}
+
+/// A source-grounded structural assertion with separate attribution axes.
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Assertion {
+    /// Source version that contains the cited span.
+    pub source: String,
+    /// Inclusive UTF-8 byte offset in the source body.
+    pub span_start: usize,
+    /// Exclusive UTF-8 byte offset in the source body.
+    pub span_end: usize,
+    /// Bounded subject identifier.
+    pub subject: String,
+    /// Bounded predicate identifier.
+    pub predicate: String,
+    /// Bounded value identifier or payload reference.
+    pub value: String,
+    /// Claim, propose, request, ask, or report.
+    pub act: String,
+    /// Observed, inferred, or reported.
+    pub epistemic_basis: String,
+    /// Positive or negative.
+    pub polarity: String,
+    /// Confidence in thousandths.
+    pub confidence_millis: u16,
+    /// Speaker of the assertion.
+    pub asserted_by: String,
+    /// Quoted or relayed actor, if any.
+    pub attributed_to: Option<String>,
+    /// Whether the original actor was independently verified.
+    pub attribution_verified: bool,
+}
+
+/// A bounded request for more source context.
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContextRequest {
+    /// Source or object handle to consider in another run.
+    pub reference: String,
+}
+
+/// A referent the compiler cannot resolve without guessing.
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Unresolved {
+    /// Source version containing the ambiguous text.
+    pub source: String,
+    /// Start of the ambiguous span.
+    pub span_start: usize,
+    /// End of the ambiguous span.
+    pub span_end: usize,
+}
+
+/// A compiler cannot read Merl state; it receives only the rendered context.
+pub trait CompilerAdapter {
+    /// Stable implementation identity recorded with the run.
+    fn id(&self) -> &str;
+    /// Stable implementation version recorded with the run.
+    fn version(&self) -> &str;
+    /// Model identity, or `deterministic` for a fake.
+    fn model(&self) -> &str;
+    /// Digest of the adapter's prompt or ruleset.
+    fn prompt_digest(&self) -> [u8; 32];
+    /// Runs the compiler and returns encoded structured output.
+    ///
+    /// # Errors
+    /// Reports process or model failures without mutating accepted project state.
+    fn compile(&self, context: &[u8], limits: CompilerLimits) -> Result<Vec<u8>, CompileError>;
+}
+
+#[derive(JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProcessRequest<'a> {
+    schema: &'static str,
+    #[schemars(with = "RenderedContext")]
+    context: &'a serde_json::Value,
+    limits: CompilerLimits,
+}
+
+/// Machine-readable schemas for the versioned external compiler contract.
+///
+/// The Rust types are authoritative; adapters can use these schemas to
+/// validate their input and output without linking a Rust crate.
+#[must_use]
+pub fn protocol_schemas() -> serde_json::Value {
+    serde_json::json!({
+        "request": schemars::schema_for!(ProcessRequest<'static>),
+        "response": schemars::schema_for!(CompilerResponse),
+    })
+}
+
+/// A versioned process adapter for a configured model-backed compiler.
+#[derive(Debug)]
+pub struct ProcessCompiler {
+    /// Executable chosen by the evaluation runner.
+    pub program: String,
+    /// Fixed arguments; the exact context is supplied only on stdin.
+    pub args: Vec<String>,
+    /// Stable implementation version.
+    pub version: String,
+    /// Provider/model identity for evaluation provenance.
+    pub model: String,
+    /// Hash of the configured prompt, which remains outside the database.
+    pub prompt_digest: [u8; 32],
+}
+
+impl CompilerAdapter for ProcessCompiler {
+    fn id(&self) -> &'static str {
+        "process"
+    }
+    fn version(&self) -> &str {
+        &self.version
+    }
+    fn model(&self) -> &str {
+        &self.model
+    }
+    fn prompt_digest(&self) -> [u8; 32] {
+        self.prompt_digest
+    }
+    fn compile(&self, context: &[u8], limits: CompilerLimits) -> Result<Vec<u8>, CompileError> {
+        let context_value: serde_json::Value =
+            serde_json::from_slice(context).map_err(|_| CompileError::InvalidResponse)?;
+        let request = serde_json::to_vec(&ProcessRequest {
+            schema: "merl.compiler-request/v1",
+            context: &context_value,
+            limits,
+        })
+        .map_err(|_| CompileError::InvalidResponse)?;
+        let mut child = Command::new(&self.program)
+            .args(&self.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| CompileError::Adapter(error.to_string()))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| CompileError::Adapter("stdin unavailable".into()))?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| CompileError::Adapter("stdout unavailable".into()))?;
+        std::thread::scope(|scope| {
+            let writer = scope.spawn(|| {
+                let result = stdin.write_all(&request);
+                drop(stdin);
+                result
+            });
+            let mut bytes = Vec::new();
+            let read = stdout
+                .by_ref()
+                .take(limits.output_bytes.saturating_add(1) as u64)
+                .read_to_end(&mut bytes);
+            if read.is_err() || bytes.len() > limits.output_bytes {
+                let _ = child.kill();
+            }
+            let written = writer
+                .join()
+                .map_err(|_| CompileError::Adapter("stdin writer panicked".into()))?;
+            let status = child
+                .wait()
+                .map_err(|error| CompileError::Adapter(error.to_string()))?;
+            read.map_err(|error| CompileError::Adapter(error.to_string()))?;
+            if bytes.len() > limits.output_bytes {
+                return Err(CompileError::OutputBudget);
+            }
+            written.map_err(|error| CompileError::Adapter(error.to_string()))?;
+            if !status.success() {
+                return Err(CompileError::Adapter(
+                    "process exited unsuccessfully".into(),
+                ));
+            }
+            Ok(bytes)
+        })
+    }
+}
+
+/// Offline fake for protocol tests; it never invents project assertions.
+#[derive(Debug)]
+pub struct FakeCompiler;
+
+impl CompilerAdapter for FakeCompiler {
+    fn id(&self) -> &'static str {
+        "fake"
+    }
+    fn version(&self) -> &'static str {
+        "v1"
+    }
+    fn model(&self) -> &'static str {
+        "deterministic"
+    }
+    fn prompt_digest(&self) -> [u8; 32] {
+        Sha256::digest(b"fake-v1").into()
+    }
+    fn compile(&self, context: &[u8], _limits: CompilerLimits) -> Result<Vec<u8>, CompileError> {
+        let context: serde_json::Value =
+            serde_json::from_slice(context).map_err(|_| CompileError::InvalidResponse)?;
+        let trigger = context["trigger"]
+            .as_str()
+            .ok_or(CompileError::InvalidResponse)?;
+        serde_json::to_vec(&CompilerResponse {
+            schema: "merl.compiler-response/v1".into(),
+            assertions: Vec::new(),
+            context_required: Vec::new(),
+            unresolved: vec![Unresolved {
+                source: trigger.into(),
+                span_start: 0,
+                span_end: 0,
+            }],
+            relations: Vec::new(),
+        })
+        .map_err(|_| CompileError::InvalidResponse)
+    }
+}
+
+/// Why a compiler attempt exists; only live successes contribute to live coverage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RunMode {
+    /// Normal source processing.
+    Live,
+    /// Reproduce a recorded causal input without changing accepted state.
+    Replay,
+    /// Run a corpus experiment without changing live coverage.
+    Eval,
+}
+
+impl RunMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Replay => "replay",
+            Self::Eval => "eval",
+        }
+    }
+}
+
+/// Caller-supplied attempt identity, limits, purpose, and clock.
+#[derive(Clone, Copy, Debug)]
+pub struct RunRequest<'a> {
+    /// Stable run identity used for retry deduplication.
+    pub id: &'a str,
+    /// Input and output budgets.
+    pub limits: CompilerLimits,
+    /// Live, replay, or evaluation purpose.
+    pub mode: RunMode,
+    /// Historical basis selected by an isolated sequential replay runner.
+    pub interpretation_basis_revision: Option<ProjectRevision>,
+    /// Current UTC time in Unix milliseconds.
+    pub now_millis: i64,
+}
+
+/// A durable attempt whose compiler input is owned independently of the store.
+#[derive(Debug)]
+pub struct PreparedCompilation {
+    id: String,
+    context: CompilationContext,
+    limits: CompilerLimits,
+    compiler_id: String,
+    compiler_version: String,
+    model_id: String,
+    prompt_digest: [u8; 32],
+}
+
+impl PreparedCompilation {
+    /// Stable identity used to reconcile a result after process restart.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// Persists an immutable run intent before external compiler work begins.
+///
+/// `None` means this identity already has a successful result. A pending
+/// identity returns the same prepared work so recovery can run it again.
+///
+/// # Errors
+/// Fails on missing causal history, a previous failed result, or an incompatible run ID.
+pub fn prepare_compilation(
+    store: &mut Store,
+    project: &ProjectId,
+    source: &SourceVersionId,
+    adapter: &impl CompilerAdapter,
+    request: RunRequest<'_>,
+) -> Result<Option<PreparedCompilation>, CompileError> {
+    let RunRequest {
+        id: run_id,
+        limits,
+        mode,
+        interpretation_basis_revision,
+        now_millis,
+    } = request;
+    let context = match interpretation_basis_revision {
+        Some(basis) if mode != RunMode::Live => {
+            build_context_at_basis(store, project, source, basis, limits)?
+        }
+        None => build_context(store, project, source, limits)?,
+        Some(_) => return Err(CompileError::NonCausalHistory),
+    };
+    if let Some(existing) = store.compilation_run_status(project, run_id)? {
+        let digest: [u8; 32] = Sha256::digest(&context.rendered).into();
+        if existing.source != *source
+            || existing.mode != mode.as_str()
+            || existing.context_digest != digest
+            || existing.compiler_id != adapter.id()
+            || existing.compiler_version != adapter.version()
+            || existing.model_id != adapter.model()
+            || existing.prompt_digest != adapter.prompt_digest()
+            || existing.limits != limits.recorded()
+        {
+            return Err(CompileError::InvalidResponse);
+        }
+        if existing.completed {
+            return if existing.succeeded {
+                Ok(None)
+            } else {
+                Err(error_from_code(existing.failure_code.as_deref()))
+            };
+        }
+    } else {
+        let intent = CompilationIntent {
+            id: run_id,
+            source,
+            context: &context.rendered,
+            source_window: &context.source_window,
+            objects: &context.objects,
+            interpretation_basis_revision: context.interpretation_basis_revision,
+            source_observation_cutoff: context.source_observation_cutoff,
+            renderer_version: "json_v1",
+            selector_version: "recent_v1",
+            compiler_id: adapter.id(),
+            compiler_version: adapter.version(),
+            model_id: adapter.model(),
+            prompt_digest: adapter.prompt_digest(),
+            mode: mode.as_str(),
+            max_input_bytes: limits.input_bytes,
+            max_output_bytes: limits.output_bytes,
+            max_output_tokens: limits.output_tokens,
+            max_assertions: limits.assertions,
+            max_context_requests: limits.context_requests,
+            max_expansion_rounds: limits.expansion_rounds,
+            max_payload_bytes: limits.payload_bytes,
+            started_at_millis: now_millis,
+        };
+        store.prepare_compilation(project, &intent)?;
+    }
+    Ok(Some(PreparedCompilation {
+        id: run_id.into(),
+        context,
+        limits,
+        compiler_id: adapter.id().into(),
+        compiler_version: adapter.version().into(),
+        model_id: adapter.model().into(),
+        prompt_digest: adapter.prompt_digest(),
+    }))
+}
+
+/// Calls the external compiler without borrowing the project store.
+///
+/// # Errors
+/// Rejects an adapter that does not match the durable run configuration.
+pub fn execute_compilation(
+    prepared: &PreparedCompilation,
+    adapter: &impl CompilerAdapter,
+) -> Result<Vec<u8>, CompileError> {
+    if prepared.compiler_id != adapter.id()
+        || prepared.compiler_version != adapter.version()
+        || prepared.model_id != adapter.model()
+        || prepared.prompt_digest != adapter.prompt_digest()
+    {
+        return Err(CompileError::InvalidResponse);
+    }
+    adapter.compile(&prepared.context.rendered, prepared.limits)
+}
+
+/// Persists a result in a separate transaction after external work completes.
+///
+/// # Errors
+/// A failed adapter or invalid output is recorded as a failed result. No
+/// assertion is partially persisted or accepted into project state.
+pub fn record_compilation_result(
+    store: &mut Store,
+    project: &ProjectId,
+    prepared: &PreparedCompilation,
+    raw: Result<Vec<u8>, CompileError>,
+    completed_at_millis: i64,
+) -> Result<(), CompileError> {
+    if let Some(existing) = store.compilation_run_status(project, &prepared.id)? {
+        if existing.completed {
+            return if existing.succeeded {
+                Ok(())
+            } else {
+                Err(error_from_code(existing.failure_code.as_deref()))
+            };
+        }
+    } else {
+        return Err(CompileError::InvalidResponse);
+    }
+    let validated = raw.and_then(|bytes| {
+        validate_response(&bytes, &prepared.context, prepared.limits)
+            .map(|assertions| (bytes, assertions))
+    });
+    let (response, assertions, failure): (Option<&[u8]>, &[StructuralAssertion], Option<&str>) =
+        match &validated {
+            Ok((bytes, assertions)) => (Some(bytes), assertions, None),
+            Err(error) => (None, &[], Some(error_code(error))),
+        };
+    let result = CompilationResult {
+        run_id: &prepared.id,
+        failure_code: failure,
+        response,
+        assertions,
+        completed_at_millis,
+    };
+    store.complete_compilation(project, &result)?;
+    validated.map(|_| ())
+}
+
+fn error_code(error: &CompileError) -> &'static str {
+    match error {
+        CompileError::OutputBudget => "output_budget",
+        CompileError::Adapter(_) => "adapter_failure",
+        CompileError::InputBudget => "input_budget",
+        CompileError::NonCausalHistory => "noncausal_history",
+        CompileError::Store(_) | CompileError::InvalidResponse => "invalid_response",
+    }
+}
+
+fn error_from_code(code: Option<&str>) -> CompileError {
+    match code {
+        Some("output_budget") => CompileError::OutputBudget,
+        Some("adapter_failure") => CompileError::Adapter("previous run failed".into()),
+        _ => CompileError::InvalidResponse,
+    }
+}
+
+fn validate_response(
+    bytes: &[u8],
+    context: &CompilationContext,
+    limits: CompilerLimits,
+) -> Result<Vec<StructuralAssertion>, CompileError> {
+    if bytes.len() > limits.output_bytes {
+        return Err(CompileError::OutputBudget);
+    }
+    let response: CompilerResponse =
+        serde_json::from_slice(bytes).map_err(|_| CompileError::InvalidResponse)?;
+    let rendered: serde_json::Value =
+        serde_json::from_slice(&context.rendered).map_err(|_| CompileError::InvalidResponse)?;
+    if response.schema != "merl.compiler-response/v1"
+        || response.assertions.len() > limits.assertions
+        || response.context_required.len() > limits.context_requests
+        || (!response.context_required.is_empty() && limits.expansion_rounds == 0)
+        || response.relations.len() > limits.assertions.saturating_mul(4)
+        || response.relations.iter().any(|relation| {
+            !valid_id(&relation.subject)
+                || !valid_id(&relation.predicate)
+                || !valid_id(&relation.object)
+        })
+        || response
+            .context_required
+            .iter()
+            .any(|request| !valid_id(&request.reference))
+        || response.unresolved.iter().any(|item| {
+            !context
+                .source_window
+                .iter()
+                .any(|id| id.as_str() == item.source)
+                || (item.span_start != item.span_end
+                    && !source_span_valid(&rendered, &item.source, item.span_start, item.span_end))
+        })
+    {
+        return Err(CompileError::InvalidResponse);
+    }
+    response
+        .assertions
+        .into_iter()
+        .map(|item| {
+            let source = SourceVersionId::try_from(item.source.as_str())
+                .map_err(|_| CompileError::InvalidResponse)?;
+            if !context.source_window.contains(&source)
+                || item.span_start >= item.span_end
+                || !source_span_valid(&rendered, &item.source, item.span_start, item.span_end)
+                || item.confidence_millis > 1000
+                || ![
+                    &item.subject,
+                    &item.predicate,
+                    &item.value,
+                    &item.asserted_by,
+                ]
+                .iter()
+                .all(|value| valid_id(value))
+                || item
+                    .attributed_to
+                    .as_ref()
+                    .is_some_and(|value| !valid_id(value))
+                || !matches!(
+                    item.act.as_str(),
+                    "claim" | "propose" | "request" | "ask" | "report"
+                )
+                || !matches!(
+                    item.epistemic_basis.as_str(),
+                    "observed" | "inferred" | "reported"
+                )
+                || !matches!(item.polarity.as_str(), "positive" | "negative")
+            {
+                return Err(CompileError::InvalidResponse);
+            }
+            Ok(StructuralAssertion {
+                source,
+                span_start: item.span_start,
+                span_end: item.span_end,
+                subject: item.subject,
+                predicate: item.predicate,
+                value: item.value,
+                act: item.act,
+                epistemic_basis: item.epistemic_basis,
+                polarity: item.polarity,
+                confidence_millis: item.confidence_millis,
+                asserted_by: item.asserted_by,
+                attributed_to: item.attributed_to,
+                attribution_verified: item.attribution_verified,
+            })
+        })
+        .collect()
+}
+
+fn source_span_valid(rendered: &serde_json::Value, source: &str, start: usize, end: usize) -> bool {
+    rendered["sources"].as_array().is_some_and(|sources| {
+        sources.iter().any(|item| {
+            item["id"].as_str() == Some(source)
+                && item["body"]
+                    .as_str()
+                    .is_some_and(|body| start < end && body.get(start..end).is_some())
+        })
+    })
+}
+
+fn valid_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CompilationContext, CompileError, CompilerLimits, validate_response};
+    use merl_core::{ProjectRevision, SourceVersionId};
+
+    #[test]
+    fn prose_fields_and_out_of_range_spans_cannot_enter_assertions() {
+        let context = CompilationContext {
+            trigger: SourceVersionId::try_from("s1").expect("source"),
+            interpretation_basis_revision: ProjectRevision::initial(),
+            source_observation_cutoff: 1,
+            source_window: vec![SourceVersionId::try_from("s1").expect("source")],
+            objects: Vec::new(),
+            rendered: br#"{"sources":[{"id":"s1","body":"fixed gain"}]}"#.to_vec(),
+        };
+        let limits = CompilerLimits {
+            input_bytes: 1024,
+            output_bytes: 1024,
+            output_tokens: 100,
+            assertions: 2,
+            context_requests: 1,
+            expansion_rounds: 1,
+            payload_bytes: 1024,
+            source_window: 1,
+            objects: 1,
+        };
+        let valid = serde_json::json!({"schema":"merl.compiler-response/v1", "assertions":[{
+            "source":"s1", "span_start":0, "span_end":5, "subject":"capture",
+            "predicate":"gain", "value":"fixed", "act":"report",
+            "epistemic_basis":"observed", "polarity":"positive", "confidence_millis":900,
+            "asserted_by":"alice", "attributed_to":null, "attribution_verified":false
+        }]});
+        assert_eq!(
+            validate_response(&serde_json::to_vec(&valid).expect("JSON"), &context, limits)
+                .expect("valid assertion")
+                .len(),
+            1
+        );
+        for invalid in [
+            {
+                let mut value = valid.clone();
+                value["rationale"] = serde_json::json!("essay");
+                value
+            },
+            {
+                let mut value = valid.clone();
+                value["assertions"][0]["span_end"] = serde_json::json!(500);
+                value
+            },
+        ] {
+            assert!(matches!(
+                validate_response(
+                    &serde_json::to_vec(&invalid).expect("JSON"),
+                    &context,
+                    limits
+                ),
+                Err(CompileError::InvalidResponse)
+            ));
+        }
+    }
+}
