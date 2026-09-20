@@ -99,8 +99,12 @@ fn editing_context_evidence_reconsiders_an_assertion_citing_another_comment() {
         .when_the_earlier_comment_is_edited()
         .then_the_decision_is_active_with_revalidation_pending()
         .when_the_authority_restarts()
+        .when_pending_evidence_work_is_listed()
+        .then_the_affected_derivation_can_be_resumed()
         .when_the_affected_derivation_is_recompiled_and_confirmed()
-        .then_the_context_impact_is_resolved_and_support_is_current();
+        .then_the_context_impact_is_resolved_and_support_is_current()
+        .when_pending_evidence_work_is_listed()
+        .then_no_evidence_work_remains();
 }
 
 #[test]

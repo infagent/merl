@@ -5,9 +5,10 @@ use merl_compiler::{
 use merl_core::{
     CompilationMode, CoverageRequirement, DomainEvent, DomainEventBatch, PayloadId,
     PolicyDisposition, ProjectId, ProjectRevision, ProviderIssueState, ProviderObservation,
+    SourceVersionId,
 };
 use merl_policy::{PolicyRules, PreparedPolicy, Proposal, evaluate};
-use merl_store::{SourceBinding, SourceCapture, Store, StoreError, SupportStatus};
+use merl_store::{EvidenceImpact, SourceBinding, SourceCapture, Store, StoreError, SupportStatus};
 use sha2::{Digest, Sha256};
 use std::{
     fs::OpenOptions,
@@ -124,6 +125,7 @@ pub struct PolicyScenario {
     persisted_file: Option<TempStoreFile>,
     invalid_result: Option<Result<Option<merl_core::ProjectRevision>, StoreError>>,
     provider_collision_rejected: bool,
+    pending_impacts: Vec<EvidenceImpact>,
 }
 
 impl PolicyScenario {
@@ -196,6 +198,32 @@ impl PolicyScenario {
         let file = self.persisted_file.as_ref().expect("file-backed authority");
         self.store = Store::open(&file.0).expect("reopen authority");
         self
+    }
+
+    pub fn when_pending_evidence_work_is_listed(&mut self) -> &mut Self {
+        self.pending_impacts = self
+            .store
+            .pending_evidence_impacts(&self.project)
+            .expect("pending evidence work");
+        self
+    }
+
+    pub fn then_the_affected_derivation_can_be_resumed(&mut self) -> &mut Self {
+        assert_eq!(self.pending_impacts.len(), 1);
+        let impact = &self.pending_impacts[0];
+        assert_eq!(impact.affected_run.as_str(), "context-dependent-run");
+        assert_eq!(impact.trigger.as_str(), "direct-v1");
+        assert_eq!(impact.changed_source.as_str(), "context-v1");
+        assert_eq!(
+            impact.replacement.as_ref().map(SourceVersionId::as_str),
+            Some("context-v2")
+        );
+        assert_eq!(impact.next_action, "recompile");
+        self
+    }
+
+    pub fn then_no_evidence_work_remains(&mut self) {
+        assert!(self.pending_impacts.is_empty());
     }
 
     pub fn when_the_comment_is_edited(&mut self) -> &mut Self {
@@ -348,7 +376,7 @@ impl PolicyScenario {
         self
     }
 
-    pub fn then_the_context_impact_is_resolved_and_support_is_current(&mut self) {
+    pub fn then_the_context_impact_is_resolved_and_support_is_current(&mut self) -> &mut Self {
         assert_eq!(
             self.store
                 .object_support_status(&self.project, &id("D1"))
@@ -391,6 +419,7 @@ impl PolicyScenario {
                 .map(merl_core::EventId::as_str),
             Some("context-revalidation-event")
         );
+        self
     }
 
     pub fn when_a_provider_observation_targets_that_decision(&mut self) -> &mut Self {
@@ -775,6 +804,7 @@ impl PolicyScenario {
             persisted_file: None,
             invalid_result: None,
             provider_collision_rejected: false,
+            pending_impacts: Vec::new(),
         }
     }
 
