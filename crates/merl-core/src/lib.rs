@@ -170,6 +170,20 @@ impl TryFrom<&str> for CoverageRequirement {
     }
 }
 identifier!(PolicyInputId, "The identity of one immutable policy input.");
+identifier!(
+    CompilationRunId,
+    "The stable identity of one compiler attempt."
+);
+identifier!(PolicyEvaluationId, "The identity of one policy decision.");
+identifier!(
+    PolicyVersion,
+    "The bounded version of authority rules used for evaluation."
+);
+identifier!(AgentId, "The stable identity of one inbox subscriber.");
+identifier!(
+    ReasonCode,
+    "A bounded explanation code for one policy disposition."
+);
 
 /// A project-scoped link between two accepted objects.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -199,13 +213,137 @@ pub struct SourceRef {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PolicyInput {
     /// Meaning extracted from a captured source by a compiler.
-    ObservedAssertion(PolicyInputId),
+    ObservedAssertion {
+        /// Stable identity when policy sees this assertion.
+        id: PolicyInputId,
+        /// Compiler run that recorded the original assertion.
+        run: CompilationRunId,
+        /// Position of the assertion in its immutable compiler result.
+        index: u32,
+    },
     /// A structured action submitted by an authenticated actor.
     Command(PolicyInputId),
     /// A provider-owned fact checked through a deterministic policy path.
     ProviderObservation(PolicyInputId),
     /// An authorized maintenance action, including future purge operations.
     AdministrativeAction(PolicyInputId),
+}
+
+impl PolicyInput {
+    /// Returns the immutable input identity without changing its authority.
+    #[must_use]
+    pub const fn id(&self) -> &PolicyInputId {
+        match self {
+            Self::ObservedAssertion { id, .. }
+            | Self::Command(id)
+            | Self::ProviderObservation(id)
+            | Self::AdministrativeAction(id) => id,
+        }
+    }
+
+    /// Returns a bounded kind used to distinguish equal IDs from different inputs.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::ObservedAssertion { .. } => "observed_assertion",
+            Self::Command(_) => "command",
+            Self::ProviderObservation(_) => "provider_observation",
+            Self::AdministrativeAction(_) => "administrative_action",
+        }
+    }
+}
+
+/// One input's independently recorded policy outcome.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PolicyDisposition {
+    /// Its proposed change may enter the accepted batch.
+    Accepted,
+    /// It remains visible for review but does not change accepted state.
+    Candidate,
+    /// The authority will not accept this proposal.
+    Rejected,
+    /// Its semantic origin has already been handled.
+    Duplicate,
+    /// Current accepted state conflicts with this proposal.
+    Conflict,
+}
+
+impl PolicyDisposition {
+    /// Returns the bounded storage value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Candidate => "candidate",
+            Self::Rejected => "rejected",
+            Self::Duplicate => "duplicate",
+            Self::Conflict => "conflict",
+        }
+    }
+}
+
+/// An input decision retains its immutable identity and a digest of its submitted meaning.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyInputDecision {
+    /// The input's typed identity.
+    pub input: PolicyInput,
+    /// Digest of its immutable command, assertion, observation, or action.
+    pub input_digest: [u8; 32],
+    /// Independent disposition for this input.
+    pub disposition: PolicyDisposition,
+    /// Bounded audit reason; longer notes belong in a protected payload.
+    pub reason: ReasonCode,
+}
+
+/// Accepted-state dependency read while policy made its decision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PolicyRead {
+    /// A named object had this revision, or was absent.
+    Object {
+        /// Object looked up by policy.
+        id: ObjectId,
+        /// `None` also guards an absence-based decision against insertion.
+        revision: Option<ObjectRevision>,
+    },
+    /// No object of this kind changed after the recorded revision.
+    KindCollection {
+        /// Classification whose members affected policy.
+        kind: ObjectKind,
+        /// Latest matching object's project revision when evaluated.
+        latest_project_revision: ProjectRevision,
+    },
+}
+
+/// Object policy proposes to change after checking concurrent writes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyWrite {
+    /// Target object.
+    pub object: ObjectId,
+    /// Object revision visible when policy evaluated, or `None` for creation.
+    pub expected_revision: Option<ObjectRevision>,
+}
+
+/// Auditable decision prepared against accepted state before the final transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyEvaluation {
+    /// Stable retry identity.
+    pub id: PolicyEvaluationId,
+    /// Project whose authority owns this decision.
+    pub project: ProjectId,
+    /// Authenticated evaluator, not a model-attributed actor.
+    pub actor: ActorId,
+    /// Ruleset that produced this decision.
+    pub version: PolicyVersion,
+    /// Accepted state against which the rules ran.
+    pub basis_project_revision: ProjectRevision,
+    /// Typed inputs and their separate dispositions.
+    pub inputs: Vec<PolicyInputDecision>,
+    /// State whose value or absence affected the decision.
+    pub reads: Vec<PolicyRead>,
+    /// Targets proposed for accepted mutation.
+    pub writes: Vec<PolicyWrite>,
+    /// Accepted events, if this evaluation changes project state.
+    pub batch: Option<DomainEventBatch>,
 }
 
 /// Provider-owned Issue state observed through an attached source.
