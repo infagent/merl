@@ -194,6 +194,7 @@ dependencies = [
  "merl-core",
  "merl-corpus",
  "merl-ingest",
+ "merl-policy",
  "merl-store",
  "serde_json",
  "sha2",
@@ -242,10 +243,20 @@ version = "0.1.0"
 dependencies = [
  "merl-core",
  "merl-corpus",
+ "merl-policy",
  "merl-store",
  "serde_json",
  "sha2",
  "time",
+]
+
+[[package]]
+name = "merl-policy"
+version = "0.1.0"
+dependencies = [
+ "merl-core",
+ "merl-store",
+ "sha2",
 ]
 
 [[package]]
