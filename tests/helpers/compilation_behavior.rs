@@ -249,6 +249,58 @@ impl CompilationScenario {
         scenario
     }
 
+    pub fn given_many_unrelated_objects_and_a_named_decision() -> Self {
+        let mut scenario = Self::new();
+        let mut events: Vec<_> = (0..9)
+            .map(|index| DomainEvent::PutObject {
+                id: EventId::try_from(format!("noise-event-{index}").as_str()).expect("event"),
+                object: ObjectId::try_from(format!("A{index}").as_str()).expect("object"),
+                kind: ObjectKind::try_from("fact").expect("kind"),
+                payload: None,
+            })
+            .collect();
+        events.push(DomainEvent::PutObject {
+            id: EventId::try_from("decision-event").expect("event"),
+            object: ObjectId::try_from("D18").expect("object"),
+            kind: ObjectKind::try_from("decision").expect("kind"),
+            payload: None,
+        });
+        scenario
+            .store
+            .commit_unchecked_bootstrap(&DomainEventBatch {
+                id: BatchId::try_from("project-state").expect("batch"),
+                project: scenario.project.clone(),
+                actor: ActorId::try_from("owner").expect("actor"),
+                occurred_at_millis: 5,
+                events,
+            })
+            .expect("accepted state");
+        scenario.capture_in_scope(
+            "issue-comment-v1",
+            "Does D18 still apply?",
+            "issue-204",
+            CoverageRequirement::Required,
+        );
+        scenario.note = SourceVersionId::try_from("issue-comment-v1").expect("source");
+        scenario
+    }
+
+    pub fn when_the_issue_comment_is_compiled(&mut self) -> &mut Self {
+        let context = build_context(&self.store, &self.project, &self.note, limits())
+            .expect("bounded issue context");
+        self.context = Some(serde_json::from_slice(&context.rendered).expect("context JSON"));
+        self
+    }
+
+    pub fn then_the_named_decision_is_selected_before_unrelated_objects(&mut self) -> &mut Self {
+        let context = self.context.as_ref().expect("context");
+        let objects = context["objects"].as_array().expect("objects");
+        assert_eq!(objects.len(), limits().objects);
+        assert!(objects.iter().any(|object| object["id"] == "D18"));
+        assert_eq!(context["objects_truncated"], true);
+        self
+    }
+
     pub fn given_an_edited_issue_with_a_different_editor() -> Self {
         let mut scenario = Self::new();
         let fixture = merl_corpus::github::fixture_from_graphql_pages(

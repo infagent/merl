@@ -89,6 +89,13 @@ fn a_large_project_selects_only_the_budgeted_objects() {
 }
 
 #[test]
+fn an_issue_comment_keeps_its_named_decision_in_bounded_context() {
+    CompilationScenario::given_many_unrelated_objects_and_a_named_decision()
+        .when_the_issue_comment_is_compiled()
+        .then_the_named_decision_is_selected_before_unrelated_objects();
+}
+
+#[test]
 fn pending_compiler_work_records_every_selection_limit() {
     CompilationScenario::given_a_note_for_an_external_compiler()
         .when_the_authority_prepares_the_compiler_run()

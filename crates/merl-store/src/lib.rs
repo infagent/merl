@@ -1130,6 +1130,45 @@ impl Store {
         })
     }
 
+    /// Reads one object's accepted version at a causal project revision.
+    ///
+    /// # Errors
+    /// Rejects future revisions or damaged accepted history.
+    pub fn object_at_revision(
+        &self,
+        project: &ProjectId,
+        object: &ObjectId,
+        revision: ProjectRevision,
+    ) -> Result<Option<(ObjectRevision, Option<PayloadId>)>, StoreError> {
+        if revision > self.project_revision(project)? {
+            return Err(StoreError::InvalidCompilation);
+        }
+        let basis = i64::try_from(revision.get()).map_err(|_| StoreError::InvalidCompilation)?;
+        let row: Option<(i64, Option<String>)> = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) OVER (), e.payload_id FROM domain_events e
+             JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
+             WHERE e.project_id=?1 AND e.object_id=?2 AND b.revision<=?3
+             ORDER BY b.revision DESC, e.event_index DESC LIMIT 1",
+                params![project.as_str(), object.as_str(), basis],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        row.map(|(count, payload)| {
+            let revision = ObjectRevision::try_from(
+                u64::try_from(count).map_err(|_| StoreError::CorruptHistory)?,
+            )
+            .map_err(|_| StoreError::CorruptHistory)?;
+            let payload = payload
+                .map(|id| PayloadId::try_from(id.as_str()))
+                .transpose()
+                .map_err(|_| StoreError::CorruptHistory)?;
+            Ok((revision, payload))
+        })
+        .transpose()
+    }
+
     /// Persists work and its exact causal input before the compiler runs.
     ///
     /// # Errors

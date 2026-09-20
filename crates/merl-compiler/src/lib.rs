@@ -1,6 +1,7 @@
 //! Causal source selection and a bounded, authority-free compiler boundary.
 
 use std::{
+    collections::BTreeSet,
     error::Error,
     fmt,
     io::{Read, Write},
@@ -9,7 +10,8 @@ use std::{
 
 use merl_core::{ObjectId, ObjectRevision, ProjectId, ProjectRevision, SourceVersionId};
 use merl_store::{
-    CompilationIntent, CompilationResult, PayloadRead, Store, StoreError, StructuralAssertion,
+    CompilationIntent, CompilationResult, PayloadRead, SelectedObjects, Store, StoreError,
+    StructuralAssertion,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -251,10 +253,10 @@ fn build_context_with_basis(
             body: String::from_utf8(body).map_err(|_| CompileError::InvalidResponse)?,
         });
     }
-    let historical = store.objects_at_revision(project, basis, limits.objects)?;
+    let selection = select_objects(store, project, basis, trigger, &sources, limits.objects)?;
     let mut objects = Vec::new();
     let mut object_views = Vec::new();
-    for (id, revision, payload) in historical.items {
+    for (id, revision, payload) in selection.items {
         let body = match payload {
             Some(payload) => match store.read_payload(project, &payload)? {
                 PayloadRead::Available(bytes) => {
@@ -285,7 +287,7 @@ fn build_context_with_basis(
         trigger: trigger.to_string(),
         sources,
         objects: object_views,
-        objects_truncated: historical.truncated,
+        objects_truncated: selection.truncated,
     })
     .map_err(|_| CompileError::InvalidResponse)?;
     if rendered.len() > limits.input_bytes {
@@ -298,6 +300,61 @@ fn build_context_with_basis(
         source_window,
         objects,
         rendered,
+    })
+}
+
+fn select_objects(
+    store: &Store,
+    project: &ProjectId,
+    basis: ProjectRevision,
+    trigger: &SourceVersionId,
+    sources: &[RenderedSource],
+    budget: usize,
+) -> Result<SelectedObjects, CompileError> {
+    let mut named = Vec::new();
+    let mut seen = BTreeSet::new();
+    if let Some(trigger_source) = sources.iter().find(|item| item.id == trigger.as_str()) {
+        for token in trigger_source
+            .body
+            .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        {
+            // An uppercase handle with a number is a structural hint, not a semantic claim.
+            if !token.starts_with(|character: char| character.is_ascii_uppercase())
+                || !token.bytes().any(|byte| byte.is_ascii_digit())
+                || !seen.insert(token.to_owned())
+            {
+                continue;
+            }
+            if let Ok(id) = ObjectId::try_from(token)
+                && let Some((revision, payload)) = store.object_at_revision(project, &id, basis)?
+            {
+                named.push((id, revision, payload));
+                if named.len() > budget {
+                    return Err(CompileError::InputBudget);
+                }
+            }
+        }
+    }
+    let historical =
+        store.objects_at_revision(project, basis, budget.saturating_add(named.len()))?;
+    let mut selected = named;
+    let total_visible = selected.len()
+        + historical
+            .items
+            .iter()
+            .filter(|item| !selected.iter().any(|(id, _, _)| id == &item.0))
+            .count();
+    for item in historical.items {
+        if selected.len() == budget {
+            break;
+        }
+        if !selected.iter().any(|(id, _, _)| id == &item.0) {
+            selected.push(item);
+        }
+    }
+    Ok(SelectedObjects {
+        items: selected,
+        truncated: historical.truncated || total_visible > budget,
     })
 }
 
@@ -700,7 +757,7 @@ pub fn prepare_compilation(
         interpretation_basis_revision: context.interpretation_basis_revision,
         source_observation_cutoff: context.source_observation_cutoff,
         renderer_version: "json_v1",
-        selector_version: "object_id_prefix_v1",
+        selector_version: "named_handle_v1",
         compiler_id: adapter.id(),
         compiler_version: adapter.version(),
         model_id: adapter.model(),
