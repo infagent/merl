@@ -689,11 +689,17 @@ A policy evaluation records `basis_project_revision`, read dependencies, and a p
 sequenceDiagram
     participant C as Client or ingestion worker
     participant A as Project authority
+    participant X as External compiler worker
     participant DB as Transactional store
     participant W as Wake adapter
 
-    C->>A: Submit change based on revision N
-    A->>A: Compile and evaluate policy
+    C->>A: Submit captured source
+    A->>DB: Commit compilation context and pending run intent
+    A-->>X: Dispatch after commit
+    X->>X: Run compiler without the authority store
+    X->>A: Return assertions or failure
+    A->>DB: Record immutable compiler result
+    A->>A: Evaluate policy against current state
     A->>DB: Begin serialized transaction
     A->>DB: Validate read dependencies and write set
     alt Dependencies remain valid
@@ -836,6 +842,8 @@ Token metrics include the initial view, expansions, source reads, clarification 
 
 Exactly one authority serializes accepted mutations for a project. The authority runs ingestion, policy evaluation, projection updates, inbox dispatch, and API handling. Clients submit commands through it rather than writing the accepted store.
 
+The authority uses a bounded request mailbox and one serialized commit path. A synchronous store worker owns the authoritative SQLite connection. Model, provider, host, and publication work runs outside its transactions and does not borrow the connection while waiting. Work that must survive restart has a durable pending identity before dispatch; startup recovery retries or reconciles unfinished work. See [ADR 0002](adr/0002-project-authority-concurrency.md).
+
 In local mode, one daemon and SQLite database under `MERL_HOME` form the authority. The CLI may enter an embedded mode when the daemon is absent, but it must first acquire the same exclusive ownership lock. Read-only diagnostic tools may open SQLite in read-only mode when they can tolerate a point-in-time view.
 
 In shared mode, a reachable Merl service forms the authority. Each client may keep a local cache and a durable queue of pending commands. The cache may be incomplete or stale. Its cursor states the latest project revision it has observed; it never competes with the authority as an accepted state store.
@@ -871,6 +879,8 @@ crates/
 ```
 
 `merl-core` has no dependency on SQLite, GitHub, CLI parsing, or an async runtime. Callers supply the IDs and timestamps of accepted batches, so tests can replay them without a clock or ID generator hidden in the crate. Domain transitions remain testable without the network or filesystem.
+
+`merl-store` remains synchronous and runtime-independent. Compiler protocol types do not require Tokio. The future daemon may use it for client and adapter I/O, then submit short store operations through the serialized authority path.
 
 Adapters translate external types at their boundaries. Public core APIs do not expose types from GitHub, SQLite, or CLI libraries. The workspace follows Microsoft's [Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/guidelines/index.html) in spirit, including strong types, small crates, structured telemetry, mockable I/O, and documented error behavior.
 
@@ -928,6 +938,8 @@ The `merl` CLI is the public interface for humans, agents, scripts, CI, and eval
 ### Compiler protocol
 
 External compilers receive an immutable rendered `CompilationContext` and return a bounded, versioned response. The schema accepts typed assertions, source spans, relations, confidence, attribution, and structured context or unresolved outcomes. It rejects undeclared prose fields and responses beyond the run budget. Compilers cannot access the database or retrieve extra history directly. Merl records the context manifest and configuration needed to compare runs, while secrets remain outside persisted provenance.
+
+The first process-adapter wire format and historical fixture import path are specified in [compiler process protocol](compiler-protocol.md).
 
 ### GitHub
 
