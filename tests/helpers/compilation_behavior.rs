@@ -95,6 +95,7 @@ impl HistoricalIssue {
                     kind: ObjectKind::try_from("decision").expect("kind"),
                     payload: Some(payload),
                     issue_scope: None,
+                    lifecycle: merl_core::ObjectLifecycle::Active,
                 }],
             })
             .expect("accept decision");
@@ -126,6 +127,7 @@ impl HistoricalIssue {
                     kind: ObjectKind::try_from("decision").expect("kind"),
                     payload: Some(payload),
                     issue_scope: None,
+                    lifecycle: merl_core::ObjectLifecycle::Active,
                 }],
             })
             .expect("accept future decision");
@@ -214,6 +216,7 @@ impl CompilationScenario {
                     kind: ObjectKind::try_from("decision").expect("kind"),
                     payload: Some(payload),
                     issue_scope: None,
+                    lifecycle: merl_core::ObjectLifecycle::Active,
                 }],
             })
             .expect("accept later decision");
@@ -233,6 +236,7 @@ impl CompilationScenario {
                 kind: ObjectKind::try_from("decision").expect("kind"),
                 payload: None,
                 issue_scope: None,
+                lifecycle: merl_core::ObjectLifecycle::Active,
             })
             .collect();
         scenario
@@ -331,6 +335,7 @@ impl CompilationScenario {
                 kind: ObjectKind::try_from("fact").expect("kind"),
                 payload: None,
                 issue_scope: None,
+                lifecycle: merl_core::ObjectLifecycle::Active,
             })
             .collect();
         events.push(DomainEvent::PutObject {
@@ -339,6 +344,7 @@ impl CompilationScenario {
             kind: ObjectKind::try_from("decision").expect("kind"),
             payload: None,
             issue_scope: None,
+            lifecycle: merl_core::ObjectLifecycle::Active,
         });
         scenario
             .store
@@ -369,6 +375,7 @@ impl CompilationScenario {
                 kind: ObjectKind::try_from("fact").expect("kind"),
                 payload: None,
                 issue_scope: Some("issue-999".into()),
+                lifecycle: merl_core::ObjectLifecycle::Active,
             })
             .collect();
         events.push(DomainEvent::PutObject {
@@ -377,6 +384,7 @@ impl CompilationScenario {
             kind: ObjectKind::try_from("decision").expect("kind"),
             payload: None,
             issue_scope: Some("issue-204".into()),
+            lifecycle: merl_core::ObjectLifecycle::Active,
         });
         scenario
             .store

@@ -4,15 +4,15 @@ use std::{error::Error, fmt, fmt::Write as _, path::Path};
 
 use merl_core::{
     ActorId, AgentId, CapturePolicyVersion, CompilationMode, CoverageRequirement, DomainEvent,
-    DomainEventBatch, ObjectId, ObjectKind, ObjectRevision, PayloadId, PolicyDisposition,
-    PolicyEvaluation, PolicyEvaluationId, PolicyRead, ProjectId, ProjectRevision,
-    ProviderIssueState, ProviderObservation, SourceBindingId, SourceId, SourceKind, SourceProvider,
-    SourceVersionId,
+    DomainEventBatch, ObjectId, ObjectKind, ObjectLifecycle, ObjectRevision, PayloadId,
+    PolicyDisposition, PolicyEvaluation, PolicyEvaluationId, PolicyRead, ProjectId,
+    ProjectRevision, ProviderIssueState, ProviderObservation, Relation, RelationId, RelationKind,
+    SourceBindingId, SourceId, SourceKind, SourceProvider, SourceVersionId,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 10;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -107,6 +107,8 @@ pub struct ProjectedObject {
     pub payload: Option<PayloadId>,
     /// Issue conversation that owns this semantic object, when known.
     pub issue_scope: Option<String>,
+    /// Accepted lifecycle, independent of evidence support.
+    pub lifecycle: ObjectLifecycle,
     /// Evidence health, independent of the object's accepted revision.
     pub support: SupportStatus,
     /// Revision of this object, independent of the project revision.
@@ -115,7 +117,7 @@ pub struct ProjectedObject {
     pub project_revision: ProjectRevision,
 }
 
-type ObjectRow = (String, Option<String>, Option<String>, i64, i64);
+type ObjectRow = (String, Option<String>, Option<String>, String, i64, i64);
 
 /// Provider-owned facts and accepted semantic objects for one Issue thread.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,8 +128,21 @@ pub struct IssueState {
     pub provider: Option<AcceptedProviderObservation>,
     /// Merl-owned objects attached to this Issue, excluding provider mirror records.
     pub semantics: Vec<ProjectedObject>,
+    /// Accepted structural links touching the Issue or its scoped objects.
+    pub relations: Vec<ProjectedRelation>,
     /// Scope-specific coverage; accepted revision alone does not imply completeness.
     pub coverage: SemanticCoverage,
+}
+
+/// Current projection of one accepted structural relation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectedRelation {
+    /// Its accepted endpoints and predicate.
+    pub relation: Relation,
+    /// Revision of this relation, independent of the project revision.
+    pub revision: ObjectRevision,
+    /// Accepted batch that last changed the relation.
+    pub project_revision: ProjectRevision,
 }
 
 /// An accepted change waiting for an agent to read its project delta.
@@ -632,7 +647,17 @@ impl Store {
             if version < 7 {
                 transaction.execute_batch(include_str!("../migrations/0007_issue_scope.sql"))?;
             }
-            transaction.execute_batch(include_str!("../migrations/0008_evidence_health.sql"))?;
+            if version < 8 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0008_evidence_health.sql"))?;
+            }
+            if version < 9 {
+                transaction.execute_batch(include_str!("../migrations/0009_relations.sql"))?;
+            }
+            if version < 10 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0010_object_lifecycle.sql"))?;
+            }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         }
@@ -2157,31 +2182,45 @@ impl Store {
             })
             .collect::<Result<Vec<_>, StoreError>>()?;
         let mut write_statement = self.connection.prepare(
-            "SELECT object_id,expected_revision FROM policy_evaluation_writes
-             WHERE project_id=?1 AND evaluation_id=?2 ORDER BY object_id",
+            "SELECT object_id,expected_revision,target_kind FROM policy_evaluation_writes
+             WHERE project_id=?1 AND evaluation_id=?2 ORDER BY target_kind,object_id",
         )?;
         let writes = write_statement
             .query_map(params![project.as_str(), id.as_str()], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
             })?
             .map(|row| {
-                let (object, revision) = row?;
-                Ok(merl_core::PolicyWrite {
-                    object: ObjectId::try_from(object.as_str())
-                        .map_err(|_| StoreError::CorruptHistory)?,
-                    expected_revision: revision
-                        .map(|value| {
-                            ObjectRevision::try_from(
-                                u64::try_from(value).map_err(|_| StoreError::CorruptHistory)?,
-                            )
-                            .map_err(|_| StoreError::CorruptHistory)
-                        })
-                        .transpose()?,
-                })
+                let (target, revision, kind) = row?;
+                let expected_revision = revision
+                    .map(|value| {
+                        ObjectRevision::try_from(
+                            u64::try_from(value).map_err(|_| StoreError::CorruptHistory)?,
+                        )
+                        .map_err(|_| StoreError::CorruptHistory)
+                    })
+                    .transpose()?;
+                match kind.as_str() {
+                    "object" => Ok(merl_core::PolicyWrite::Object {
+                        object: ObjectId::try_from(target.as_str())
+                            .map_err(|_| StoreError::CorruptHistory)?,
+                        expected_revision,
+                    }),
+                    "relation" => Ok(merl_core::PolicyWrite::Relation {
+                        relation: RelationId::try_from(target.as_str())
+                            .map_err(|_| StoreError::CorruptHistory)?,
+                        expected_revision,
+                    }),
+                    _ => Err(StoreError::CorruptHistory),
+                }
             })
             .collect::<Result<Vec<_>, StoreError>>()?;
         let mut event_statement = self.connection.prepare(
-            "SELECT event_id FROM policy_evaluation_domain_events WHERE project_id=?1 AND evaluation_id=?2 ORDER BY event_id",
+            "SELECT event_id FROM policy_evaluation_domain_events WHERE project_id=?1 AND evaluation_id=?2
+             UNION ALL SELECT event_id FROM policy_evaluation_relation_events WHERE project_id=?1 AND evaluation_id=?2 ORDER BY event_id",
         )?;
         let events = event_statement
             .query_map(params![project.as_str(), id.as_str()], |row| {
@@ -2343,6 +2382,49 @@ impl Store {
         }))
     }
 
+    /// Finds the accepted input responsible for a relation's latest event.
+    ///
+    /// # Errors
+    /// Returns an error if an accepted relation's policy link is incomplete.
+    pub fn relation_policy_origin(
+        &self,
+        project: &ProjectId,
+        relation: &RelationId,
+    ) -> Result<Option<ObjectPolicyOrigin>, StoreError> {
+        let row: Option<(String, Option<String>, Option<i64>)> = self
+            .connection
+            .query_row(
+                "SELECT e.id,p.evaluation_id,p.input_index FROM relation_events e
+             JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
+             LEFT JOIN policy_evaluation_relation_events p
+               ON p.project_id=e.project_id AND p.event_id=e.id
+             WHERE e.project_id=?1 AND e.relation_id=?2
+             ORDER BY b.revision DESC,e.event_index DESC LIMIT 1",
+                params![project.as_str(), relation.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((event, Some(evaluation), Some(input_index))) = row else {
+            return Ok(None);
+        };
+        let evaluation = PolicyEvaluationId::try_from(evaluation.as_str())
+            .map_err(|_| StoreError::CorruptHistory)?;
+        let record = self
+            .policy_evaluation(project, &evaluation)?
+            .ok_or(StoreError::CorruptHistory)?;
+        let index = usize::try_from(input_index).map_err(|_| StoreError::CorruptHistory)?;
+        let input = record.inputs.get(index).ok_or(StoreError::CorruptHistory)?;
+        if input.disposition != PolicyDisposition::Accepted {
+            return Err(StoreError::CorruptHistory);
+        }
+        Ok(Some(ObjectPolicyOrigin {
+            event: merl_core::EventId::try_from(event.as_str())
+                .map_err(|_| StoreError::CorruptHistory)?,
+            evaluation,
+            input: input.input.clone(),
+        }))
+    }
+
     /// Seeds a kernel fixture without policy provenance.
     ///
     /// This bypass exists for pre-policy bootstrap tests. Application mutations
@@ -2385,22 +2467,76 @@ impl Store {
         let row: Option<ObjectRow> = self
             .connection
             .query_row(
-                "SELECT kind, payload_id, issue_scope_id, object_revision, project_revision FROM objects WHERE project_id = ?1 AND id = ?2",
+                "SELECT kind, payload_id, issue_scope_id, lifecycle, object_revision, project_revision FROM objects WHERE project_id = ?1 AND id = ?2",
                 params![project.as_str(), id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
             .optional()?;
-        row.map(|(kind, payload, issue_scope, revision, project_revision)| {
-            Ok(ProjectedObject {
-                id: id.clone(),
-                kind: ObjectKind::try_from(kind.as_str())
+        row.map(
+            |(kind, payload, issue_scope, lifecycle, revision, project_revision)| {
+                Ok(ProjectedObject {
+                    id: id.clone(),
+                    kind: ObjectKind::try_from(kind.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    payload: payload
+                        .map(|value| PayloadId::try_from(value.as_str()))
+                        .transpose()
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    issue_scope,
+                    lifecycle: ObjectLifecycle::try_from(lifecycle.as_str())
+                        .map_err(|()| StoreError::CorruptHistory)?,
+                    support: self.object_support_status(project, id)?,
+                    revision: ObjectRevision::try_from(
+                        u64::try_from(revision).map_err(|_| StoreError::CorruptHistory)?,
+                    )
                     .map_err(|_| StoreError::CorruptHistory)?,
-                payload: payload
-                    .map(|value| PayloadId::try_from(value.as_str()))
-                    .transpose()
-                    .map_err(|_| StoreError::CorruptHistory)?,
-                issue_scope,
-                support: self.object_support_status(project, id)?,
+                    project_revision: ProjectRevision::from(
+                        u64::try_from(project_revision).map_err(|_| StoreError::CorruptHistory)?,
+                    ),
+                })
+            },
+        )
+        .transpose()
+    }
+
+    /// Reads a structural edge without expanding either endpoint's payload.
+    ///
+    /// # Errors
+    /// Rejects corrupt relation metadata or storage failures.
+    pub fn relation(
+        &self,
+        project: &ProjectId,
+        id: &RelationId,
+    ) -> Result<Option<ProjectedRelation>, StoreError> {
+        let row: Option<(String, String, String, i64, i64)> = self
+            .connection
+            .query_row(
+                "SELECT subject_id,relation_kind,object_id,relation_revision,project_revision
+             FROM relations WHERE project_id=?1 AND id=?2",
+                params![project.as_str(), id.as_str()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|(subject, kind, object, revision, project_revision)| {
+            Ok(ProjectedRelation {
+                relation: Relation {
+                    id: id.clone(),
+                    project: project.clone(),
+                    subject: ObjectId::try_from(subject.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    kind: RelationKind::try_from(kind.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    object: ObjectId::try_from(object.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                },
                 revision: ObjectRevision::try_from(
                     u64::try_from(revision).map_err(|_| StoreError::CorruptHistory)?,
                 )
@@ -2557,10 +2693,31 @@ impl Store {
                     .ok_or(StoreError::CorruptHistory)?,
             );
         }
+        let mut relation_statement = self.connection.prepare(
+            "SELECT id FROM relations WHERE project_id=?1 AND
+             (subject_id=?2 OR object_id=?2
+               OR subject_id IN (SELECT id FROM objects WHERE project_id=?1 AND issue_scope_id=?3)
+               OR object_id IN (SELECT id FROM objects WHERE project_id=?1 AND issue_scope_id=?3))
+             ORDER BY id",
+        )?;
+        let relation_ids = relation_statement
+            .query_map(params![project.as_str(), issue.as_str(), scope], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut relations = Vec::with_capacity(relation_ids.len());
+        for id in relation_ids {
+            let id = RelationId::try_from(id.as_str()).map_err(|_| StoreError::CorruptHistory)?;
+            relations.push(
+                self.relation(project, &id)?
+                    .ok_or(StoreError::CorruptHistory)?,
+            );
+        }
         Ok(IssueState {
             project_revision: self.project_revision(project)?,
             provider: self.provider_issue_head(project, issue)?,
             semantics,
+            relations,
             coverage: self.semantic_coverage_in_scope(project, scope)?,
         })
     }
@@ -2695,51 +2852,110 @@ impl Store {
     ///
     /// # Errors
     /// Returns an error if event history is missing, inconsistent, or unreadable.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "replay keeps the cross-kind event order visible in one pass"
+    )]
     pub fn rebuild_projection(&mut self, project: &ProjectId) -> Result<(), StoreError> {
         let expected_revision = self.project_revision(project)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute(
+            "DELETE FROM relations WHERE project_id = ?1",
+            [project.as_str()],
+        )?;
+        transaction.execute(
             "DELETE FROM objects WHERE project_id = ?1",
             [project.as_str()],
         )?;
         let mut statement = transaction.prepare(
-            "SELECT b.revision, e.object_id, e.object_kind, e.payload_id, e.issue_scope_id
+            "SELECT b.revision, e.event_index, 'object', e.object_id, e.object_kind,
+                    e.payload_id, e.issue_scope_id, NULL, NULL, e.lifecycle
              FROM domain_events e JOIN domain_event_batches b
-             ON e.project_id = b.project_id AND e.batch_id = b.id
-             WHERE e.project_id = ?1 ORDER BY b.revision, e.event_index",
+               ON e.project_id=b.project_id AND e.batch_id=b.id
+             WHERE e.project_id=?1
+             UNION ALL
+             SELECT b.revision, r.event_index, 'relation', r.relation_id, r.relation_kind,
+                    NULL, NULL, r.subject_id, r.object_id, NULL
+             FROM relation_events r JOIN domain_event_batches b
+               ON r.project_id=b.project_id AND r.batch_id=b.id
+             WHERE r.project_id=?1
+             ORDER BY 1,2",
         )?;
         let rows = statement.query_map([project.as_str()], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
             ))
         })?;
         let mut latest_revision = 0_i64;
         for row in rows {
-            let (revision, object, kind, payload, issue_scope) = row?;
-            latest_revision = revision;
-            let object =
-                ObjectId::try_from(object.as_str()).map_err(|_| StoreError::CorruptHistory)?;
-            let kind =
-                ObjectKind::try_from(kind.as_str()).map_err(|_| StoreError::CorruptHistory)?;
-            let payload = payload
-                .map(|value| PayloadId::try_from(value.as_str()))
-                .transpose()
-                .map_err(|_| StoreError::CorruptHistory)?;
-            apply_put(
-                &transaction,
-                project,
-                &object,
-                &kind,
-                payload.as_ref(),
-                issue_scope.as_deref(),
+            let (
                 revision,
-            )?;
+                event_kind,
+                object,
+                kind,
+                payload,
+                issue_scope,
+                subject,
+                target,
+                lifecycle,
+            ) = row?;
+            latest_revision = revision;
+            if event_kind == "relation" {
+                apply_relation(
+                    &transaction,
+                    &Relation {
+                        id: RelationId::try_from(object.as_str())
+                            .map_err(|_| StoreError::CorruptHistory)?,
+                        project: project.clone(),
+                        subject: ObjectId::try_from(
+                            subject.as_deref().ok_or(StoreError::CorruptHistory)?,
+                        )
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                        kind: RelationKind::try_from(kind.as_str())
+                            .map_err(|_| StoreError::CorruptHistory)?,
+                        object: ObjectId::try_from(
+                            target.as_deref().ok_or(StoreError::CorruptHistory)?,
+                        )
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    },
+                    revision,
+                )?;
+            } else if event_kind == "object" {
+                let object =
+                    ObjectId::try_from(object.as_str()).map_err(|_| StoreError::CorruptHistory)?;
+                let kind =
+                    ObjectKind::try_from(kind.as_str()).map_err(|_| StoreError::CorruptHistory)?;
+                let payload = payload
+                    .map(|value| PayloadId::try_from(value.as_str()))
+                    .transpose()
+                    .map_err(|_| StoreError::CorruptHistory)?;
+                let lifecycle = ObjectLifecycle::try_from(
+                    lifecycle.as_deref().ok_or(StoreError::CorruptHistory)?,
+                )
+                .map_err(|()| StoreError::CorruptHistory)?;
+                apply_put(
+                    &transaction,
+                    project,
+                    &object,
+                    &kind,
+                    payload.as_ref(),
+                    issue_scope.as_deref(),
+                    lifecycle,
+                    revision,
+                )?;
+            } else {
+                return Err(StoreError::CorruptHistory);
+            }
         }
         drop(statement);
         if u64::try_from(latest_revision).map_err(|_| StoreError::CorruptHistory)?
@@ -2757,7 +2973,8 @@ impl Store {
     /// Returns an error if SQLite cannot read the event log.
     pub fn accepted_event_count(&self, project: &ProjectId) -> Result<u64, StoreError> {
         let count: i64 = self.connection.query_row(
-            "SELECT COUNT(*) FROM domain_events WHERE project_id = ?1",
+            "SELECT (SELECT COUNT(*) FROM domain_events WHERE project_id=?1)
+                  + (SELECT COUNT(*) FROM relation_events WHERE project_id=?1)",
             [project.as_str()],
             |row| row.get(0),
         )?;
@@ -2769,6 +2986,10 @@ fn to_sql_revision(revision: ProjectRevision) -> Result<i64, StoreError> {
     i64::try_from(revision.get()).map_err(|_| StoreError::CorruptHistory)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the shape guard checks one atomic evaluation and its event origins"
+)]
 fn validate_policy_shape(
     evaluation: &PolicyEvaluation,
     provider: Option<&ProviderObservation>,
@@ -2803,21 +3024,27 @@ fn validate_policy_shape(
             {
                 return Err(StoreError::InvalidPolicyEvaluation);
             }
-            let event_objects: HashSet<&str> = batch
+            let event_targets: HashSet<(&str, &str)> = batch
                 .events
                 .iter()
                 .map(|event| match event {
-                    DomainEvent::PutObject { object, .. } => object.as_str(),
+                    DomainEvent::PutObject { object, .. } => ("object", object.as_str()),
+                    DomainEvent::PutRelation { relation, .. } => ("relation", relation.id.as_str()),
                 })
                 .collect();
-            let writes: HashSet<&str> = evaluation
+            let writes: HashSet<(&str, &str)> = evaluation
                 .writes
                 .iter()
-                .map(|write| write.object.as_str())
+                .map(|write| match write {
+                    merl_core::PolicyWrite::Object { object, .. } => ("object", object.as_str()),
+                    merl_core::PolicyWrite::Relation { relation, .. } => {
+                        ("relation", relation.as_str())
+                    }
+                })
                 .collect();
-            if event_objects.len() != batch.events.len()
+            if event_targets.len() != batch.events.len()
                 || writes.len() != evaluation.writes.len()
-                || event_objects != writes
+                || event_targets != writes
             {
                 return Err(StoreError::InvalidPolicyEvaluation);
             }
@@ -2845,9 +3072,10 @@ fn validate_policy_shape(
                 .filter(|input| input.disposition == PolicyDisposition::Accepted)
                 .count()
                 != origin_inputs.len()
-                || !batch.events.iter().all(|event| {
-                    let DomainEvent::PutObject { id, .. } = event;
-                    origin_events.contains(id.as_str())
+                || !batch.events.iter().all(|event| match event {
+                    DomainEvent::PutObject { id, .. } | DomainEvent::PutRelation { id, .. } => {
+                        origin_events.contains(id.as_str())
+                    }
                 })
             {
                 return Err(StoreError::InvalidPolicyEvaluation);
@@ -3003,21 +3231,40 @@ fn validate_policy_dependencies(
         }
     }
     for write in &evaluation.writes {
+        let (table, target, reason_code) = match write {
+            merl_core::PolicyWrite::Object { object, .. } => {
+                ("objects", object.as_str(), "object_write_changed")
+            }
+            merl_core::PolicyWrite::Relation { relation, .. } => {
+                ("relations", relation.as_str(), "relation_write_changed")
+            }
+        };
         let actual: Option<(i64, i64)> = transaction
             .query_row(
-                "SELECT object_revision,project_revision FROM objects WHERE project_id=?1 AND id=?2",
-                params![evaluation.project.as_str(), write.object.as_str()],
+                if table == "objects" {
+                    "SELECT object_revision,project_revision FROM objects WHERE project_id=?1 AND id=?2"
+                } else {
+                    "SELECT relation_revision,project_revision FROM relations WHERE project_id=?1 AND id=?2"
+                },
+                params![evaluation.project.as_str(), target],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        let expected = write
-            .expected_revision
+        let revision = match write {
+            merl_core::PolicyWrite::Object {
+                expected_revision, ..
+            }
+            | merl_core::PolicyWrite::Relation {
+                expected_revision, ..
+            } => expected_revision,
+        };
+        let expected = revision
             .map(|value| i64::try_from(value.get()).map_err(|_| StoreError::CorruptHistory))
             .transpose()?;
         if actual.map(|row| row.0) != expected || actual.is_some_and(|row| row.1 > basis) {
             return Ok(Some(PolicyConflictDetail {
-                reason_code: "object_write_changed".into(),
-                target_id: Some(write.object.as_str().into()),
+                reason_code: reason_code.into(),
+                target_id: Some(target.into()),
                 expected_revision: expected,
                 actual_revision: actual.map(|row| row.0),
             }));
@@ -3044,6 +3291,10 @@ fn validate_observed_input(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the audit record is written as one transaction-local unit"
+)]
 fn insert_policy_record(
     transaction: &Transaction<'_>,
     evaluation: &PolicyEvaluation,
@@ -3134,20 +3385,50 @@ fn insert_policy_record(
         )?;
     }
     for write in &evaluation.writes {
+        let (kind, target, revision) = match write {
+            merl_core::PolicyWrite::Object {
+                object,
+                expected_revision,
+            } => ("object", object.as_str(), expected_revision),
+            merl_core::PolicyWrite::Relation {
+                relation,
+                expected_revision,
+            } => ("relation", relation.as_str(), expected_revision),
+        };
         transaction.execute(
-            "INSERT INTO policy_evaluation_writes (project_id,evaluation_id,object_id,expected_revision)
-             VALUES (?1,?2,?3,?4)",
-            params![evaluation.project.as_str(), evaluation.id.as_str(), write.object.as_str(), write.expected_revision.map(|value| i64::try_from(value.get()).map_err(|_| StoreError::CorruptHistory)).transpose()?],
+            "INSERT INTO policy_evaluation_writes (project_id,evaluation_id,object_id,expected_revision,target_kind)
+             VALUES (?1,?2,?3,?4,?5)",
+            params![evaluation.project.as_str(), evaluation.id.as_str(), target, revision.map(|value| i64::try_from(value.get()).map_err(|_| StoreError::CorruptHistory)).transpose()?, kind],
         )?;
     }
     if conflict.is_none() && !duplicate {
         for origin in &evaluation.event_origins {
+            let event = evaluation
+                .batch
+                .as_ref()
+                .and_then(|batch| {
+                    batch.events.iter().find(|event| match event {
+                        DomainEvent::PutObject { id, .. } | DomainEvent::PutRelation { id, .. } => {
+                            id == &origin.event
+                        }
+                    })
+                })
+                .ok_or(StoreError::InvalidPolicyEvaluation)?;
+            let link_table = match event {
+                DomainEvent::PutObject { .. } => "policy_evaluation_domain_events",
+                DomainEvent::PutRelation { .. } => "policy_evaluation_relation_events",
+            };
             transaction.execute(
-                "INSERT INTO policy_evaluation_domain_events (project_id,evaluation_id,event_id,input_index)
-                 VALUES (?1,?2,?3,?4)",
+                if link_table == "policy_evaluation_domain_events" {
+                    "INSERT INTO policy_evaluation_domain_events (project_id,evaluation_id,event_id,input_index) VALUES (?1,?2,?3,?4)"
+                } else {
+                    "INSERT INTO policy_evaluation_relation_events (project_id,evaluation_id,event_id,input_index) VALUES (?1,?2,?3,?4)"
+                },
                 params![evaluation.project.as_str(), evaluation.id.as_str(), origin.event.as_str(), i64::from(origin.input_index)],
             )?;
-            record_accepted_support(transaction, evaluation, origin)?;
+            if matches!(event, DomainEvent::PutObject { .. }) {
+                record_accepted_support(transaction, evaluation, origin)?;
+            }
         }
     }
     Ok(())
@@ -3270,6 +3551,10 @@ fn insert_policy_conflict(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the digest covers all structural policy inputs in a fixed order"
+)]
 fn policy_evaluation_digest(
     evaluation: &PolicyEvaluation,
     provider: Option<&ProviderObservation>,
@@ -3317,13 +3602,32 @@ fn policy_evaluation_digest(
     }
     part(&(evaluation.writes.len() as u64).to_be_bytes());
     for write in &evaluation.writes {
-        part(write.object.as_str().as_bytes());
-        part(
-            &write
-                .expected_revision
-                .map_or(0, ObjectRevision::get)
-                .to_be_bytes(),
-        );
+        match write {
+            merl_core::PolicyWrite::Object {
+                object,
+                expected_revision,
+            } => {
+                part(b"object");
+                part(object.as_str().as_bytes());
+                part(
+                    &expected_revision
+                        .map_or(0, ObjectRevision::get)
+                        .to_be_bytes(),
+                );
+            }
+            merl_core::PolicyWrite::Relation {
+                relation,
+                expected_revision,
+            } => {
+                part(b"relation");
+                part(relation.as_str().as_bytes());
+                part(
+                    &expected_revision
+                        .map_or(0, ObjectRevision::get)
+                        .to_be_bytes(),
+                );
+            }
+        }
     }
     part(&(evaluation.event_origins.len() as u64).to_be_bytes());
     for origin in &evaluation.event_origins {
@@ -3336,20 +3640,33 @@ fn policy_evaluation_digest(
         part(&batch.occurred_at_millis.to_be_bytes());
         part(&(batch.events.len() as u64).to_be_bytes());
         for event in &batch.events {
-            let DomainEvent::PutObject {
-                id,
-                object,
-                kind,
-                payload,
-                issue_scope,
-            } = event;
-            part(id.as_str().as_bytes());
-            part(object.as_str().as_bytes());
-            part(kind.as_str().as_bytes());
-            part(payload.as_ref().map_or("", PayloadId::as_str).as_bytes());
-            if let Some(scope) = issue_scope {
-                part(b"issue_scope_v1");
-                part(scope.as_bytes());
+            match event {
+                DomainEvent::PutObject {
+                    id,
+                    object,
+                    kind,
+                    payload,
+                    issue_scope,
+                    lifecycle,
+                } => {
+                    part(id.as_str().as_bytes());
+                    part(object.as_str().as_bytes());
+                    part(kind.as_str().as_bytes());
+                    part(payload.as_ref().map_or("", PayloadId::as_str).as_bytes());
+                    if let Some(scope) = issue_scope {
+                        part(b"issue_scope_v1");
+                        part(scope.as_bytes());
+                    }
+                    part(lifecycle.as_str().as_bytes());
+                }
+                DomainEvent::PutRelation { id, relation } => {
+                    part(b"put_relation_v1");
+                    part(id.as_str().as_bytes());
+                    part(relation.id.as_str().as_bytes());
+                    part(relation.subject.as_str().as_bytes());
+                    part(relation.kind.as_str().as_bytes());
+                    part(relation.object.as_str().as_bytes());
+                }
             }
         }
     }
@@ -3396,6 +3713,18 @@ fn insert_accepted_batch(
         params![batch.project.as_str(), batch.id.as_str(), revision, batch.actor.as_str(), batch.occurred_at_millis],
     )?;
     for (index, event) in batch.events.iter().enumerate() {
+        let event_id = match event {
+            DomainEvent::PutObject { id, .. } | DomainEvent::PutRelation { id, .. } => id,
+        };
+        let reused: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM domain_events WHERE project_id=?1 AND id=?2
+             UNION ALL SELECT 1 FROM relation_events WHERE project_id=?1 AND id=?2)",
+            params![batch.project.as_str(), event_id.as_str()],
+            |row| row.get(0),
+        )?;
+        if reused {
+            return Err(StoreError::InvalidBatch);
+        }
         match event {
             DomainEvent::PutObject {
                 id,
@@ -3403,6 +3732,7 @@ fn insert_accepted_batch(
                 kind,
                 payload,
                 issue_scope,
+                lifecycle,
             } => {
                 let existing_kind: Option<String> = transaction
                     .query_row(
@@ -3433,8 +3763,8 @@ fn insert_accepted_batch(
                     }
                 }
                 transaction.execute(
-                    "INSERT INTO domain_events (project_id, batch_id, id, event_index, event_kind, object_id, object_kind, payload_id, issue_scope_id) VALUES (?1, ?2, ?3, ?4, 'put_object', ?5, ?6, ?7, ?8)",
-                    params![batch.project.as_str(), batch.id.as_str(), id.as_str(), i64::try_from(index).map_err(|_| StoreError::InvalidBatch)?, object.as_str(), kind.as_str(), payload.as_ref().map(PayloadId::as_str), issue_scope],
+                    "INSERT INTO domain_events (project_id, batch_id, id, event_index, event_kind, object_id, object_kind, payload_id, issue_scope_id, lifecycle) VALUES (?1, ?2, ?3, ?4, 'put_object', ?5, ?6, ?7, ?8, ?9)",
+                    params![batch.project.as_str(), batch.id.as_str(), id.as_str(), i64::try_from(index).map_err(|_| StoreError::InvalidBatch)?, object.as_str(), kind.as_str(), payload.as_ref().map(PayloadId::as_str), issue_scope, lifecycle.as_str()],
                 )?;
                 apply_put(
                     transaction,
@@ -3443,8 +3773,24 @@ fn insert_accepted_batch(
                     kind,
                     payload.as_ref(),
                     issue_scope.as_deref(),
+                    *lifecycle,
                     revision,
                 )?;
+            }
+            DomainEvent::PutRelation { id, relation } => {
+                if relation.project != batch.project {
+                    return Err(StoreError::InvalidBatch);
+                }
+                transaction.execute(
+                    "INSERT INTO relation_events
+                     (project_id,batch_id,id,event_index,relation_id,subject_id,relation_kind,object_id)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                    params![batch.project.as_str(), batch.id.as_str(), id.as_str(),
+                        i64::try_from(index).map_err(|_| StoreError::InvalidBatch)?,
+                        relation.id.as_str(), relation.subject.as_str(),
+                        relation.kind.as_str(), relation.object.as_str()],
+                )?;
+                apply_relation(transaction, relation, revision)?;
             }
         }
     }
@@ -3467,6 +3813,7 @@ fn validate_provider_batch(
             object,
             kind,
             payload: Some(payload),
+            lifecycle,
             ..
         },
     ] = batch.events.as_slice()
@@ -3476,6 +3823,7 @@ fn validate_provider_batch(
     if object != &observation.issue
         || kind.as_str() != "provider_issue"
         || payload != &observation.snapshot_payload
+        || *lifecycle != ObjectLifecycle::Active
         || batch.occurred_at_millis != observation.observed_at_millis
         || (observation.state == ProviderIssueState::Open && observation.closed_at_millis.is_some())
         || observation
@@ -3603,6 +3951,10 @@ fn provider_fact_ids(
         .map_err(StoreError::from)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "projection replay passes a decoded object event without an intermediate allocation"
+)]
 fn apply_put(
     transaction: &Transaction<'_>,
     project: &ProjectId,
@@ -3610,15 +3962,17 @@ fn apply_put(
     kind: &ObjectKind,
     payload: Option<&PayloadId>,
     issue_scope: Option<&str>,
+    lifecycle: ObjectLifecycle,
     revision: i64,
 ) -> Result<(), StoreError> {
     transaction.execute(
-        "INSERT INTO objects (project_id, id, kind, payload_id, issue_scope_id, object_revision, project_revision)
-         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
+        "INSERT INTO objects (project_id, id, kind, payload_id, issue_scope_id, lifecycle, object_revision, project_revision)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7)
          ON CONFLICT(project_id, id) DO UPDATE SET
            kind = excluded.kind,
            payload_id = excluded.payload_id,
            issue_scope_id = COALESCE(excluded.issue_scope_id, objects.issue_scope_id),
+           lifecycle = excluded.lifecycle,
            object_revision = objects.object_revision + 1,
            project_revision = excluded.project_revision",
         params![
@@ -3627,6 +3981,34 @@ fn apply_put(
             kind.as_str(),
             payload.map(PayloadId::as_str),
             issue_scope,
+            lifecycle.as_str(),
+            revision
+        ],
+    )?;
+    Ok(())
+}
+
+fn apply_relation(
+    transaction: &Transaction<'_>,
+    relation: &Relation,
+    revision: i64,
+) -> Result<(), StoreError> {
+    transaction.execute(
+        "INSERT INTO relations
+         (project_id,id,subject_id,relation_kind,object_id,relation_revision,project_revision)
+         VALUES (?1,?2,?3,?4,?5,1,?6)
+         ON CONFLICT(project_id,id) DO UPDATE SET
+           subject_id=excluded.subject_id,
+           relation_kind=excluded.relation_kind,
+           object_id=excluded.object_id,
+           relation_revision=relations.relation_revision+1,
+           project_revision=excluded.project_revision",
+        params![
+            relation.project.as_str(),
+            relation.id.as_str(),
+            relation.subject.as_str(),
+            relation.kind.as_str(),
+            relation.object.as_str(),
             revision
         ],
     )?;
@@ -4111,5 +4493,51 @@ mod tests {
             .expect("second event");
         assert_eq!(first.input.id().as_str(), "C-z");
         assert_eq!(second.input.id().as_str(), "C-a");
+    }
+
+    #[test]
+    fn relation_migration_preserves_existing_object_write_guards() {
+        let connection = Connection::open_in_memory().expect("open SQLite");
+        for migration in [
+            include_str!("../migrations/0001_initial.sql"),
+            include_str!("../migrations/0002_sources.sql"),
+            include_str!("../migrations/0003_compilation.sql"),
+            include_str!("../migrations/0004_policy.sql"),
+            include_str!("../migrations/0005_policy_conflicts.sql"),
+            include_str!("../migrations/0006_policy_event_origins.sql"),
+            include_str!("../migrations/0007_issue_scope.sql"),
+            include_str!("../migrations/0008_evidence_health.sql"),
+        ] {
+            connection
+                .execute_batch(migration)
+                .expect("create prior schema");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO projects (id) VALUES ('P1');
+             INSERT INTO policy_evaluations
+               (project_id,id,actor_id,policy_version,policy_config_digest,
+                basis_project_revision,evaluation_digest)
+               VALUES ('P1','PE1','alice','v1',zeroblob(32),0,zeroblob(32));
+             INSERT INTO policy_evaluation_writes
+               (project_id,evaluation_id,object_id,expected_revision)
+               VALUES ('P1','PE1','D1',NULL);",
+            )
+            .expect("seed prior write guard");
+        connection
+            .pragma_update(None, "user_version", 8)
+            .expect("mark prior schema");
+
+        let store = Store::from_connection(connection).expect("migrate relation schema");
+        let kind: String = store
+            .connection
+            .query_row(
+                "SELECT target_kind FROM policy_evaluation_writes
+             WHERE project_id='P1' AND evaluation_id='PE1' AND object_id='D1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("preserved write guard");
+        assert_eq!(kind, "object");
     }
 }

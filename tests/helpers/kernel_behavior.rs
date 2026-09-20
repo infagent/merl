@@ -47,6 +47,7 @@ impl ProjectScenario {
                 kind: merl_core::ObjectKind::try_from("decision").expect("valid kind"),
                 payload: self.statement.clone(),
                 issue_scope: None,
+                lifecycle: merl_core::ObjectLifecycle::Active,
             }],
         };
         self.store
@@ -129,6 +130,7 @@ impl ProjectScenario {
                         merl_core::PayloadId::try_from("missing").expect("valid payload ID")
                     }),
                     issue_scope: None,
+                    lifecycle: merl_core::ObjectLifecycle::Active,
                 })
                 .collect(),
         };

@@ -366,6 +366,8 @@ Domain events are append-only. A correction emits another event that supersedes 
 
 Materialized objects and relations are the current projection of accepted domain events. They exist for fast reads and compact rendering. Merl must be able to rebuild them from the domain log.
 
+An Issue view keeps provider-owned facts apart from Merl's decisions, questions, and other semantic objects. Each semantic object shows both its accepted lifecycle and the health of its supporting evidence. A source edit can leave a decision active while its evidence awaits revalidation; a later accepted decision can supersede it even when that original evidence remains sound. Relations such as `supersedes` record how those decisions connect. Rebuilding the projection must preserve all three: lifecycle, support, and relations.
+
 ## State planes
 
 ### Knowledge plane

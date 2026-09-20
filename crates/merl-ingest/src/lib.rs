@@ -367,6 +367,7 @@ fn observe_terminal_issue_snapshot(
                 .map_err(|_| ImportError::InvalidIdentity)?,
             payload: Some(payload.clone()),
             issue_scope: None,
+            lifecycle: merl_core::ObjectLifecycle::Active,
         }],
     };
     let observation = ProviderObservation {

@@ -173,6 +173,10 @@ impl From<StoreError> for PolicyError {
     clippy::too_many_arguments,
     reason = "evaluation identity and authority are explicit at this boundary"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "each proposal contributes one checked policy input and optional event"
+)]
 pub fn evaluate(
     store: &Store,
     project: &ProjectId,
@@ -214,24 +218,50 @@ pub fn evaluate(
             reason: ReasonCode::try_from(reason).map_err(|_| PolicyError::InvalidProposal)?,
         });
         if disposition == PolicyDisposition::Accepted {
-            let DomainEvent::PutObject { object, .. } = proposal.event();
-            if !targets.insert(object.as_str().to_owned()) {
-                return Err(PolicyError::InvalidProposal);
-            }
-            let existing = store.object(project, object)?;
-            let revision = existing.as_ref().map(|value| value.revision);
-            reads.push(PolicyRead::Object {
-                id: object.clone(),
-                revision,
-            });
-            writes.push(PolicyWrite {
-                object: object.clone(),
-                expected_revision: revision,
-            });
-            let DomainEvent::PutObject { id, .. } = proposal.event();
+            let event_id = match proposal.event() {
+                DomainEvent::PutObject { id, object, .. } => {
+                    if !targets.insert(format!("object:{object}")) {
+                        return Err(PolicyError::InvalidProposal);
+                    }
+                    let revision = store.object(project, object)?.map(|value| value.revision);
+                    reads.push(PolicyRead::Object {
+                        id: object.clone(),
+                        revision,
+                    });
+                    writes.push(PolicyWrite::Object {
+                        object: object.clone(),
+                        expected_revision: revision,
+                    });
+                    id
+                }
+                DomainEvent::PutRelation { id, relation } => {
+                    if relation.project != *project
+                        || !targets.insert(format!("relation:{}", relation.id))
+                    {
+                        return Err(PolicyError::InvalidProposal);
+                    }
+                    for endpoint in [&relation.subject, &relation.object] {
+                        let current = store
+                            .object(project, endpoint)?
+                            .ok_or(PolicyError::InvalidProposal)?;
+                        reads.push(PolicyRead::Object {
+                            id: endpoint.clone(),
+                            revision: Some(current.revision),
+                        });
+                    }
+                    let revision = store
+                        .relation(project, &relation.id)?
+                        .map(|value| value.revision);
+                    writes.push(PolicyWrite::Relation {
+                        relation: relation.id.clone(),
+                        expected_revision: revision,
+                    });
+                    id
+                }
+            };
             event_origins.push(PolicyEventOrigin {
                 input_index,
-                event: id.clone(),
+                event: event_id.clone(),
             });
             events.push(proposal.event().clone());
             if let Proposal::ProviderObservation { observation, .. } = proposal
@@ -273,15 +303,14 @@ fn disposition_for(
     rules: &PolicyRules,
     proposal: &Proposal,
 ) -> Result<(PolicyDisposition, &'static str), PolicyError> {
-    if !matches!(proposal, Proposal::ProviderObservation { .. }) {
-        let DomainEvent::PutObject { object, kind, .. } = proposal.event();
-        if kind.as_str() == "provider_issue"
+    if !matches!(proposal, Proposal::ProviderObservation { .. })
+        && let DomainEvent::PutObject { object, kind, .. } = proposal.event()
+        && (kind.as_str() == "provider_issue"
             || store
                 .object(project, object)?
-                .is_some_and(|current| current.kind.as_str() == "provider_issue")
-        {
-            return Err(PolicyError::InvalidProposal);
-        }
+                .is_some_and(|current| current.kind.as_str() == "provider_issue"))
+    {
+        return Err(PolicyError::InvalidProposal);
     }
     match proposal {
         Proposal::Command { .. } => Ok(if rules.command_actors.contains(actor) {
@@ -303,12 +332,17 @@ fn disposition_for(
                 kind,
                 payload,
                 issue_scope,
+                lifecycle,
                 ..
-            } = event;
+            } = event
+            else {
+                return Err(PolicyError::InvalidProposal);
+            };
             if object != &observation.issue
                 || kind.as_str() != "provider_issue"
                 || payload.as_ref() != Some(&observation.snapshot_payload)
                 || issue_scope.is_some()
+                || *lifecycle != merl_core::ObjectLifecycle::Active
             {
                 return Err(PolicyError::InvalidProposal);
             }
@@ -337,7 +371,10 @@ fn disposition_for(
                 payload,
                 issue_scope,
                 ..
-            } = event;
+            } = event
+            else {
+                return Err(PolicyError::InvalidProposal);
+            };
             if assertion.subject != object.as_str()
                 || assertion.predicate != kind.as_str()
                 || assertion.value != payload.as_ref().map_or("none", PayloadId::as_str)
@@ -386,19 +423,31 @@ fn input_digest(proposal: &Proposal, actor: &ActorId) -> [u8; 32] {
         part(run.as_str().as_bytes());
         part(&index.to_be_bytes());
     }
-    let DomainEvent::PutObject {
-        object,
-        kind,
-        payload,
-        issue_scope,
-        ..
-    } = proposal.event();
-    part(object.as_str().as_bytes());
-    part(kind.as_str().as_bytes());
-    part(payload.as_ref().map_or("", PayloadId::as_str).as_bytes());
-    if let Some(scope) = issue_scope {
-        part(b"issue_scope_v1");
-        part(scope.as_bytes());
+    match proposal.event() {
+        DomainEvent::PutObject {
+            object,
+            kind,
+            payload,
+            issue_scope,
+            lifecycle,
+            ..
+        } => {
+            part(object.as_str().as_bytes());
+            part(kind.as_str().as_bytes());
+            part(payload.as_ref().map_or("", PayloadId::as_str).as_bytes());
+            if let Some(scope) = issue_scope {
+                part(b"issue_scope_v1");
+                part(scope.as_bytes());
+            }
+            part(lifecycle.as_str().as_bytes());
+        }
+        DomainEvent::PutRelation { relation, .. } => {
+            part(b"put_relation_v1");
+            part(relation.id.as_str().as_bytes());
+            part(relation.subject.as_str().as_bytes());
+            part(relation.kind.as_str().as_bytes());
+            part(relation.object.as_str().as_bytes());
+        }
     }
     if let Proposal::ProviderObservation { observation, .. } = proposal {
         part(observation.binding.as_str().as_bytes());

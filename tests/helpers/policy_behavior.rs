@@ -56,6 +56,7 @@ fn event(id_value: &str, object: &str, kind: &str, payload: Option<PayloadId>) -
         kind: id(kind),
         payload,
         issue_scope: None,
+        lifecycle: merl_core::ObjectLifecycle::Active,
     }
 }
 

@@ -314,13 +314,23 @@ pub enum PolicyRead {
     },
 }
 
-/// Object policy proposes to change after checking concurrent writes.
+/// Accepted target policy proposes to change after checking concurrent writes.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PolicyWrite {
-    /// Target object.
-    pub object: ObjectId,
-    /// Object revision visible when policy evaluated, or `None` for creation.
-    pub expected_revision: Option<ObjectRevision>,
+pub enum PolicyWrite {
+    /// Object creation or replacement.
+    Object {
+        /// Target object.
+        object: ObjectId,
+        /// Revision visible when policy evaluated, or `None` for creation.
+        expected_revision: Option<ObjectRevision>,
+    },
+    /// Relation creation or replacement.
+    Relation {
+        /// Target relation.
+        relation: RelationId,
+        /// Revision visible when policy evaluated, or `None` for creation.
+        expected_revision: Option<ObjectRevision>,
+    },
 }
 
 /// One accepted input's exact contribution to an event in its batch.
@@ -509,7 +519,52 @@ pub enum DomainEvent {
         payload: Option<PayloadId>,
         /// Source conversation this semantic object belongs to, when known.
         issue_scope: Option<String>,
+        /// Accepted lifecycle, independent of evidence health.
+        lifecycle: ObjectLifecycle,
     },
+    /// Create or replace one structural edge between accepted objects.
+    PutRelation {
+        /// Stable event identity.
+        id: EventId,
+        /// Relation owned by the same project as the batch.
+        relation: Relation,
+    },
+}
+
+/// Accepted status of an object; source edits affect support separately.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObjectLifecycle {
+    /// The object remains part of current accepted state.
+    Active,
+    /// A later accepted object superseded this one.
+    Superseded,
+    /// The project explicitly invalidated this object.
+    Invalidated,
+}
+
+impl ObjectLifecycle {
+    /// Stable structural value used in accepted event records.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Superseded => "superseded",
+            Self::Invalidated => "invalidated",
+        }
+    }
+}
+
+impl TryFrom<&str> for ObjectLifecycle {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "active" => Ok(Self::Active),
+            "superseded" => Ok(Self::Superseded),
+            "invalidated" => Ok(Self::Invalidated),
+            _ => Err(()),
+        }
+    }
 }
 
 /// Events accepted together under exactly one project revision.
