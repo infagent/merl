@@ -50,7 +50,7 @@ flowchart TB
     C --> P[Evaluate typed policy inputs]
     P --> S[Commit accepted DomainEvents]
     S --> V[Materialize Issue mirror and semantic state]
-    V --> R[Render researcher and engineer views]
+    V --> R[Render researcher, engineer, and PM views]
     R --> N[Capture one new comment]
     N --> X2[Build new bounded context]
     X2 --> D[Commit one revision and compact delta]
@@ -66,7 +66,7 @@ The slice performs these actions:
 4. Validate a bounded structured compiler response, then store its assertions without granting them authority.
 5. Evaluate assertions or explicit semantic commands as typed policy inputs.
 6. Commit accepted events, the next project revision, materialized objects, and inbox entries atomically.
-7. Render compact researcher and engineer views with expansion to available evidence and scoped semantic-coverage metadata.
+7. Render compact researcher, engineer, and PM views with optional object focus, expansion to available evidence, and scoped semantic-coverage metadata.
 8. Ingest one new comment and expose only its accepted delta through a pollable inbox.
 9. Rebuild the same state from an empty database.
 10. Run the held-out benchmark against all four simpler baselines and publish correctness, break-even, and variance.
@@ -91,9 +91,9 @@ The release includes:
 - deterministic policy evaluation with recorded read dependencies and write sets;
 - append-only domain events, project revisions, and rebuildable projections;
 - evidence-impact records and support revalidation after source edits or deletions;
-- compact researcher and engineer views with semantic-coverage and freshness metadata;
+- compact, focusable researcher, engineer, and PM views with semantic-coverage and freshness metadata;
 - object and source expansion, including an explicit unavailable result after purge;
-- project deltas and a minimal pollable inbox with acknowledgement;
+- project deltas and a minimal pollable inbox with acknowledgement and paged access to large batches;
 - CLI commands for capture, compilation, review, correction, views, expansion, replay, purge, and evaluation;
 - hierarchical human and machine-readable help for the included commands, plus versioned JSON results and stable error codes;
 - development, held-out, and adversarial evaluation sets;
@@ -161,7 +161,7 @@ The release is ready when:
 - top-level help lists command groups, while one subcommand's human or JSON help can be loaded without rendering the full command catalog;
 - every included command documents its arguments, outcomes, stable errors, examples, and related commands;
 - non-interactive JSON output never prompts and preserves the same accepted, queued, candidate, rejected, and conflicted meanings as human output;
-- researcher and engineer views answer held-out questions at least as accurately as raw history and the simpler summary and retrieval baselines;
+- researcher and engineer views answer held-out questions at least as accurately as raw history and the simpler summary and retrieval baselines; the PM view uses the same accepted state and coverage contract;
 - benchmark results report disagreements and failures rather than scoring ambiguous cases as automatic successes;
 - benchmark reports freeze model, effort, prompts, tool access, and sampling controls, and include paired repeated trials with variance;
 - token reports include context selection, compilation, views, expansions, retries, clarification, and correction;

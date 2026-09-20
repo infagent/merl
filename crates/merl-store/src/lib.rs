@@ -12,7 +12,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -43,6 +43,8 @@ pub enum StoreError {
     PolicyInputConflict,
     /// An evaluation contradicts its claimed inputs, writes, or batch.
     InvalidPolicyEvaluation,
+    /// An inbox acknowledgement skipped an earlier entry or named no entry.
+    InvalidInboxAcknowledgement,
 }
 
 impl fmt::Display for StoreError {
@@ -74,6 +76,9 @@ impl fmt::Display for StoreError {
             }
             Self::InvalidPolicyEvaluation => {
                 formatter.write_str("policy evaluation has inconsistent inputs or writes")
+            }
+            Self::InvalidInboxAcknowledgement => {
+                formatter.write_str("inbox entry is absent or out of order")
             }
         }
     }
@@ -156,6 +161,30 @@ pub struct InboxEntry {
     pub revision: ProjectRevision,
 }
 
+/// One accepted event reference in a compact batch delta.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeltaChange {
+    /// Stable event identity for provenance expansion.
+    pub event: merl_core::EventId,
+    /// Object or relation changed by the event.
+    pub reference: String,
+    /// Bounded event kind; no protected text enters a delta.
+    pub kind: String,
+}
+
+/// One accepted batch and its reference-only changes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectDelta {
+    /// Batch identity used by the inbox.
+    pub batch: merl_core::BatchId,
+    /// Accepted revision of this batch.
+    pub revision: ProjectRevision,
+    /// Changed structural references in event order.
+    pub changes: Vec<DeltaChange>,
+    /// More changes exist in this batch than the read budget allowed.
+    pub changes_truncated: bool,
+}
+
 /// Recorded outcome of one policy evaluation, including retries.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecordedPolicyEvaluation {
@@ -192,6 +221,25 @@ pub struct ObjectPolicyOrigin {
     pub evaluation: PolicyEvaluationId,
     /// Input within that evaluation that produced the event.
     pub input: merl_core::PolicyInput,
+}
+
+/// One accepted revision of an object, oldest first.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObjectHistoryEntry {
+    /// Event that changed this object.
+    pub event: merl_core::EventId,
+    /// Batch that accepted the event.
+    pub batch: merl_core::BatchId,
+    /// Project revision of that batch.
+    pub revision: ProjectRevision,
+    /// Lifecycle accepted at this revision.
+    pub lifecycle: ObjectLifecycle,
+    /// Protected text reference, if this version has one.
+    pub payload: Option<PayloadId>,
+    /// Evaluation that accepted this event, absent for bootstrap history.
+    pub evaluation: Option<PolicyEvaluationId>,
+    /// Exact typed input that produced this event.
+    pub input: Option<merl_core::PolicyInput>,
 }
 
 /// Structural reason a prepared policy result could not commit.
@@ -666,6 +714,9 @@ impl Store {
             if version < 11 {
                 transaction
                     .execute_batch(include_str!("../migrations/0011_impact_derivation.sql"))?;
+            }
+            if version < 12 {
+                transaction.execute_batch(include_str!("../migrations/0012_inbox_cursor.sql"))?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -1215,6 +1266,90 @@ impl Store {
         limit: usize,
     ) -> Result<SelectedObjects, StoreError> {
         self.objects_at_revision_with_scope(project, revision, limit, None)
+    }
+
+    /// Selects current semantic objects by caller-provided relevance before a bounded view.
+    ///
+    /// The scan does not impose an ID prefix: a high-priority object remains visible
+    /// even when the project has many lower-priority objects.
+    ///
+    /// # Errors
+    /// Rejects invalid limits or damaged projected object identities.
+    pub fn current_objects_ranked(
+        &self,
+        project: &ProjectId,
+        limit: usize,
+        priority: impl Fn(&str, &str) -> u8,
+    ) -> Result<(Vec<ProjectedObject>, bool), StoreError> {
+        if limit == 0 || limit > 100 {
+            return Err(StoreError::InvalidBatch);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT id,kind FROM objects WHERE project_id=?1 AND kind!='provider_issue' AND lifecycle!='superseded'",
+        )?;
+        let rows = statement.query_map(params![project.as_str()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut selected = Vec::with_capacity(limit + 1);
+        for row in rows {
+            let (id, kind) = row?;
+            selected.push((priority(&id, &kind), id));
+            selected.sort_unstable();
+            selected.truncate(limit + 1);
+        }
+        let truncated = selected.len() > limit;
+        selected.truncate(limit);
+        let objects = selected
+            .into_iter()
+            .map(|(_, id)| {
+                let id = ObjectId::try_from(id.as_str()).map_err(|_| StoreError::CorruptHistory)?;
+                self.object(project, &id)?.ok_or(StoreError::CorruptHistory)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((objects, truncated))
+    }
+
+    /// Returns direct neighbors so a task view can surface its blockers and requirements
+    /// before unrelated work of the same kind.
+    ///
+    /// # Errors
+    /// Rejects invalid limits or damaged relation endpoints.
+    pub fn focus_neighbors(
+        &self,
+        project: &ProjectId,
+        focus: &ObjectId,
+        limit: usize,
+    ) -> Result<(Vec<ObjectId>, bool), StoreError> {
+        if limit == 0 || limit > 100 {
+            return Err(StoreError::InvalidBatch);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT subject_id,object_id FROM relations WHERE project_id=?1 AND (subject_id=?2 OR object_id=?2) ORDER BY id LIMIT ?3",
+        )?;
+        let rows = statement.query_map(
+            params![
+                project.as_str(),
+                focus.as_str(),
+                i64::try_from(limit + 1).map_err(|_| StoreError::InvalidBatch)?
+            ],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?;
+        let mut endpoints = rows.collect::<Result<Vec<_>, _>>()?;
+        let truncated = endpoints.len() > limit;
+        endpoints.truncate(limit);
+        let mut neighbors = Vec::new();
+        for (subject, object) in endpoints {
+            let other = if subject == focus.as_str() {
+                object
+            } else {
+                subject
+            };
+            let id = ObjectId::try_from(other.as_str()).map_err(|_| StoreError::CorruptHistory)?;
+            if !neighbors.contains(&id) {
+                neighbors.push(id);
+            }
+        }
+        Ok((neighbors, truncated))
     }
 
     /// Selects Issue-owned accepted objects first, without crossing the causal revision.
@@ -1864,11 +1999,244 @@ impl Store {
         project: &ProjectId,
         agent: &AgentId,
     ) -> Result<(), StoreError> {
-        self.connection.execute(
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let revision: i64 = transaction.query_row(
+            "SELECT current_revision FROM projects WHERE id=?1",
+            params![project.as_str()],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
             "INSERT OR IGNORE INTO inbox_subscriptions (project_id, agent_id) VALUES (?1, ?2)",
             params![project.as_str(), agent.as_str()],
         )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO inbox_cursors (project_id, agent_id, revision) VALUES (?1, ?2, ?3)",
+            params![project.as_str(), agent.as_str(), revision],
+        )?;
+        transaction.commit()?;
         Ok(())
+    }
+
+    /// Reads the last acknowledged project revision for one subscribed agent.
+    ///
+    /// # Errors
+    /// Returns an error when the agent has no subscription or storage is unreadable.
+    pub fn inbox_cursor(
+        &self,
+        project: &ProjectId,
+        agent: &AgentId,
+    ) -> Result<ProjectRevision, StoreError> {
+        let revision: Option<i64> = self
+            .connection
+            .query_row(
+                "SELECT revision FROM inbox_cursors WHERE project_id=?1 AND agent_id=?2",
+                params![project.as_str(), agent.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let revision = revision.ok_or(StoreError::InvalidInboxAcknowledgement)?;
+        Ok(ProjectRevision::from(
+            u64::try_from(revision).map_err(|_| StoreError::CorruptHistory)?,
+        ))
+    }
+
+    /// Acknowledges the oldest unread entry; repeating the acknowledgement is harmless.
+    ///
+    /// # Errors
+    /// Rejects an unknown or skipped entry without advancing the cursor.
+    pub fn acknowledge_inbox(
+        &mut self,
+        project: &ProjectId,
+        agent: &AgentId,
+        revision: ProjectRevision,
+    ) -> Result<ProjectRevision, StoreError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: Option<i64> = transaction
+            .query_row(
+                "SELECT revision FROM inbox_cursors WHERE project_id=?1 AND agent_id=?2",
+                params![project.as_str(), agent.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let current = current.ok_or(StoreError::InvalidInboxAcknowledgement)?;
+        let requested = to_sql_revision(revision)?;
+        if requested <= current {
+            let known: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM inbox_entries WHERE project_id=?1 AND agent_id=?2 AND project_revision=?3)",
+                params![project.as_str(), agent.as_str(), requested],
+                |row| row.get(0),
+            )?;
+            if !known {
+                return Err(StoreError::InvalidInboxAcknowledgement);
+            }
+            return Ok(ProjectRevision::from(
+                u64::try_from(current).map_err(|_| StoreError::CorruptHistory)?,
+            ));
+        }
+        let next: Option<i64> = transaction.query_row(
+            "SELECT MIN(project_revision) FROM inbox_entries WHERE project_id=?1 AND agent_id=?2 AND project_revision>?3",
+            params![project.as_str(), agent.as_str(), current], |row| row.get(0),
+        )?;
+        if next != Some(requested) {
+            return Err(StoreError::InvalidInboxAcknowledgement);
+        }
+        transaction.execute(
+            "UPDATE inbox_cursors SET revision=?3 WHERE project_id=?1 AND agent_id=?2",
+            params![project.as_str(), agent.as_str(), requested],
+        )?;
+        transaction.commit()?;
+        Ok(revision)
+    }
+
+    /// Lists accepted batches after a project cursor, without copying source text.
+    ///
+    /// # Errors
+    /// Rejects a future cursor or damaged event identities.
+    pub fn project_delta_since(
+        &self,
+        project: &ProjectId,
+        since: ProjectRevision,
+        limit: usize,
+    ) -> Result<Vec<ProjectDelta>, StoreError> {
+        if since > self.project_revision(project)? || limit == 0 || limit > 100 {
+            return Err(StoreError::InvalidBatch);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT id,revision FROM domain_event_batches WHERE project_id=?1 AND revision>?2 ORDER BY revision LIMIT ?3",
+        )?;
+        let batches = statement
+            .query_map(
+                params![
+                    project.as_str(),
+                    to_sql_revision(since)?,
+                    i64::try_from(limit).map_err(|_| StoreError::InvalidBatch)?
+                ],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        batches
+            .into_iter()
+            .map(|(id, revision)| {
+                let batch = merl_core::BatchId::try_from(id.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?;
+                let revision = ProjectRevision::from(
+                    u64::try_from(revision).map_err(|_| StoreError::CorruptHistory)?,
+                );
+                let (changes, changes_truncated) = self.batch_changes(project, &batch, 20)?;
+                Ok(ProjectDelta {
+                    batch,
+                    revision,
+                    changes,
+                    changes_truncated,
+                })
+            })
+            .collect()
+    }
+
+    /// Resolves one accepted batch to structural references in event order.
+    ///
+    /// # Errors
+    /// Rejects damaged event identities or unreadable storage.
+    pub fn batch_changes(
+        &self,
+        project: &ProjectId,
+        batch: &merl_core::BatchId,
+        limit: usize,
+    ) -> Result<(Vec<DeltaChange>, bool), StoreError> {
+        self.batch_changes_page(project, batch, 0, limit)
+    }
+
+    /// Keeps omitted changes reachable after a caller acknowledges a truncated inbox entry.
+    ///
+    /// # Errors
+    /// Rejects invalid bounds or damaged accepted event identities.
+    pub fn batch_changes_page(
+        &self,
+        project: &ProjectId,
+        batch: &merl_core::BatchId,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<DeltaChange>, bool), StoreError> {
+        if limit == 0 || limit > 100 {
+            return Err(StoreError::InvalidBatch);
+        }
+        let offset = i64::try_from(offset).map_err(|_| StoreError::InvalidBatch)?;
+        let exists: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM domain_event_batches WHERE project_id=?1 AND id=?2)",
+            params![project.as_str(), batch.as_str()],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(StoreError::InvalidBatch);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT id,object_id,event_kind,event_index FROM domain_events WHERE project_id=?1 AND batch_id=?2
+             UNION ALL
+             SELECT id,relation_id,'put_relation',event_index FROM relation_events WHERE project_id=?1 AND batch_id=?2
+             ORDER BY event_index LIMIT ?3 OFFSET ?4",
+        )?;
+        let mut changes = statement
+            .query_map(
+                params![
+                    project.as_str(),
+                    batch.as_str(),
+                    i64::try_from(limit + 1).map_err(|_| StoreError::InvalidBatch)?,
+                    offset
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )?
+            .map(|row| {
+                let (event, reference, kind) = row?;
+                Ok(DeltaChange {
+                    event: merl_core::EventId::try_from(event.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    reference,
+                    kind,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        let truncated = changes.len() > limit;
+        if truncated {
+            changes.pop();
+        }
+        Ok((changes, truncated))
+    }
+
+    /// Finds a subscribed agent's accepted batch at a specific revision, even after ack.
+    ///
+    /// # Errors
+    /// Rejects unreadable storage or invalid stored batch identities.
+    pub fn inbox_entry_at(
+        &self,
+        project: &ProjectId,
+        agent: &AgentId,
+        revision: ProjectRevision,
+    ) -> Result<Option<InboxEntry>, StoreError> {
+        let batch: Option<String> = self.connection.query_row(
+            "SELECT batch_id FROM inbox_entries WHERE project_id=?1 AND agent_id=?2 AND project_revision=?3",
+            params![project.as_str(), agent.as_str(), to_sql_revision(revision)?],
+            |row| row.get(0),
+        ).optional()?;
+        batch
+            .map(|batch| {
+                Ok(InboxEntry {
+                    agent: agent.clone(),
+                    batch: merl_core::BatchId::try_from(batch.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    revision,
+                })
+            })
+            .transpose()
     }
 
     /// Returns durable inbox references after a subscriber's project cursor.
@@ -1903,6 +2271,59 @@ impl Store {
                 })
             })
             .collect()
+    }
+
+    /// Reads one bounded inbox page after the durable cursor.
+    ///
+    /// Callers need a next-page signal without loading the full subscriber history.
+    ///
+    /// # Errors
+    /// Rejects invalid limits or damaged accepted identities.
+    pub fn inbox_page_after(
+        &self,
+        project: &ProjectId,
+        agent: &AgentId,
+        cursor: ProjectRevision,
+        limit: usize,
+    ) -> Result<(Vec<InboxEntry>, bool), StoreError> {
+        if limit == 0 || limit > 100 {
+            return Err(StoreError::InvalidInboxAcknowledgement);
+        }
+        let limit =
+            i64::try_from(limit + 1).map_err(|_| StoreError::InvalidInboxAcknowledgement)?;
+        let mut statement = self.connection.prepare(
+            "SELECT batch_id,project_revision FROM inbox_entries
+             WHERE project_id=?1 AND agent_id=?2 AND project_revision>?3
+             ORDER BY project_revision LIMIT ?4",
+        )?;
+        let rows = statement.query_map(
+            params![
+                project.as_str(),
+                agent.as_str(),
+                to_sql_revision(cursor)?,
+                limit
+            ],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        let mut entries = rows
+            .map(|row| {
+                let (batch, revision) = row?;
+                Ok(InboxEntry {
+                    agent: agent.clone(),
+                    batch: merl_core::BatchId::try_from(batch.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    revision: ProjectRevision::from(
+                        u64::try_from(revision).map_err(|_| StoreError::CorruptHistory)?,
+                    ),
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+        let has_more =
+            entries.len() > usize::try_from(limit - 1).map_err(|_| StoreError::CorruptHistory)?;
+        if has_more {
+            entries.pop();
+        }
+        Ok((entries, has_more))
     }
 
     /// Commits an evaluated decision after validating exactly what it read and would write.
@@ -2360,6 +2781,80 @@ impl Store {
             evaluation,
             input: input.input.clone(),
         }))
+    }
+
+    /// Lists accepted versions of one object without expanding protected text.
+    ///
+    /// # Errors
+    /// Rejects corrupt event identities, revisions, or lifecycle values.
+    pub fn object_history(
+        &self,
+        project: &ProjectId,
+        object: &ObjectId,
+    ) -> Result<Vec<ObjectHistoryEntry>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT e.id,e.batch_id,b.revision,e.lifecycle,e.payload_id,p.evaluation_id,p.input_index FROM domain_events e
+             JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
+             LEFT JOIN policy_evaluation_domain_events p ON p.project_id=e.project_id AND p.event_id=e.id
+             WHERE e.project_id=?1 AND e.object_id=?2 ORDER BY b.revision,e.event_index",
+        )?;
+        statement
+            .query_map(params![project.as_str(), object.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
+                ))
+            })?
+            .map(|row| {
+                let (event, batch, revision, lifecycle, payload, evaluation, input_index) = row?;
+                let evaluation = evaluation
+                    .map(|id| PolicyEvaluationId::try_from(id.as_str()))
+                    .transpose()
+                    .map_err(|_| StoreError::CorruptHistory)?;
+                let input = match (&evaluation, input_index) {
+                    (Some(evaluation), Some(index)) => {
+                        let record = self
+                            .policy_evaluation(project, evaluation)?
+                            .ok_or(StoreError::CorruptHistory)?;
+                        Some(
+                            record
+                                .inputs
+                                .get(
+                                    usize::try_from(index)
+                                        .map_err(|_| StoreError::CorruptHistory)?,
+                                )
+                                .ok_or(StoreError::CorruptHistory)?
+                                .input
+                                .clone(),
+                        )
+                    }
+                    (None, None) => None,
+                    _ => return Err(StoreError::CorruptHistory),
+                };
+                Ok(ObjectHistoryEntry {
+                    event: merl_core::EventId::try_from(event.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    batch: merl_core::BatchId::try_from(batch.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    revision: ProjectRevision::from(
+                        u64::try_from(revision).map_err(|_| StoreError::CorruptHistory)?,
+                    ),
+                    lifecycle: ObjectLifecycle::try_from(lifecycle.as_str())
+                        .map_err(|()| StoreError::CorruptHistory)?,
+                    payload: payload
+                        .map(|id| PayloadId::try_from(id.as_str()))
+                        .transpose()
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    evaluation,
+                    input,
+                })
+            })
+            .collect()
     }
 
     /// Finds the accepted input responsible for a relation's latest event.

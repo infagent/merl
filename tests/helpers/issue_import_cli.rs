@@ -70,6 +70,12 @@ impl CliIssueHistory {
         assert_eq!(result["captured"], 4);
         assert_eq!(result["observation_head"], 4);
         assert_eq!(result["revision"], 1);
+        assert!(
+            result["issue"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("pi_"))
+        );
+        assert_eq!(result["scope"], "controlled:DEV-C3:issue");
         self
     }
 

@@ -820,7 +820,11 @@ A renderer receives accepted objects at a recorded project revision. It may expr
 
 ## Views and progressive disclosure
 
-A role view projects accepted objects into the smallest useful representation for that role. Views hide superseded objects by default but retain their references for expansion.
+A view selects relevant accepted objects before it orders them. In the first release, you can name a focus object. Merl puts that object and its direct relations first, then fills the remaining space according to role. Two engineers focused on different tasks start with different context. Without a focus, researchers see hypotheses and findings first; engineers see implementation work and requirements first; PMs see tasks and blockers first. The multi-agent milestone can supply focus from an assignment.
+
+All three roles read one accepted state. Views hide superseded objects by default and report truncation. A focused project view still reports project-wide semantic coverage, so it cannot claim task-specific completeness.
+
+Inbox entries and project deltas carry bounded reference pages. A truncated page includes a batch ID and an offset for the next page. The batch remains readable after acknowledgement, so advancing an inbox cursor cannot erase access to omitted references. A new subscription starts at the current project revision; it receives future changes, not a partial replay of earlier history.
 
 Accepted project revision and semantic coverage answer different questions. A revision says which accepted events the view contains. `SemanticCoverage` says whether every coverage-required observation for that view's scope has been processed. It records:
 
