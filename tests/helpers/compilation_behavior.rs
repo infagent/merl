@@ -1,6 +1,6 @@
 use merl_compiler::{
-    CompilerLimits, FakeCompiler, ProcessCompiler, RunMode, RunRequest, build_context,
-    build_context_at_basis, execute_compilation, prepare_compilation, record_compilation_result,
+    CompilerLimits, FakeCompiler, ProcessCompiler, RunMode, RunRequest, SequentialReplay,
+    build_context, execute_compilation, prepare_compilation, record_compilation_result,
 };
 use merl_core::{
     ActorId, BatchId, CapturePolicyVersion, CompilationMode, CoverageRequirement, DomainEvent,
@@ -44,6 +44,7 @@ pub struct HistoricalIssue {
     project: ProjectId,
     before: Option<serde_json::Value>,
     after: Option<serde_json::Value>,
+    future_basis_rejected: bool,
 }
 
 impl HistoricalIssue {
@@ -61,20 +62,22 @@ impl HistoricalIssue {
             project,
             before: None,
             after: None,
+            future_basis_rejected: false,
         }
     }
 
     pub fn when_the_first_decision_is_accepted_before_the_next_comment(&mut self) -> &mut Self {
         let second =
             merl_ingest::fixture_version_id("controlled:DEV-C1:O2:v1").expect("second source");
-        let before = build_context_at_basis(
-            &self.store,
-            &self.project,
-            &second,
-            merl_core::ProjectRevision::initial(),
-            limits(),
-        )
-        .expect("second context");
+        let first =
+            merl_ingest::fixture_version_id("controlled:DEV-C1:O1:v1").expect("first source");
+        let mut replay = SequentialReplay::new(self.project.clone());
+        replay
+            .next_context(&mut self.store, &first, limits())
+            .expect("first context");
+        let before = replay
+            .next_context(&mut self.store, &second, limits())
+            .expect("second context");
         self.before = Some(serde_json::from_slice(&before.rendered).expect("before JSON"));
         let payload = merl_core::PayloadId::try_from("decision-body").expect("payload");
         self.store
@@ -96,15 +99,44 @@ impl HistoricalIssue {
             .expect("accept decision");
         let third =
             merl_ingest::fixture_version_id("controlled:DEV-C1:O3:v1").expect("third source");
-        let after = build_context_at_basis(
-            &self.store,
-            &self.project,
-            &third,
-            merl_core::ProjectRevision::from(1),
-            limits(),
-        )
-        .expect("third context");
+        let after = replay
+            .next_context(&mut self.store, &third, limits())
+            .expect("third context");
         self.after = Some(serde_json::from_slice(&after.rendered).expect("after JSON"));
+        self
+    }
+
+    pub fn when_a_future_decision_is_accepted_before_the_first_comment_is_bound(
+        &mut self,
+    ) -> &mut Self {
+        let payload = merl_core::PayloadId::try_from("future-payload").expect("payload");
+        self.store
+            .put_payload(&self.project, &payload, b"Future decision")
+            .expect("payload");
+        self.store
+            .commit(&DomainEventBatch {
+                id: BatchId::try_from("future-batch").expect("batch"),
+                project: self.project.clone(),
+                actor: ActorId::try_from("owner").expect("actor"),
+                occurred_at_millis: 20,
+                events: vec![DomainEvent::PutObject {
+                    id: EventId::try_from("future-event").expect("event"),
+                    object: ObjectId::try_from("future-decision").expect("object"),
+                    kind: ObjectKind::try_from("decision").expect("kind"),
+                    payload: Some(payload),
+                }],
+            })
+            .expect("accept future decision");
+        let first =
+            merl_ingest::fixture_version_id("controlled:DEV-C1:O1:v1").expect("first source");
+        self.future_basis_rejected = SequentialReplay::new(self.project.clone())
+            .next_context(&mut self.store, &first, limits())
+            .is_err();
+        self
+    }
+
+    pub fn then_the_first_comment_rejects_the_future_basis(&mut self) -> &mut Self {
+        assert!(self.future_basis_rejected);
         self
     }
 
@@ -130,6 +162,8 @@ pub struct CompilationScenario {
     context: Option<serde_json::Value>,
     coverage: Option<SemanticCoverage>,
     compile_failed: bool,
+    recovery_succeeded: bool,
+    hindsight_context: Option<serde_json::Value>,
 }
 
 impl CompilationScenario {
@@ -144,15 +178,21 @@ impl CompilationScenario {
             context: None,
             coverage: None,
             compile_failed: false,
+            recovery_succeeded: false,
+            hindsight_context: None,
         }
     }
 
     pub fn given_a_note_followed_by_a_later_decision() -> Self {
+        Self::note_followed_by_a_later_decision(CoverageRequirement::Optional)
+    }
+
+    fn note_followed_by_a_later_decision(requirement: CoverageRequirement) -> Self {
         let mut scenario = Self::new();
         scenario.capture(
             "note-v1",
             "Please revisit the earlier decision.",
-            CoverageRequirement::Optional,
+            requirement,
         );
         let payload = merl_core::PayloadId::try_from("later-payload").expect("payload");
         scenario
@@ -175,6 +215,108 @@ impl CompilationScenario {
             })
             .expect("accept later decision");
         scenario
+    }
+
+    pub fn given_a_required_note_followed_by_a_later_decision() -> Self {
+        Self::note_followed_by_a_later_decision(CoverageRequirement::Required)
+    }
+
+    pub fn given_more_accepted_objects_than_the_context_budget() -> Self {
+        let mut scenario = Self::new();
+        let events = (0..9)
+            .map(|index| DomainEvent::PutObject {
+                id: EventId::try_from(format!("event-{index}").as_str()).expect("event"),
+                object: ObjectId::try_from(format!("object-{index}").as_str()).expect("object"),
+                kind: ObjectKind::try_from("decision").expect("kind"),
+                payload: None,
+            })
+            .collect();
+        scenario
+            .store
+            .commit(&DomainEventBatch {
+                id: BatchId::try_from("many-objects").expect("batch"),
+                project: scenario.project.clone(),
+                actor: ActorId::try_from("owner").expect("actor"),
+                occurred_at_millis: 5,
+                events,
+            })
+            .expect("accepted objects");
+        scenario.capture(
+            "note-v1",
+            "Which objects matter?",
+            CoverageRequirement::Required,
+        );
+        scenario
+    }
+
+    pub fn when_the_note_is_compiled_with_hindsight(&mut self) -> &mut Self {
+        let prepared = prepare_compilation(
+            &mut self.store,
+            &self.project,
+            &self.note,
+            &FakeCompiler,
+            RunRequest {
+                id: "hindsight-run",
+                limits: limits(),
+                mode: RunMode::Hindsight,
+                now_millis: 30,
+            },
+        )
+        .expect("prepare hindsight")
+        .expect("new run");
+        self.hindsight_context = Some(
+            serde_json::from_slice(
+                &self
+                    .store
+                    .load_compilation_context(&self.project, prepared.id())
+                    .expect("saved context")
+                    .rendered,
+            )
+            .expect("context JSON"),
+        );
+        record_compilation_result(
+            &mut self.store,
+            &self.project,
+            &prepared,
+            execute_compilation(&prepared, &FakeCompiler),
+            31,
+        )
+        .expect("record hindsight");
+        self.coverage = Some(
+            self.store
+                .semantic_coverage(&self.project)
+                .expect("coverage"),
+        );
+        self
+    }
+
+    pub fn then_current_state_is_visible_but_required_coverage_remains_open(
+        &mut self,
+    ) -> &mut Self {
+        let context = self.hindsight_context.as_ref().expect("hindsight context");
+        assert_eq!(context["interpretation_basis_revision"], 1);
+        assert_eq!(context["objects"].as_array().expect("objects").len(), 1);
+        assert_eq!(self.coverage.expect("coverage").required_gaps, 1);
+        self
+    }
+
+    pub fn then_only_the_budgeted_objects_are_selected(&mut self) -> &mut Self {
+        let context = self.context.as_ref().expect("context");
+        assert_eq!(
+            context["objects"].as_array().expect("objects").len(),
+            limits().objects
+        );
+        self
+    }
+
+    pub fn then_all_nine_limits_are_retained(&mut self) -> &mut Self {
+        let status = self
+            .store
+            .compilation_run_status(&self.project, "pending-run")
+            .expect("run lookup")
+            .expect("run");
+        assert_eq!(status.limits, [4096, 4096, 512, 8, 2, 1, 2048, 4, 8]);
+        self
     }
 
     pub fn given_required_and_optional_notes() -> Self {
@@ -266,7 +408,6 @@ impl CompilationScenario {
                 id: "external-run",
                 limits: limits(),
                 mode: RunMode::Live,
-                interpretation_basis_revision: None,
                 now_millis: 30,
             },
         )
@@ -284,13 +425,114 @@ impl CompilationScenario {
                 id: "pending-run",
                 limits: limits(),
                 mode: RunMode::Live,
-                interpretation_basis_revision: None,
                 now_millis: 30,
             },
         )
         .expect("prepare run")
         .expect("new run");
         drop(prepared);
+        self
+    }
+
+    pub fn when_the_compiler_requests_more_context(&mut self) -> &mut Self {
+        let response = r#"{"schema":"merl.compiler-response/v1","assertions":[],"context_required":[{"reference":"D18"}]}"#;
+        let adapter = ProcessCompiler {
+            program: "sh".into(),
+            args: vec![
+                "-c".into(),
+                format!("read -r request; printf '%s' '{response}'"),
+            ],
+            version: "v1".into(),
+            model: "test-model".into(),
+            prompt_digest: Sha256::digest(b"context-request-prompt").into(),
+        };
+        let _ = run_compiler(
+            &mut self.store,
+            &self.project,
+            &self.note,
+            &adapter,
+            RunRequest {
+                id: "context-needed-run",
+                limits: limits(),
+                mode: RunMode::Live,
+                now_millis: 30,
+            },
+        );
+        self
+    }
+
+    pub fn then_the_run_needs_expansion_and_coverage_remains_open(&mut self) -> &mut Self {
+        let status = self
+            .store
+            .compilation_run_status(&self.project, "context-needed-run")
+            .expect("run lookup")
+            .expect("run");
+        assert!(status.completed);
+        assert!(!status.succeeded);
+        assert_eq!(
+            self.store
+                .semantic_coverage(&self.project)
+                .expect("coverage")
+                .required_gaps,
+            1
+        );
+        self
+    }
+
+    pub fn when_the_run_is_recovered_after_source_bytes_disappear(&mut self) -> &mut Self {
+        let request = RunRequest {
+            id: "recover-run",
+            limits: limits(),
+            mode: RunMode::Live,
+            now_millis: 30,
+        };
+        let prepared = prepare_compilation(
+            &mut self.store,
+            &self.project,
+            &self.note,
+            &FakeCompiler,
+            request,
+        )
+        .expect("prepare")
+        .expect("new run");
+        drop(prepared);
+        let source = self
+            .store
+            .source_version(&self.project, &self.note)
+            .expect("source lookup")
+            .expect("source");
+        self.store
+            .erase_payload(
+                &self.project,
+                source.payload.as_ref().expect("source payload"),
+            )
+            .expect("erase original source bytes");
+        self.recovery_succeeded = prepare_compilation(
+            &mut self.store,
+            &self.project,
+            &self.note,
+            &FakeCompiler,
+            request,
+        )
+        .ok()
+        .flatten()
+        .is_some_and(|prepared| {
+            let raw = execute_compilation(&prepared, &FakeCompiler);
+            record_compilation_result(&mut self.store, &self.project, &prepared, raw, 31).is_ok()
+        });
+        self.recovery_succeeded &= prepare_compilation(
+            &mut self.store,
+            &self.project,
+            &self.note,
+            &FakeCompiler,
+            request,
+        )
+        .is_ok_and(|prepared| prepared.is_none());
+        self
+    }
+
+    pub fn then_the_original_context_is_still_ready_for_execution(&mut self) -> &mut Self {
+        assert!(self.recovery_succeeded);
         self
     }
 
@@ -403,7 +645,6 @@ impl CompilationScenario {
                 id: "run-one",
                 limits: limits(),
                 mode: RunMode::Live,
-                interpretation_basis_revision: None,
                 now_millis: 30,
             },
         )
@@ -417,7 +658,6 @@ impl CompilationScenario {
                 id: "run-one",
                 limits: limits(),
                 mode: RunMode::Live,
-                interpretation_basis_revision: None,
                 now_millis: 31,
             },
         )
@@ -462,7 +702,6 @@ impl CompilationScenario {
                 id: "budget-run",
                 limits: small,
                 mode: RunMode::Live,
-                interpretation_basis_revision: None,
                 now_millis: 30,
             },
         )
@@ -485,7 +724,6 @@ impl CompilationScenario {
                 id: "eval-run",
                 limits: limits(),
                 mode: RunMode::Eval,
-                interpretation_basis_revision: None,
                 now_millis: 30,
             },
         )
