@@ -50,10 +50,10 @@ fn the_project_delta_contains_only_the_new_batch() {
 }
 
 #[test]
-fn a_new_agent_can_subscribe_from_the_cli() {
+fn a_late_subscription_starts_after_existing_history() {
     ReadScenario::given_an_imported_issue()
         .when_an_agent_subscribes_and_polls()
-        .then_the_agent_has_an_empty_actionable_inbox();
+        .then_the_agent_starts_after_existing_history();
 }
 
 #[test]
@@ -75,4 +75,32 @@ fn a_large_batch_stays_bounded_and_advertises_the_omitted_refs() {
     read_behavior::InboxScenario::given_an_agent_subscribed_before_a_decision()
         .when_a_large_batch_is_accepted_and_the_delta_is_requested()
         .then_the_delta_is_bounded_and_marked_truncated();
+}
+
+#[test]
+fn an_agent_can_read_every_change_in_a_large_batch_before_acknowledging() {
+    read_behavior::InboxScenario::given_an_agent_subscribed_before_a_decision()
+        .when_a_large_batch_is_accepted_and_every_page_is_read()
+        .then_all_references_are_observable_and_the_batch_can_be_acknowledged();
+}
+
+#[test]
+fn role_selection_finds_important_work_beyond_the_first_hundred_ids() {
+    read_behavior::InboxScenario::given_an_agent_subscribed_before_a_decision()
+        .when_many_low_priority_objects_and_one_task_are_viewed_as_pm()
+        .then_the_task_is_in_the_bounded_pm_view();
+}
+
+#[test]
+fn engineers_with_different_task_focus_get_different_first_objects() {
+    read_behavior::InboxScenario::given_an_agent_subscribed_before_a_decision()
+        .when_two_engineers_focus_on_different_tasks()
+        .then_each_engineer_sees_their_task_first();
+}
+
+#[test]
+fn an_object_keeps_its_source_evidence_after_a_later_command() {
+    read_behavior::AssertionScenario::given_a_decision_from_a_captured_comment()
+        .when_a_command_changes_the_decision_and_its_source_is_requested()
+        .then_the_original_assertion_span_is_still_expandable();
 }

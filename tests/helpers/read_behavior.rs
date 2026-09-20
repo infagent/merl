@@ -4,8 +4,8 @@ use merl_compiler::{
 };
 use merl_core::{
     ActorId, AgentId, BatchId, CompilationMode, CoverageRequirement, DomainEvent, EventId,
-    ObjectId, ObjectKind, PolicyEvaluationId, PolicyInputId, PolicyVersion, ProjectId,
-    SourceVersionId,
+    ObjectId, ObjectKind, PolicyEvaluationId, PolicyInputId, PolicyVersion, ProjectId, Relation,
+    RelationId, RelationKind, SourceVersionId,
 };
 use merl_policy::{PolicyRules, Proposal, evaluate};
 use merl_store::{SourceBinding, SourceCapture, Store};
@@ -197,10 +197,10 @@ impl ReadScenario {
         self
     }
 
-    pub fn then_the_agent_has_an_empty_actionable_inbox(self) {
+    pub fn then_the_agent_starts_after_existing_history(self) {
         let poll = self.result.expect("poll");
         assert_eq!(poll["schema"], "merl.inbox/v1");
-        assert_eq!(poll["cursor"], 0);
+        assert_eq!(poll["cursor"], 1);
         assert!(poll["entries"].as_array().unwrap().is_empty());
     }
 }
@@ -237,6 +237,8 @@ pub struct InboxScenario {
     expansion: Option<serde_json::Value>,
     role_views: Vec<serde_json::Value>,
     delta: Option<serde_json::Value>,
+    batch_page: Option<serde_json::Value>,
+    post_ack_page: Option<serde_json::Value>,
 }
 
 impl InboxScenario {
@@ -297,6 +299,8 @@ impl InboxScenario {
             expansion: None,
             role_views: Vec::new(),
             delta: None,
+            batch_page: None,
+            post_ack_page: None,
         }
     }
 
@@ -398,25 +402,40 @@ impl InboxScenario {
     pub fn when_a_large_batch_is_accepted_and_the_delta_is_requested(mut self) -> Self {
         let database = self.directory.path.join("project.sqlite");
         let mut store = Store::open(&database).expect("store");
-        let events = (0..25)
-            .map(|index| DomainEvent::PutObject {
-                id: EventId::try_from(format!("event-{index}").as_str()).expect("event"),
-                object: ObjectId::try_from(format!("T{index}").as_str()).expect("object"),
-                kind: ObjectKind::try_from("task").expect("kind"),
-                payload: None,
-                issue_scope: None,
-                lifecycle: merl_core::ObjectLifecycle::Active,
+        let project = ProjectId::try_from("P1").expect("project");
+        let actor = ActorId::try_from("owner").expect("actor");
+        let proposals = (0..25)
+            .map(|index| Proposal::Command {
+                id: PolicyInputId::try_from(format!("large-command-{index}").as_str())
+                    .expect("command"),
+                event: DomainEvent::PutObject {
+                    id: EventId::try_from(format!("event-{index}").as_str()).expect("event"),
+                    object: ObjectId::try_from(format!("T{index}").as_str()).expect("object"),
+                    kind: ObjectKind::try_from("task").expect("kind"),
+                    payload: None,
+                    issue_scope: None,
+                    lifecycle: merl_core::ObjectLifecycle::Active,
+                },
             })
-            .collect();
-        store
-            .commit_unchecked_bootstrap(&merl_core::DomainEventBatch {
-                id: BatchId::try_from("large-batch").expect("batch"),
-                project: ProjectId::try_from("P1").expect("project"),
-                actor: ActorId::try_from("owner").expect("actor"),
-                occurred_at_millis: 2,
-                events,
-            })
-            .expect("large accepted batch");
+            .collect::<Vec<_>>();
+        let rules = PolicyRules {
+            version: PolicyVersion::try_from("v1").expect("version"),
+            decision_authors: vec![],
+            command_actors: vec![actor.clone()],
+            administrators: vec![],
+        };
+        let prepared = evaluate(
+            &store,
+            &project,
+            &actor,
+            PolicyEvaluationId::try_from("large-eval").expect("evaluation"),
+            BatchId::try_from("large-batch").expect("batch"),
+            2,
+            &rules,
+            &proposals,
+        )
+        .expect("evaluate");
+        prepared.commit(&mut store).expect("large accepted batch");
         self.delta = Some(self.command(&["project", "delta", "--since", "1"]));
         self
     }
@@ -426,6 +445,164 @@ impl InboxScenario {
         assert_eq!(delta["batches"].as_array().unwrap().len(), 1);
         assert_eq!(delta["batches"][0]["changes"].as_array().unwrap().len(), 20);
         assert_eq!(delta["batches"][0]["changes_truncated"], true);
+    }
+
+    pub fn when_a_large_batch_is_accepted_and_every_page_is_read(self) -> Self {
+        let mut scenario = self.when_a_large_batch_is_accepted_and_the_delta_is_requested();
+        scenario.poll = Some(scenario.command(&["inbox", "poll", "--agent", "dev"]));
+        scenario.batch_page = Some(scenario.command(&[
+            "inbox",
+            "show",
+            "--agent",
+            "dev",
+            "--revision",
+            "2",
+            "--offset",
+            "20",
+        ]));
+        scenario.acknowledgements = vec![
+            scenario.command(&["inbox", "ack", "--agent", "dev", "--revision", "1"]),
+            scenario.command(&["inbox", "ack", "--agent", "dev", "--revision", "2"]),
+        ];
+        scenario.post_ack_page = Some(scenario.command(&[
+            "inbox",
+            "show",
+            "--agent",
+            "dev",
+            "--revision",
+            "2",
+            "--offset",
+            "20",
+        ]));
+        scenario
+    }
+
+    pub fn then_all_references_are_observable_and_the_batch_can_be_acknowledged(self) {
+        let first = &self.poll.as_ref().expect("poll")["entries"][1];
+        let second = self.batch_page.as_ref().expect("second page");
+        assert_eq!(first["changes"].as_array().unwrap().len(), 20);
+        assert_eq!(first["changes_truncated"], true);
+        assert_eq!(second["changes"].as_array().unwrap().len(), 5);
+        assert_eq!(second["next_offset"], serde_json::Value::Null);
+        let mut refs: Vec<_> = first["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(second["changes"].as_array().unwrap())
+            .map(|change| change["ref"].as_str().unwrap().to_owned())
+            .collect();
+        refs.sort();
+        refs.dedup();
+        assert_eq!(refs.len(), 25);
+        assert_eq!(self.acknowledgements[1]["cursor"], 2);
+        assert_eq!(self.post_ack_page.as_ref().expect("page after ack"), second);
+    }
+
+    pub fn when_many_low_priority_objects_and_one_task_are_viewed_as_pm(mut self) -> Self {
+        let database = self.directory.path.join("project.sqlite");
+        let mut store = Store::open(&database).expect("store");
+        let mut events: Vec<_> = (0..101)
+            .map(|index| DomainEvent::PutObject {
+                id: EventId::try_from(format!("low-event-{index}").as_str()).expect("event"),
+                object: ObjectId::try_from(format!("A{index:03}").as_str()).expect("object"),
+                kind: ObjectKind::try_from("hypothesis").expect("kind"),
+                payload: None,
+                issue_scope: None,
+                lifecycle: merl_core::ObjectLifecycle::Active,
+            })
+            .collect();
+        events.push(DomainEvent::PutObject {
+            id: EventId::try_from("task-event").expect("event"),
+            object: ObjectId::try_from("T999").expect("object"),
+            kind: ObjectKind::try_from("task").expect("kind"),
+            payload: None,
+            issue_scope: None,
+            lifecycle: merl_core::ObjectLifecycle::Active,
+        });
+        store
+            .commit_unchecked_bootstrap(&merl_core::DomainEventBatch {
+                id: BatchId::try_from("priority-batch").expect("batch"),
+                project: ProjectId::try_from("P1").expect("project"),
+                actor: ActorId::try_from("owner").expect("actor"),
+                occurred_at_millis: 2,
+                events,
+            })
+            .expect("accepted batch");
+        self.role_views = vec![self.command(&["project", "view", "--role", "pm"])];
+        self
+    }
+
+    pub fn then_the_task_is_in_the_bounded_pm_view(self) {
+        let view = &self.role_views[0];
+        assert!(
+            view["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|object| object["id"] == "T999")
+        );
+        assert_eq!(view["truncated"], true);
+    }
+
+    pub fn when_two_engineers_focus_on_different_tasks(mut self) -> Self {
+        let database = self.directory.path.join("project.sqlite");
+        let mut store = Store::open(&database).expect("store");
+        let mut events = (0..30)
+            .map(|index| DomainEvent::PutObject {
+                id: EventId::try_from(format!("task-event-{index}").as_str()).expect("event"),
+                object: ObjectId::try_from(format!("T{index}").as_str()).expect("object"),
+                kind: ObjectKind::try_from("task").expect("kind"),
+                payload: None,
+                issue_scope: None,
+                lifecycle: merl_core::ObjectLifecycle::Active,
+            })
+            .collect::<Vec<_>>();
+        for (task, blocker) in [("T17", "B9"), ("T24", "B10")] {
+            events.push(DomainEvent::PutObject {
+                id: EventId::try_from(format!("{blocker}-event").as_str()).expect("event"),
+                object: ObjectId::try_from(blocker).expect("blocker"),
+                kind: ObjectKind::try_from("blocker").expect("kind"),
+                payload: None,
+                issue_scope: None,
+                lifecycle: merl_core::ObjectLifecycle::Active,
+            });
+            events.push(DomainEvent::PutRelation {
+                id: EventId::try_from(format!("{task}-blocked-event").as_str()).expect("event"),
+                relation: Relation {
+                    id: RelationId::try_from(format!("{task}-blocked").as_str()).expect("relation"),
+                    project: ProjectId::try_from("P1").expect("project"),
+                    subject: ObjectId::try_from(task).expect("task"),
+                    kind: RelationKind::try_from("blocked_by").expect("kind"),
+                    object: ObjectId::try_from(blocker).expect("blocker"),
+                },
+            });
+        }
+        store
+            .commit_unchecked_bootstrap(&merl_core::DomainEventBatch {
+                id: BatchId::try_from("engineer-tasks").expect("batch"),
+                project: ProjectId::try_from("P1").expect("project"),
+                actor: ActorId::try_from("owner").expect("actor"),
+                occurred_at_millis: 2,
+                events,
+            })
+            .expect("accepted batch");
+        self.role_views = vec![
+            self.command(&["project", "view", "--role", "engineer", "--focus", "T17"]),
+            self.command(&["project", "view", "--role", "engineer", "--focus", "T24"]),
+        ];
+        self
+    }
+
+    pub fn then_each_engineer_sees_their_task_first(self) {
+        assert_eq!(self.role_views[0]["objects"][0]["id"], "T17");
+        assert_eq!(self.role_views[0]["objects"][1]["id"], "B9");
+        assert_eq!(self.role_views[1]["objects"][0]["id"], "T24");
+        assert_eq!(self.role_views[1]["objects"][1]["id"], "B10");
+        assert_eq!(self.role_views[0]["role"], self.role_views[1]["role"]);
+        assert_eq!(
+            self.role_views[0]["project_revision"],
+            self.role_views[1]["project_revision"]
+        );
     }
 
     fn command(&self, command: &[&str]) -> serde_json::Value {
@@ -439,13 +616,14 @@ impl InboxScenario {
             "--json",
         ]);
         let output = Command::new(env!("CARGO_BIN_EXE_merl"))
-            .args(args)
+            .args(&args)
             .output()
             .expect("run Merl");
         assert!(
             output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+            "{args:?}: {} {}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
         );
         serde_json::from_slice(&output.stdout).expect("JSON result")
     }
@@ -609,6 +787,7 @@ impl AssertionScenario {
                 "--database",
                 database.to_str().unwrap(),
                 "--source",
+                "--history",
                 "--json",
             ])
             .output()
@@ -652,6 +831,58 @@ impl AssertionScenario {
         assert!(
             self.human_expansion
                 .expect("human expansion")
+                .contains("Evidence: Use fixed gain")
+        );
+    }
+
+    pub fn when_a_command_changes_the_decision_and_its_source_is_requested(self) -> Self {
+        let database = self.directory.path.join("project.sqlite");
+        let mut store = Store::open(&database).expect("store");
+        let project = ProjectId::try_from("P1").expect("project");
+        let actor = ActorId::try_from("alice").expect("actor");
+        let rules = PolicyRules {
+            version: PolicyVersion::try_from("v1").expect("version"),
+            decision_authors: vec![],
+            command_actors: vec![actor.clone()],
+            administrators: vec![],
+        };
+        let prepared = evaluate(
+            &store,
+            &project,
+            &actor,
+            PolicyEvaluationId::try_from("later-eval").expect("evaluation"),
+            BatchId::try_from("later-batch").expect("batch"),
+            5,
+            &rules,
+            &[Proposal::Command {
+                id: PolicyInputId::try_from("later-command").expect("command"),
+                event: DomainEvent::PutObject {
+                    id: EventId::try_from("later-event").expect("event"),
+                    object: ObjectId::try_from("D1").expect("object"),
+                    kind: ObjectKind::try_from("decision").expect("kind"),
+                    payload: None,
+                    issue_scope: Some("issue-1".into()),
+                    lifecycle: merl_core::ObjectLifecycle::Active,
+                },
+            }],
+        )
+        .expect("evaluate");
+        prepared.commit(&mut store).expect("accept later command");
+        self.when_the_decision_source_is_requested()
+    }
+
+    pub fn then_the_original_assertion_span_is_still_expandable(self) {
+        let value = self.expansion.expect("expansion");
+        assert_eq!(value["policy_origin"]["input"]["kind"], "command");
+        assert_eq!(value["history"][0]["input"]["run"], "decision-run");
+        assert_eq!(value["history"][0]["input"]["index"], 0);
+        assert_eq!(
+            value["evidence_history"][0]["assertion"]["evidence"]["text"],
+            "Use fixed gain"
+        );
+        assert!(
+            self.human_expansion
+                .expect("human")
                 .contains("Evidence: Use fixed gain")
         );
     }
