@@ -363,7 +363,7 @@ impl PolicyScenario {
     }
 
     pub fn given_a_prepared_decision_with_a_read_dependency() -> Self {
-        let mut scenario = Self::new();
+        let mut scenario = Self::file_backed();
         scenario.seed("initial", "D1", "decision");
         scenario.prepared =
             Some(scenario.command("update-1", "eval-1", "batch-1", "event-1", "D1"));
@@ -493,12 +493,24 @@ impl PolicyScenario {
                 .expect("events"),
             4
         );
-        assert!(
-            self.store
-                .policy_evaluation(&self.project, &id("eval-2"))
-                .expect("evaluation lookup")
-                .is_none()
-        );
+        self.store = Store::open(&self.persisted_file.as_ref().expect("store file").0)
+            .expect("reopen authority");
+        let conflict = self
+            .store
+            .policy_evaluation(&self.project, &id("eval-2"))
+            .expect("evaluation lookup")
+            .expect("durable conflict outcome");
+        assert_eq!(conflict.basis_project_revision.get(), 3);
+        assert!(conflict.committed_revision.is_none());
+        let detail = conflict.conflict.expect("changed dependency");
+        assert_eq!(detail.reason_code, "object_read_changed");
+        assert_eq!(detail.target_id.as_deref(), Some("D1"));
+        assert_eq!(detail.expected_revision, Some(2));
+        assert_eq!(detail.actual_revision, Some(3));
+        assert_eq!(conflict.inputs[0].disposition, PolicyDisposition::Conflict);
+        assert_eq!(conflict.reads.len(), 1);
+        assert_eq!(conflict.writes.len(), 1);
+        assert!(conflict.events.is_empty());
     }
 
     pub fn given_a_subscriber_and_a_trusted_issue_observation() -> Self {
