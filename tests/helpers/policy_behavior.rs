@@ -435,6 +435,39 @@ impl PolicyScenario {
         self
     }
 
+    pub fn when_the_command_is_retried_with_the_same_meaning(&mut self) -> &mut Self {
+        let retry = self.command(
+            "update-1",
+            "retry-command-eval",
+            "retry-command-batch",
+            "retry-command-event",
+            "D1",
+        );
+        self.retry_disposition = Some(retry.evaluation.inputs[0].disposition);
+        self.stale_result = Some(retry.commit(&mut self.store));
+        self
+    }
+
+    pub fn then_the_retry_creates_no_new_revision(&mut self) -> &mut Self {
+        assert_eq!(self.retry_disposition, Some(PolicyDisposition::Duplicate));
+        assert_eq!(
+            self.stale_result
+                .as_ref()
+                .expect("retry")
+                .as_ref()
+                .expect("recorded"),
+            &None
+        );
+        assert_eq!(
+            self.store
+                .project_revision(&self.project)
+                .expect("revision")
+                .get(),
+            3
+        );
+        self
+    }
+
     pub fn when_the_read_dependency_changes_before_another_commit(&mut self) -> &mut Self {
         let prepared = self.command("update-2", "eval-2", "batch-2", "event-2", "D1");
         self.seed("competing", "D1", "decision");

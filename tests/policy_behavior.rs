@@ -18,6 +18,8 @@ fn unrelated_work_does_not_stale_an_evaluation_but_a_changed_dependency_does() {
     PolicyScenario::given_a_prepared_decision_with_a_read_dependency()
         .when_an_unrelated_object_changes()
         .then_the_decision_can_commit()
+        .when_the_command_is_retried_with_the_same_meaning()
+        .then_the_retry_creates_no_new_revision()
         .when_the_read_dependency_changes_before_another_commit()
         .then_the_stale_decision_is_rejected_without_partial_state();
 }
