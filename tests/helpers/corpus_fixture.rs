@@ -7,6 +7,9 @@ pub struct CorpusFixture {
     fixture: Fixture,
     cutoff: Option<u64>,
     expected_leak: Option<(String, u64)>,
+    future_support_validation: Option<Result<(), ValidationError>>,
+    invalid_variant_results: Vec<Result<(), ValidationError>>,
+    deferred_task_validation: Vec<Result<(), ValidationError>>,
 }
 
 impl CorpusFixture {
@@ -15,6 +18,9 @@ impl CorpusFixture {
             fixture: serde_json::from_str(source).expect("controlled fixture should parse"),
             cutoff: None,
             expected_leak: None,
+            future_support_validation: None,
+            invalid_variant_results: Vec::new(),
+            deferred_task_validation: Vec::new(),
         }
     }
 
@@ -23,7 +29,7 @@ impl CorpusFixture {
         self
     }
 
-    pub fn at_cutoff(mut self, cutoff: u64) -> Self {
+    pub fn when_viewed_at_cutoff(mut self, cutoff: u64) -> Self {
         assert!(
             self.fixture
                 .gold_states
@@ -35,31 +41,31 @@ impl CorpusFixture {
         self
     }
 
-    pub fn expects_active(self, object: &str) -> Self {
+    pub fn then_is_active(self, object: &str) -> Self {
         self.expects_state(object, GoldObjectState::Active)
     }
 
-    pub fn expects_superseded(self, object: &str) -> Self {
+    pub fn then_is_superseded(self, object: &str) -> Self {
         self.expects_state(object, GoldObjectState::Superseded)
     }
 
-    pub fn expects_candidate(self, object: &str) -> Self {
+    pub fn then_is_candidate(self, object: &str) -> Self {
         self.expects_state(object, GoldObjectState::Candidate)
     }
 
-    pub fn expects_current_support(self, object: &str) -> Self {
+    pub fn then_has_current_support(self, object: &str) -> Self {
         let gold = self.object(object);
         assert_eq!(gold.support_status, SupportStatus::Current);
         self
     }
 
-    pub fn expects_revalidation_pending(self, object: &str) -> Self {
+    pub fn then_revalidation_is_pending(self, object: &str) -> Self {
         let gold = self.object(object);
         assert_eq!(gold.support_status, SupportStatus::RevalidationPending);
         self
     }
 
-    pub fn expects_evidence_changed_by(self, object: &str, observation: u64) -> Self {
+    pub fn then_evidence_changed_by(self, object: &str, observation: u64) -> Self {
         let gold = self.object(object);
         assert!(gold.evidence.iter().any(|item| {
             item.observation == observation && matches!(item.role, EvidenceRole::EvidenceChanged)
@@ -67,7 +73,7 @@ impl CorpusFixture {
         self
     }
 
-    pub fn expects_source_supersession(self, newer: u64, older: u64) -> Self {
+    pub fn then_source_supersedes(self, newer: u64, older: u64) -> Self {
         let observation = self
             .fixture
             .observations
@@ -85,7 +91,7 @@ impl CorpusFixture {
         self
     }
 
-    pub fn expects_task_awaiting_acceptance(self, task: &str) -> Self {
+    pub fn then_task_awaits_acceptance(self, task: &str) -> Self {
         let plan = self.object(task).task_plan.as_ref().unwrap();
         assert_eq!(plan.commitment, TaskCommitment::Pending);
         assert_eq!(plan.scheduling, TaskScheduling::Unscheduled);
@@ -93,7 +99,7 @@ impl CorpusFixture {
         self
     }
 
-    pub fn expects_task_start_after_pr_merge(self, task: &str, pull_request: &str) -> Self {
+    pub fn then_task_starts_after_pr_merge(self, task: &str, pull_request: &str) -> Self {
         let predicate = self
             .object(task)
             .task_plan
@@ -108,7 +114,7 @@ impl CorpusFixture {
         self
     }
 
-    pub fn expects_accepted_task_deferred_until_pr_merge(
+    pub fn then_task_is_accepted_but_deferred_until_pr_merge(
         self,
         task: &str,
         pull_request: &str,
@@ -122,10 +128,10 @@ impl CorpusFixture {
                 .as_deref()
                 .is_some_and(|reason| !reason.is_empty())
         );
-        self.expects_task_start_after_pr_merge(task, pull_request)
+        self.then_task_starts_after_pr_merge(task, pull_request)
     }
 
-    pub fn then_rejects_deferred_task_without_reason_or_condition(self, task: &str) {
+    pub fn when_deferred_task_lacks_reason_or_condition(mut self, task: &str) -> Self {
         let cutoff = self.cutoff.expect("a cutoff must be selected first");
         for field in ["deferral_reason", "start_after"] {
             let mut changed = self.fixture.clone();
@@ -147,20 +153,28 @@ impl CorpusFixture {
             } else {
                 plan.start_after = None;
             }
+            self.deferred_task_validation.push(validate(&changed));
+        }
+        self
+    }
+
+    pub fn then_rejects_deferred_task_without_reason_or_condition(self, task: &str) {
+        assert_eq!(self.deferred_task_validation.len(), 2);
+        for result in &self.deferred_task_validation {
             assert_eq!(
-                validate(&changed),
-                Err(ValidationError::InvalidTaskPlan(task.to_owned()))
+                result,
+                &Err(ValidationError::InvalidTaskPlan(task.to_owned()))
             );
         }
     }
 
-    pub fn expects_partial_support(self, object: &str) -> Self {
+    pub fn then_has_partial_support(self, object: &str) -> Self {
         let gold = self.object(object);
         assert_eq!(gold.support_status, SupportStatus::PartiallySupported);
         self
     }
 
-    pub fn expects_disputed_by(self, object: &str, observation: u64) -> Self {
+    pub fn then_is_disputed_by(self, object: &str, observation: u64) -> Self {
         let gold = self.object(object);
         assert!(gold.evidence.iter().any(|item| {
             item.observation == observation && matches!(item.role, EvidenceRole::Disputes)
@@ -168,7 +182,7 @@ impl CorpusFixture {
         self
     }
 
-    pub fn expects_supersedes(self, newer: &str, older: &str, observation: u64) -> Self {
+    pub fn then_supersedes(self, newer: &str, older: &str, observation: u64) -> Self {
         let cutoff = self.cutoff.expect("a cutoff must be selected first");
         let state = self
             .fixture
@@ -216,7 +230,7 @@ impl CorpusFixture {
         self
     }
 
-    pub fn add_support(mut self, object: &str, observation: u64) -> Self {
+    pub fn when_future_support_is_added(mut self, object: &str, observation: u64) -> Self {
         let cutoff = self.cutoff.expect("a cutoff must be selected first");
         let state = self
             .fixture
@@ -236,6 +250,7 @@ impl CorpusFixture {
                 role: merl_corpus::fixture::EvidenceRole::Supports,
             });
         self.expected_leak = Some((object.to_owned(), observation));
+        self.future_support_validation = Some(validate(&self.fixture));
         self
     }
 
@@ -245,7 +260,8 @@ impl CorpusFixture {
             .expected_leak
             .expect("future support must be added before checking rejection");
         assert_eq!(
-            validate(&self.fixture),
+            self.future_support_validation
+                .expect("future support must be validated first"),
             Err(ValidationError::FutureLeakage {
                 object,
                 cutoff,
@@ -254,58 +270,71 @@ impl CorpusFixture {
         );
     }
 
-    pub fn rejects_observation_before_creation(self) -> Self {
+    pub fn when_invalid_variants_are_validated(mut self) -> Self {
         let mut changed = self.fixture.clone();
         "2025-12-31T09:00:00Z".clone_into(&mut changed.observations[0].occurred_at);
         refresh_digest(&mut changed);
-        assert_eq!(
-            validate(&changed),
-            Err(ValidationError::ObservationBeforeCreation(1))
-        );
-        self
-    }
+        self.invalid_variant_results.push(validate(&changed));
 
-    pub fn rejects_observation_after_capture(self) -> Self {
         let mut changed = self.fixture.clone();
         "2026-09-19T00:00:00Z".clone_into(&mut changed.observations[3].occurred_at);
         refresh_digest(&mut changed);
-        assert_eq!(
-            validate(&changed),
-            Err(ValidationError::ObservationAfterCapture(4))
-        );
-        self
-    }
+        self.invalid_variant_results.push(validate(&changed));
 
-    pub fn rejects_duplicate_source_version(self) -> Self {
         let mut changed = self.fixture.clone();
         let (first, rest) = changed.observations.split_at_mut(1);
         rest[0].provider_id.clone_from(&first[0].provider_id);
         rest[0].version_id.clone_from(&first[0].version_id);
         changed.observations[1].supersedes = Some(1);
         refresh_digest(&mut changed);
+        self.invalid_variant_results.push(validate(&changed));
+
+        let mut changed = self.fixture.clone();
+        changed.gold_states.push(changed.gold_states[0].clone());
+        self.invalid_variant_results.push(validate(&changed));
+
+        let mut changed = self.fixture.clone();
+        let duplicate = changed.gold_states[0].objects[0].clone();
+        changed.gold_states[0].objects.push(duplicate);
+        self.invalid_variant_results.push(validate(&changed));
+        self
+    }
+
+    pub fn then_rejects_an_observation_before_creation(self) -> Self {
         assert_eq!(
-            validate(&changed),
+            self.invalid_variant_results[0],
+            Err(ValidationError::ObservationBeforeCreation(1))
+        );
+        self
+    }
+
+    pub fn then_rejects_an_observation_after_capture(self) -> Self {
+        assert_eq!(
+            self.invalid_variant_results[1],
+            Err(ValidationError::ObservationAfterCapture(4))
+        );
+        self
+    }
+
+    pub fn then_rejects_a_duplicate_source_version(self) -> Self {
+        assert_eq!(
+            self.invalid_variant_results[2],
             Err(ValidationError::DuplicateVersionIdentity(2))
         );
         self
     }
 
-    pub fn rejects_duplicate_gold_cutoff(self) -> Self {
-        let mut changed = self.fixture.clone();
-        changed.gold_states.push(changed.gold_states[0].clone());
+    pub fn then_rejects_a_duplicate_gold_cutoff(self) -> Self {
         assert_eq!(
-            validate(&changed),
+            self.invalid_variant_results[3],
             Err(ValidationError::DuplicateGoldCutoff(1))
         );
         self
     }
 
-    pub fn rejects_duplicate_gold_object(self) {
-        let mut changed = self.fixture.clone();
-        let duplicate = changed.gold_states[0].objects[0].clone();
-        changed.gold_states[0].objects.push(duplicate);
+    pub fn then_rejects_a_duplicate_gold_object(self) {
         assert_eq!(
-            validate(&changed),
+            self.invalid_variant_results[4],
             Err(ValidationError::DuplicateGoldObject(
                 "gain-strategy".to_owned()
             ))

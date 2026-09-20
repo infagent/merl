@@ -1,3 +1,5 @@
 /target/
+__pycache__/
+*.pyc
 # Natural captures contain third-party prose. Review redistribution before tracking them.
 /corpus/development/DEV-N*.json

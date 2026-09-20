@@ -9,23 +9,50 @@ pub struct GithubCapture {
     source: String,
     captured_at: &'static str,
     fixture: Option<Fixture>,
+    capture_error: Option<String>,
+    capture_validation: Option<Result<(), ValidationError>>,
+    exact_replay_result: Option<Result<(), ValidationError>>,
+    causal_cutoff_results: Option<[Result<(), ValidationError>; 2]>,
+    incomplete_capture_results: Option<[Result<(), String>; 2]>,
+    invalid_edit_results: Option<InvalidEditResults>,
+    legacy_validation: Option<Result<(), ValidationError>>,
+    legacy_store: Option<merl_store::Store>,
+    new_schema_validation: Option<Result<(), ValidationError>>,
+}
+
+struct InvalidEditResults {
+    identity: Result<(), ValidationError>,
+    mismatched_time: Result<(), ValidationError>,
+    malformed_time: Result<(), ValidationError>,
+    malformed_deletion: Result<(), ValidationError>,
+    early_deletion: Result<(), ValidationError>,
+    late_deletion: Result<(), ValidationError>,
 }
 
 impl GithubCapture {
-    pub fn two_pages_with_issue_edit() -> Self {
+    pub fn given_two_pages_with_issue_edit() -> Self {
         Self {
             source: include_str!("../fixtures/github_two_page_edit.json").to_owned(),
             captured_at: "2026-01-02T00:00:00Z",
             fixture: None,
+            capture_error: None,
+            capture_validation: None,
+            exact_replay_result: None,
+            causal_cutoff_results: None,
+            incomplete_capture_results: None,
+            invalid_edit_results: None,
+            legacy_validation: None,
+            legacy_store: None,
+            new_schema_validation: None,
         }
     }
 
-    pub fn with_capture_time(mut self, captured_at: &'static str) -> Self {
+    pub fn given_capture_time(mut self, captured_at: &'static str) -> Self {
         self.captured_at = captured_at;
         self
     }
 
-    pub fn with_issue_edit_tied_to_last_comment(mut self) -> Self {
+    pub fn given_issue_edit_tied_to_last_comment(mut self) -> Self {
         let mut pages: serde_json::Value = serde_json::from_str(&self.source).unwrap();
         for page in pages.as_array_mut().unwrap() {
             let issue = &mut page["data"]["repository"]["issue"];
@@ -37,7 +64,7 @@ impl GithubCapture {
         self
     }
 
-    pub fn with_offset_issue_creation_time(mut self) -> Self {
+    pub fn given_offset_issue_creation_time(mut self) -> Self {
         let mut pages: serde_json::Value = serde_json::from_str(&self.source).unwrap();
         for page in pages.as_array_mut().unwrap() {
             page["data"]["repository"]["issue"]["createdAt"] = "2026-01-01T11:00:00+02:00".into();
@@ -51,6 +78,27 @@ impl GithubCapture {
             fixture_from_graphql_pages("DEV-FAKE", self.captured_at, self.source.as_bytes())
                 .expect("two-page example should capture"),
         );
+        self.capture_validation = Some(validate(self.fixture()));
+        self
+    }
+
+    pub fn when_exact_replay_is_requested(mut self) -> Self {
+        self.exact_replay_result = Some(require_exact_source_bodies_through(self.fixture(), 2));
+        self
+    }
+
+    pub fn when_causal_cutoffs_are_checked(mut self) -> Self {
+        let fixture = self.fixture();
+        self.causal_cutoff_results = Some([
+            merl_corpus::fixture::require_unambiguous_order_through(fixture, 3),
+            merl_corpus::fixture::require_unambiguous_order_through(fixture, 4),
+        ]);
+        self
+    }
+
+    pub fn when_capture_is_attempted(mut self) -> Self {
+        self.capture_error =
+            fixture_from_graphql_pages("DEV-FAKE", self.captured_at, self.source.as_bytes()).err();
         self
     }
 
@@ -131,7 +179,12 @@ impl GithubCapture {
             fixture.capture.source_sha256,
             source_digest(&fixture.provider_snapshot, &fixture.observations)
         );
-        validate(fixture).expect("source digest should validate");
+        assert_eq!(
+            self.capture_validation
+                .as_ref()
+                .expect("captured fixture was validated"),
+            &Ok(())
+        );
         self
     }
 
@@ -150,20 +203,32 @@ impl GithubCapture {
         }
         fixture.capture.source_sha256 =
             source_digest(&fixture.provider_snapshot, &fixture.observations);
+        self.legacy_validation = Some(validate(self.fixture()));
+        let project = merl_core::ProjectId::try_from("legacy").expect("project ID");
+        let mut store = merl_store::Store::open_in_memory().expect("store");
+        store.create_project(&project).expect("project");
+        merl_ingest::import_fixture(&mut store, &project, self.fixture()).expect("legacy import");
+        self.legacy_store = Some(store);
         self
     }
 
     pub fn then_remains_valid_without_new_provider_facts(self) -> Self {
-        validate(self.fixture()).expect("the old schema remains readable");
+        assert_eq!(
+            self.legacy_validation
+                .as_ref()
+                .expect("legacy validation ran"),
+            &Ok(())
+        );
         self
     }
 
     pub fn then_does_not_invent_missing_provider_facts(self) -> Self {
         let fixture = self.fixture();
         let project = merl_core::ProjectId::try_from("legacy").expect("project ID");
-        let mut store = merl_store::Store::open_in_memory().expect("store");
-        store.create_project(&project).expect("project");
-        merl_ingest::import_fixture(&mut store, &project, fixture).expect("legacy import");
+        let store = self
+            .legacy_store
+            .as_ref()
+            .expect("legacy capture was imported");
         let issue = merl_ingest::fixture_issue_id(fixture).expect("Issue ID");
         let head = store
             .provider_issue_head(&project, &issue)
@@ -185,106 +250,164 @@ impl GithubCapture {
         self
     }
 
-    pub fn then_cannot_claim_the_new_schema_without_them(self) {
+    pub fn when_legacy_capture_claims_the_new_schema(mut self) -> Self {
         let mut fixture = self.fixture().clone();
         "merl.corpus-fixture/v2".clone_into(&mut fixture.schema);
+        self.new_schema_validation = Some(validate(&fixture));
+        self
+    }
+
+    pub fn then_cannot_claim_the_new_schema_without_them(self) {
         assert_eq!(
-            validate(&fixture),
-            Err(ValidationError::InvalidProviderSnapshot)
+            self.new_schema_validation
+                .expect("new-schema claim was validated"),
+            Err(ValidationError::InvalidProviderSnapshot),
         );
     }
 
     pub fn then_rejects_exact_replay_across_the_gap(self) {
         assert_eq!(
-            require_exact_source_bodies_through(self.fixture(), 2),
+            self.exact_replay_result
+                .expect("exact replay was requested"),
             Err(ValidationError::MissingHistoricalBody(1))
         );
     }
 
     pub fn then_capture_fails_for_timestamp(self) {
         assert!(
-            fixture_from_graphql_pages("DEV-FAKE", self.captured_at, self.source.as_bytes())
-                .is_err_and(|error| error.contains("RFC 3339"))
+            self.capture_error
+                .as_deref()
+                .is_some_and(|error| error.contains("RFC 3339"))
         );
     }
 
     pub fn then_reports_ambiguous_cutoff(self) {
         let fixture = self.fixture();
         assert!(fixture.observations[3].ambiguous_order_with_previous);
-        assert_eq!(
-            merl_corpus::fixture::require_unambiguous_order_through(fixture, 3),
-            Err(ValidationError::AmbiguousCausalOrder(4))
-        );
-        assert_eq!(
-            merl_corpus::fixture::require_unambiguous_order_through(fixture, 4),
-            Err(ValidationError::AmbiguousCausalOrder(4))
-        );
+        let [before_tie, after_tie] = self
+            .causal_cutoff_results
+            .expect("causal cutoffs were checked");
+        assert_eq!(before_tie, Err(ValidationError::AmbiguousCausalOrder(4)));
+        assert_eq!(after_tie, Err(ValidationError::AmbiguousCausalOrder(4)));
     }
 
-    pub fn then_rejects_truncated_labels(mut self) -> Self {
-        self.expect_truncated_snapshot("labels");
+    pub fn when_incomplete_provider_snapshots_are_captured(mut self) -> Self {
+        self.incomplete_capture_results = Some([
+            self.capture_truncated_snapshot("labels"),
+            self.capture_truncated_snapshot("assignees"),
+        ]);
         self
     }
 
-    pub fn then_rejects_truncated_assignees(mut self) -> Self {
-        self.expect_truncated_snapshot("assignees");
+    pub fn then_truncated_labels_are_rejected(self) -> Self {
+        let result = &self
+            .incomplete_capture_results
+            .as_ref()
+            .expect("incomplete captures were attempted")[0];
+        assert!(
+            matches!(result, Err(error) if error.contains("labels") && error.contains("incomplete"))
+        );
         self
     }
 
-    fn expect_truncated_snapshot(&mut self, field: &str) {
+    pub fn then_truncated_assignees_are_rejected(self) {
+        let result = &self
+            .incomplete_capture_results
+            .as_ref()
+            .expect("incomplete captures were attempted")[1];
+        assert!(
+            matches!(result, Err(error) if error.contains("assignees") && error.contains("incomplete"))
+        );
+    }
+
+    fn capture_truncated_snapshot(&self, field: &str) -> Result<(), String> {
         let mut pages: serde_json::Value = serde_json::from_str(&self.source).unwrap();
         for page in pages.as_array_mut().unwrap() {
             page["data"]["repository"]["issue"][field]["pageInfo"]["hasNextPage"] = true.into();
         }
         let source = serde_json::to_vec(&pages).unwrap();
-        assert!(
-            fixture_from_graphql_pages("DEV-FAKE", self.captured_at, &source)
-                .is_err_and(|error| error.contains(field) && error.contains("incomplete"))
-        );
+        fixture_from_graphql_pages("DEV-FAKE", self.captured_at, &source).map(|_| ())
     }
 
-    pub fn then_rejects_mismatched_edit_identity(self) -> Self {
-        self.expect_invalid_edit(
-            |edit| "another-edit".clone_into(&mut edit.provider_id),
-            ValidationError::InvalidContentEdit(3),
+    pub fn when_malformed_edit_metadata_is_validated(mut self) -> Self {
+        self.invalid_edit_results = Some(InvalidEditResults {
+            identity: self.validate_after_edit(|edit| {
+                "another-edit".clone_into(&mut edit.provider_id);
+            }),
+            mismatched_time: self.validate_after_edit(|edit| {
+                "2026-01-01T11:30:00Z".clone_into(&mut edit.edited_at);
+            }),
+            malformed_time: self.validate_after_edit(|edit| {
+                "not-a-time".clone_into(&mut edit.edited_at);
+            }),
+            malformed_deletion: self.validate_after_edit(|edit| {
+                edit.deleted_at = Some("not-a-time".to_owned());
+            }),
+            early_deletion: self.validate_after_edit(|edit| {
+                edit.deleted_at = Some("2026-01-01T10:30:00Z".to_owned());
+            }),
+            late_deletion: self.validate_after_edit(|edit| {
+                edit.deleted_at = Some("2026-01-03T00:00:00Z".to_owned());
+            }),
+        });
+        self
+    }
+
+    pub fn then_mismatched_edit_identity_is_rejected(self) -> Self {
+        let results = self
+            .invalid_edit_results
+            .as_ref()
+            .expect("edit metadata was validated");
+        assert_eq!(
+            results.identity,
+            Err(ValidationError::InvalidContentEdit(3))
         );
         self
     }
 
-    pub fn then_rejects_mismatched_edit_time(self) -> Self {
-        self.expect_invalid_edit(
-            |edit| "2026-01-01T11:30:00Z".clone_into(&mut edit.edited_at),
-            ValidationError::InvalidContentEdit(3),
+    pub fn then_mismatched_edit_time_is_rejected(self) -> Self {
+        let results = self
+            .invalid_edit_results
+            .as_ref()
+            .expect("edit metadata was validated");
+        assert_eq!(
+            results.mismatched_time,
+            Err(ValidationError::InvalidContentEdit(3))
         );
-        self.expect_invalid_edit(
-            |edit| "not-a-time".clone_into(&mut edit.edited_at),
-            ValidationError::InvalidTimestamp("not-a-time".to_owned()),
+        assert_eq!(
+            results.malformed_time,
+            Err(ValidationError::InvalidTimestamp("not-a-time".to_owned())),
         );
         self
     }
 
-    pub fn then_rejects_invalid_deletion_time(self) {
-        self.expect_invalid_edit(
-            |edit| edit.deleted_at = Some("not-a-time".to_owned()),
-            ValidationError::InvalidTimestamp("not-a-time".to_owned()),
+    pub fn then_invalid_deletion_time_is_rejected(self) {
+        let results = self
+            .invalid_edit_results
+            .as_ref()
+            .expect("edit metadata was validated");
+        assert_eq!(
+            results.malformed_deletion,
+            Err(ValidationError::InvalidTimestamp("not-a-time".to_owned()))
         );
-        for deleted_at in ["2026-01-01T10:30:00Z", "2026-01-03T00:00:00Z"] {
-            self.expect_invalid_edit(
-                |edit| edit.deleted_at = Some(deleted_at.to_owned()),
-                ValidationError::InvalidContentEdit(3),
-            );
-        }
+        assert_eq!(
+            results.early_deletion,
+            Err(ValidationError::InvalidContentEdit(3))
+        );
+        assert_eq!(
+            results.late_deletion,
+            Err(ValidationError::InvalidContentEdit(3))
+        );
     }
 
-    fn expect_invalid_edit(
+    fn validate_after_edit(
         &self,
         change: impl FnOnce(&mut merl_corpus::fixture::ContentEdit),
-        expected: ValidationError,
-    ) {
+    ) -> Result<(), ValidationError> {
         let mut fixture = self.fixture().clone();
         change(fixture.observations[2].edit.as_mut().unwrap());
         fixture.capture.source_sha256 =
             source_digest(&fixture.provider_snapshot, &fixture.observations);
-        assert_eq!(validate(&fixture), Err(expected));
+        validate(&fixture)
     }
 }
