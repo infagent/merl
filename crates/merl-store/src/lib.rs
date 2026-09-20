@@ -1309,7 +1309,8 @@ impl Store {
         Ok((objects, truncated))
     }
 
-    /// Returns direct structural neighbors of a focused object.
+    /// Returns direct neighbors so a task view can surface its blockers and requirements
+    /// before unrelated work of the same kind.
     ///
     /// # Errors
     /// Rejects invalid limits or damaged relation endpoints.
@@ -2149,7 +2150,7 @@ impl Store {
         self.batch_changes_page(project, batch, 0, limit)
     }
 
-    /// Resolves one bounded page of accepted changes in a batch.
+    /// Keeps omitted changes reachable after a caller acknowledges a truncated inbox entry.
     ///
     /// # Errors
     /// Rejects invalid bounds or damaged accepted event identities.
@@ -2274,8 +2275,7 @@ impl Store {
 
     /// Reads one bounded inbox page after the durable cursor.
     ///
-    /// The extra row tells the CLI whether another page exists without loading
-    /// the full subscriber history.
+    /// Callers need a next-page signal without loading the full subscriber history.
     ///
     /// # Errors
     /// Rejects invalid limits or damaged accepted identities.
