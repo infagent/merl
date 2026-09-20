@@ -820,7 +820,7 @@ A renderer receives accepted objects at a recorded project revision. It may expr
 
 ## Views and progressive disclosure
 
-A role view projects accepted objects into the smallest useful representation for that role. Views hide superseded objects by default but retain their references for expansion.
+A role view projects accepted objects into the smallest useful representation for that role. The first release gives researchers, engineers, and PMs different ordering over the same accepted state. Researchers see hypotheses and findings first; engineers see implementation work and requirements first; PMs see tasks, blockers, decisions, and questions first. Views hide superseded objects by default but retain their references for expansion. A bounded view reports when it omitted more objects.
 
 Accepted project revision and semantic coverage answer different questions. A revision says which accepted events the view contains. `SemanticCoverage` says whether every coverage-required observation for that view's scope has been processed. It records:
 

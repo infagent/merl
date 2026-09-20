@@ -248,10 +248,10 @@ Import verifies the archive and advances the authority generation before enablin
 The main read commands are:
 
 ```bash
-merl project view [--role researcher]
+merl project view [--role researcher|engineer|pm]
 merl project coverage [--role researcher]
 merl project delta --since 481 [--role engineer]
-merl issue view github:acme/project-a#204 [--role researcher]
+merl issue view github:acme/project-a#204 [--role researcher|engineer|pm]
 merl issue coverage github:acme/project-a#204 [--role researcher]
 merl pr view github:acme/project-a/pull/229 [--role reviewer]
 merl show D18
@@ -261,6 +261,8 @@ merl artifact read A81 [--section protocol]
 ```
 
 Views show current accepted state by default. Superseded objects stay hidden unless the user asks for history. Every compact object can expand to detail and captured evidence. Accepted revision describes committed state; it does not imply that Merl has interpreted every captured source.
+
+The PM view puts tasks, blockers, decisions, and open questions ahead of research detail. Researcher and engineer views order the same accepted objects for their work. Each view reports truncation when its compact result reaches the item limit; role ordering does not create a separate version of project truth.
 
 Coverage is scoped to the view or question. It reports the source-observation head, the contiguous processed cutoff, and required gaps grouped as cold, pending, failed, purged, or excluded. A watermark never hides an earlier required hole. Negative answers remain qualified until all required observations in scope are processed. Optional cold sources do not weaken completeness; structurally linked ones appear separately as attachments.
 
