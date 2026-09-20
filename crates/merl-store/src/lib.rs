@@ -567,6 +567,8 @@ pub enum SupportStatus {
 pub struct EvidenceImpact {
     /// Stable audit identity.
     pub id: String,
+    /// Accepted object whose support needs reconsideration.
+    pub object: ObjectId,
     /// Accepted event whose support may have changed.
     pub support_event: merl_core::EventId,
     /// Earlier compilation whose interpretation must be reconsidered.
@@ -3098,30 +3100,56 @@ impl Store {
         project: &ProjectId,
         object: &ObjectId,
     ) -> Result<Vec<EvidenceImpact>, StoreError> {
+        self.evidence_impacts_query(project, Some(object))
+    }
+
+    /// Lists unresolved reconsideration work after restart without scanning objects.
+    ///
+    /// # Errors
+    /// Rejects damaged lineage or unreadable storage.
+    pub fn pending_evidence_impacts(
+        &self,
+        project: &ProjectId,
+    ) -> Result<Vec<EvidenceImpact>, StoreError> {
+        self.evidence_impacts_query(project, None)
+    }
+
+    fn evidence_impacts_query(
+        &self,
+        project: &ProjectId,
+        object: Option<&ObjectId>,
+    ) -> Result<Vec<EvidenceImpact>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT i.id,i.support_event_id,i.source_version_id,i.replacement_version_id,
+            "SELECT i.id,i.object_id,i.support_event_id,i.source_version_id,i.replacement_version_id,
                     i.next_action,r.event_id,i.affected_run_id,cr.source_version_id
              FROM evidence_impacts i LEFT JOIN evidence_revalidations r
                ON r.project_id=i.project_id AND r.impact_id=i.id
              LEFT JOIN compilation_runs cr
                ON cr.project_id=i.project_id AND cr.id=i.affected_run_id
-             WHERE i.project_id=?1 AND i.object_id=?2 ORDER BY i.id",
+             WHERE i.project_id=?1 AND (?2 IS NOT NULL AND i.object_id=?2
+               OR ?2 IS NULL AND r.impact_id IS NULL)
+             ORDER BY i.id",
         )?;
-        let rows = statement.query_map(params![project.as_str(), object.as_str()], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, Option<String>>(6)?,
-                row.get::<_, Option<String>>(7)?,
-            ))
-        })?;
+        let rows = statement.query_map(
+            params![project.as_str(), object.map(ObjectId::as_str)],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                ))
+            },
+        )?;
         rows.map(|row| {
             let (
                 id,
+                object,
                 support_event,
                 changed_source,
                 replacement,
@@ -3132,6 +3160,8 @@ impl Store {
             ) = row?;
             Ok(EvidenceImpact {
                 id,
+                object: ObjectId::try_from(object.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
                 support_event: merl_core::EventId::try_from(support_event.as_str())
                     .map_err(|_| StoreError::CorruptHistory)?,
                 affected_run: merl_core::CompilationRunId::try_from(
