@@ -138,18 +138,33 @@ pub struct ProviderSnapshot {
     pub title: String,
     /// Provider state, such as `OPEN` or `CLOSED`.
     pub state: String,
+    /// Provider update time for this terminal snapshot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
     /// Time the provider closed the Issue.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub closed_at: Option<String>,
     /// Current provider labels.
     #[serde(default)]
     pub labels: Vec<String>,
+    /// Stable IDs paired with the display labels above, when captured.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub label_refs: Vec<ProviderLabelRef>,
     /// Current provider assignees.
     #[serde(default)]
     pub assignees: Vec<ActorRef>,
     /// Current provider milestone title.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub milestone: Option<String>,
+}
+
+/// Rename-stable label identity and its display name at capture.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProviderLabelRef {
+    /// Provider node ID.
+    pub provider_id: String,
+    /// Provider label name at capture time.
+    pub name: String,
 }
 
 /// Rename-stable provider actor identity and its display login at capture.
@@ -448,6 +463,8 @@ pub enum ValidationError {
     InvalidBodyCapture(u64),
     /// Edit metadata does not describe its enclosing source version.
     InvalidContentEdit(u64),
+    /// Terminal provider facts are incomplete or inconsistent.
+    InvalidProviderSnapshot,
     /// A provenance timestamp is not RFC 3339.
     InvalidTimestamp(String),
     /// A source version is placed before its external entity existed.
@@ -500,6 +517,10 @@ pub enum ValidationError {
 }
 
 impl fmt::Display for ValidationError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "each fixture error has one precise diagnostic"
+    )]
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedSchema(schema) => write!(formatter, "unsupported schema {schema}"),
@@ -524,6 +545,9 @@ impl fmt::Display for ValidationError {
             }
             Self::InvalidContentEdit(sequence) => {
                 write!(formatter, "invalid edit metadata at observation {sequence}")
+            }
+            Self::InvalidProviderSnapshot => {
+                formatter.write_str("invalid terminal provider snapshot")
             }
             Self::InvalidTimestamp(value) => {
                 write!(formatter, "invalid RFC 3339 timestamp {value}")
@@ -725,6 +749,42 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
     }
 
     let captured_at = parse_timestamp(&fixture.capture.captured_at)?;
+    let snapshot = &fixture.provider_snapshot;
+    if snapshot
+        .updated_at
+        .as_deref()
+        .map(parse_timestamp)
+        .transpose()?
+        .is_some_and(|time| time > captured_at)
+        || snapshot
+            .closed_at
+            .as_deref()
+            .map(parse_timestamp)
+            .transpose()?
+            .is_some_and(|time| time > captured_at)
+        || (matches!(fixture.origin, Origin::Natural)
+            && (snapshot.updated_at.is_none()
+                || snapshot.labels.len() != snapshot.label_refs.len()
+                || snapshot
+                    .assignees
+                    .iter()
+                    .any(|actor| actor.provider_id.is_none())))
+    {
+        return Err(ValidationError::InvalidProviderSnapshot);
+    }
+    let mut label_ids = HashSet::new();
+    if snapshot
+        .label_refs
+        .iter()
+        .any(|label| label.provider_id.is_empty() || !label_ids.insert(label.provider_id.as_str()))
+        || snapshot
+            .labels
+            .iter()
+            .zip(&snapshot.label_refs)
+            .any(|(name, label)| name != &label.name)
+    {
+        return Err(ValidationError::InvalidProviderSnapshot);
+    }
     let mut last_time = None;
     let mut version_ids = HashSet::new();
     for (expected, observation) in (1_u64..).zip(&fixture.observations) {

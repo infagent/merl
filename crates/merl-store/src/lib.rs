@@ -376,9 +376,10 @@ impl Store {
 
     /// Captures one immutable external version without accepting its meaning.
     ///
-    /// A retry of the same version is a no-op only when all captured metadata
-    /// and the content digest agree. Observation sequence advances on new
-    /// captures, independently of accepted project revision.
+    /// A retry is a no-op when upstream identity, lineage, and content agree.
+    /// The first capture fixes observation time and effective compilation policy;
+    /// a later poll cannot rewrite them. New versions advance observation sequence
+    /// independently of accepted project revision.
     ///
     /// # Errors
     /// Returns an error for a missing project, invalid lineage, conflicting
@@ -753,16 +754,20 @@ impl Store {
     ///
     /// # Errors
     /// Returns an error if stored structural values are invalid or storage fails.
+    #[expect(
+        clippy::type_complexity,
+        reason = "SQLite row keeps the provider fact columns explicit"
+    )]
     pub fn provider_issue_head(
         &self,
         project: &ProjectId,
         issue: &ObjectId,
     ) -> Result<Option<AcceptedProviderObservation>, StoreError> {
-        let row: Option<(String, String, String, String, i64, i64)> = self
+        let row: Option<(String, String, String, String, Option<i64>, Option<i64>, i64, i64)> = self
             .connection
             .query_row(
                 "SELECT o.id, o.binding_id, o.issue_state, o.snapshot_payload_id,
-                    o.observed_at_millis, b.revision
+                    o.upstream_updated_at_millis, o.closed_at_millis, o.observed_at_millis, b.revision
              FROM provider_issue_heads h
              JOIN provider_observations o
                ON o.project_id = h.project_id AND o.id = h.observation_id
@@ -778,12 +783,37 @@ impl Store {
                         row.get(3)?,
                         row.get(4)?,
                         row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
                     ))
                 },
             )
             .optional()?;
         row.map(
-            |(id, binding, state, payload, observed_at_millis, revision)| {
+            |(
+                id,
+                binding,
+                state,
+                payload,
+                upstream_updated_at_millis,
+                closed_at_millis,
+                observed_at_millis,
+                revision,
+            )| {
+                let label_provider_ids = provider_fact_ids(
+                    &self.connection,
+                    "provider_observation_labels",
+                    "provider_label_id",
+                    project,
+                    &id,
+                )?;
+                let assignee_provider_ids = provider_fact_ids(
+                    &self.connection,
+                    "provider_observation_assignees",
+                    "provider_actor_id",
+                    project,
+                    &id,
+                )?;
                 Ok(AcceptedProviderObservation {
                     input: ProviderObservation {
                         id: merl_core::PolicyInputId::try_from(id.as_str())
@@ -793,6 +823,10 @@ impl Store {
                         issue: issue.clone(),
                         state: ProviderIssueState::try_from(state.as_str())
                             .map_err(|_| StoreError::CorruptHistory)?,
+                        upstream_updated_at_millis,
+                        closed_at_millis,
+                        label_provider_ids,
+                        assignee_provider_ids,
                         snapshot_payload: PayloadId::try_from(payload.as_str())
                             .map_err(|_| StoreError::CorruptHistory)?,
                         observed_at_millis,
@@ -922,8 +956,33 @@ fn validate_provider_batch(
         || kind.as_str() != "provider_issue"
         || payload != &observation.snapshot_payload
         || batch.occurred_at_millis != observation.observed_at_millis
+        || observation.closed_at_millis.is_some()
+            != (observation.state == ProviderIssueState::Closed)
+        || observation
+            .upstream_updated_at_millis
+            .is_some_and(|updated| updated > observation.observed_at_millis)
+        || observation
+            .closed_at_millis
+            .is_some_and(|closed| closed > observation.observed_at_millis)
+        || observation
+            .label_provider_ids
+            .iter()
+            .any(|id| !valid_provider_id(id))
+        || observation
+            .assignee_provider_ids
+            .iter()
+            .any(|id| !valid_provider_id(id))
     {
         return Err(StoreError::InvalidBatch);
+    }
+    for ids in [
+        &observation.label_provider_ids,
+        &observation.assignee_provider_ids,
+    ] {
+        let mut distinct = std::collections::HashSet::new();
+        if !ids.iter().all(|id| distinct.insert(id)) {
+            return Err(StoreError::InvalidBatch);
+        }
     }
     Ok(())
 }
@@ -933,12 +992,22 @@ fn ensure_fresh_provider_observation(
     project: &ProjectId,
     observation: &ProviderObservation,
 ) -> Result<(), StoreError> {
-    let prior: Option<i64> = transaction.query_row(
-        "SELECT last_seen_at_millis FROM provider_issue_heads WHERE project_id = ?1 AND issue_id = ?2",
-        params![project.as_str(), observation.issue.as_str()],
-        |row| row.get(0),
-    ).optional()?;
-    if prior.is_some_and(|prior| prior >= observation.observed_at_millis) {
+    let prior: Option<(i64, Option<i64>)> = transaction
+        .query_row(
+            "SELECT h.last_seen_at_millis, o.upstream_updated_at_millis
+         FROM provider_issue_heads h JOIN provider_observations o
+         ON o.project_id = h.project_id AND o.id = h.observation_id
+         WHERE h.project_id = ?1 AND h.issue_id = ?2",
+            params![project.as_str(), observation.issue.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if prior.is_some_and(|(seen, updated)| {
+        seen >= observation.observed_at_millis
+            || updated
+                .zip(observation.upstream_updated_at_millis)
+                .is_some_and(|(previous, incoming)| incoming <= previous)
+    }) {
         return Err(StoreError::StaleProviderObservation);
     }
     Ok(())
@@ -952,19 +1021,34 @@ fn insert_provider_observation(
     transaction.execute(
         "INSERT INTO provider_observations (
             project_id, id, binding_id, issue_id, issue_state,
+            upstream_updated_at_millis, closed_at_millis,
             snapshot_payload_id, observed_at_millis, accepted_batch_id
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             batch.project.as_str(),
             observation.id.as_str(),
             observation.binding.as_str(),
             observation.issue.as_str(),
             observation.state.as_str(),
+            observation.upstream_updated_at_millis,
+            observation.closed_at_millis,
             observation.snapshot_payload.as_str(),
             observation.observed_at_millis,
             batch.id.as_str()
         ],
     )?;
+    for label in &observation.label_provider_ids {
+        transaction.execute(
+            "INSERT INTO provider_observation_labels (project_id, observation_id, provider_label_id) VALUES (?1, ?2, ?3)",
+            params![batch.project.as_str(), observation.id.as_str(), label],
+        )?;
+    }
+    for actor in &observation.assignee_provider_ids {
+        transaction.execute(
+            "INSERT INTO provider_observation_assignees (project_id, observation_id, provider_actor_id) VALUES (?1, ?2, ?3)",
+            params![batch.project.as_str(), observation.id.as_str(), actor],
+        )?;
+    }
     transaction.execute(
         "INSERT INTO provider_issue_heads (project_id, issue_id, observation_id, observed_at_millis, last_seen_at_millis)
          VALUES (?1, ?2, ?3, ?4, ?4)
@@ -975,6 +1059,22 @@ fn insert_provider_observation(
         params![batch.project.as_str(), observation.issue.as_str(), observation.id.as_str(), observation.observed_at_millis],
     )?;
     Ok(())
+}
+
+fn provider_fact_ids(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    project: &ProjectId,
+    observation_id: &str,
+) -> Result<Vec<String>, StoreError> {
+    let query = format!(
+        "SELECT {column} FROM {table} WHERE project_id = ?1 AND observation_id = ?2 ORDER BY {column}"
+    );
+    let mut statement = connection.prepare(&query)?;
+    let rows = statement.query_map(params![project.as_str(), observation_id], |row| row.get(0))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
 }
 
 fn apply_put(

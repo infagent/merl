@@ -55,6 +55,8 @@ CREATE TABLE provider_observations (
     binding_id TEXT NOT NULL,
     issue_id TEXT NOT NULL CHECK (length(issue_id) BETWEEN 1 AND 128 AND issue_id NOT GLOB '*[^A-Za-z0-9_-]*'),
     issue_state TEXT NOT NULL CHECK (issue_state IN ('open', 'closed')),
+    upstream_updated_at_millis INTEGER,
+    closed_at_millis INTEGER,
     snapshot_payload_id TEXT NOT NULL,
     observed_at_millis INTEGER NOT NULL,
     accepted_batch_id TEXT NOT NULL,
@@ -62,6 +64,22 @@ CREATE TABLE provider_observations (
     FOREIGN KEY (project_id, binding_id) REFERENCES source_bindings(project_id, id),
     FOREIGN KEY (project_id, snapshot_payload_id) REFERENCES payloads(project_id, id),
     FOREIGN KEY (project_id, accepted_batch_id) REFERENCES domain_event_batches(project_id, id)
+) STRICT;
+
+CREATE TABLE provider_observation_labels (
+    project_id TEXT NOT NULL,
+    observation_id TEXT NOT NULL,
+    provider_label_id TEXT NOT NULL CHECK (length(provider_label_id) BETWEEN 1 AND 512),
+    PRIMARY KEY (project_id, observation_id, provider_label_id),
+    FOREIGN KEY (project_id, observation_id) REFERENCES provider_observations(project_id, id)
+) STRICT;
+
+CREATE TABLE provider_observation_assignees (
+    project_id TEXT NOT NULL,
+    observation_id TEXT NOT NULL,
+    provider_actor_id TEXT NOT NULL CHECK (length(provider_actor_id) BETWEEN 1 AND 512),
+    PRIMARY KEY (project_id, observation_id, provider_actor_id),
+    FOREIGN KEY (project_id, observation_id) REFERENCES provider_observations(project_id, id)
 ) STRICT;
 
 CREATE TABLE provider_issue_heads (
@@ -86,3 +104,11 @@ CREATE TRIGGER provider_observations_no_update
 BEFORE UPDATE ON provider_observations BEGIN SELECT RAISE(ABORT, 'provider observation is append-only'); END;
 CREATE TRIGGER provider_observations_no_delete
 BEFORE DELETE ON provider_observations BEGIN SELECT RAISE(ABORT, 'provider observation is append-only'); END;
+CREATE TRIGGER provider_observation_labels_no_update
+BEFORE UPDATE ON provider_observation_labels BEGIN SELECT RAISE(ABORT, 'provider label fact is append-only'); END;
+CREATE TRIGGER provider_observation_labels_no_delete
+BEFORE DELETE ON provider_observation_labels BEGIN SELECT RAISE(ABORT, 'provider label fact is append-only'); END;
+CREATE TRIGGER provider_observation_assignees_no_update
+BEFORE UPDATE ON provider_observation_assignees BEGIN SELECT RAISE(ABORT, 'provider assignee fact is append-only'); END;
+CREATE TRIGGER provider_observation_assignees_no_delete
+BEFORE DELETE ON provider_observation_assignees BEGIN SELECT RAISE(ABORT, 'provider assignee fact is append-only'); END;

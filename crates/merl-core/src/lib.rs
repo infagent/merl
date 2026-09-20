@@ -251,7 +251,15 @@ pub struct ProviderObservation {
     pub issue: ObjectId,
     /// Provider-owned open or closed state.
     pub state: ProviderIssueState,
-    /// Protected snapshot payload containing title, labels, and assignees.
+    /// Provider update time, independent of the local poll time.
+    pub upstream_updated_at_millis: Option<i64>,
+    /// Provider close time, if the Issue is closed.
+    pub closed_at_millis: Option<i64>,
+    /// Stable provider node IDs of current labels.
+    pub label_provider_ids: Vec<String>,
+    /// Stable provider node IDs of current assignees.
+    pub assignee_provider_ids: Vec<String>,
+    /// Protected snapshot payload containing display names and prose.
     pub snapshot_payload: PayloadId,
     /// Time the authority observed this provider snapshot.
     pub observed_at_millis: i64,

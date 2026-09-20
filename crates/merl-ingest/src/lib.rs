@@ -72,11 +72,18 @@ pub struct ImportReport {
     pub provider_changed: bool,
 }
 
+/// The fixed capture policy used by the offline first-release fixture importer.
+/// General source-binding policy selection belongs to the compiler slice.
+pub const FIXTURE_CAPTURE_POLICY_VERSION: &str = "fixture_import_v1";
+
 /// Imports source versions in fixture order without treating their prose as accepted state.
 ///
 /// The corpus fixture carries a terminal provider snapshot, not a historical
 /// provider-transition stream. This function captures its source versions
 /// only; it does not invent earlier Issue open/closed or label transitions.
+/// Each captured version is eager and coverage-required under
+/// `fixture_import_v1`. This fixed offline policy is not a default for other
+/// source bindings.
 ///
 /// # Errors
 /// Returns an error if the fixture is invalid or a version conflicts with
@@ -103,7 +110,7 @@ pub fn import_fixture(
         namespace_digest: Sha256::digest(namespace.as_bytes()).into(),
     };
     let observed_at_millis = utc_millis(&fixture.capture.captured_at)?;
-    let policy_version = CapturePolicyVersion::try_from("fixture_import_v1")
+    let policy_version = CapturePolicyVersion::try_from(FIXTURE_CAPTURE_POLICY_VERSION)
         .map_err(|_| ImportError::InvalidIdentity)?;
     let mut captured = 0;
     for observation in &fixture.observations {
@@ -301,6 +308,30 @@ fn observe_terminal_issue_snapshot(
         binding: binding.id.clone(),
         issue: issue.clone(),
         state,
+        upstream_updated_at_millis: fixture
+            .provider_snapshot
+            .updated_at
+            .as_deref()
+            .map(utc_millis)
+            .transpose()?,
+        closed_at_millis: fixture
+            .provider_snapshot
+            .closed_at
+            .as_deref()
+            .map(utc_millis)
+            .transpose()?,
+        label_provider_ids: fixture
+            .provider_snapshot
+            .label_refs
+            .iter()
+            .map(|label| label.provider_id.clone())
+            .collect(),
+        assignee_provider_ids: fixture
+            .provider_snapshot
+            .assignees
+            .iter()
+            .filter_map(|actor| actor.provider_id.clone())
+            .collect(),
         snapshot_payload: payload,
         observed_at_millis: captured_at_millis,
     };

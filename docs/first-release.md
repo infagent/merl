@@ -143,6 +143,7 @@ The release is ready when:
 - accepted-object lifecycle and evidence-support status remain separate while revalidation is pending;
 - cosmetic and material edits exercise policy paths that respectively retain current support or supersede, weaken, or invalidate it;
 - GitHub owns mirrored fields such as open or closed state, labels, and provider timestamps;
+- the offline corpus importer uses a fixed `fixture_import_v1` capture policy (`eager`, `required`) for every source version. Its `SourceBinding` record identifies the provider namespace; it does not yet select a general binding policy. That selection arrives with the compiler work;
 - Merl owns derived fields such as requirements, blockers, decisions, and research claims;
 - a Merl command cannot report a provider-owned field changed until GitHub reports that change;
 - a trusted provider observation follows deterministic policy, advances the same project revision as semantic changes, and appears through the same delta and inbox cursor;
