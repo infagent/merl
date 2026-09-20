@@ -393,6 +393,19 @@ impl IssueHistory {
         self
     }
 
+    pub fn then_provider_fact_has_a_policy_decision(&mut self) -> &mut Self {
+        let fixture = self.fixture.as_ref().expect("Issue fixture");
+        let issue = merl_ingest::fixture_issue_id(fixture).expect("Issue identity");
+        let evaluation = self.store.object_policy_evaluation(&self.project, &issue)
+            .expect("policy provenance").expect("policy decision");
+        let record = self.store.policy_evaluation(&self.project, &evaluation)
+            .expect("policy decision").expect("recorded decision");
+        assert_eq!(record.committed_revision.map(|revision| revision.get()), Some(1));
+        assert_eq!(record.inputs.len(), 1);
+        assert_eq!(record.inputs[0].input.kind(), "provider_observation");
+        self
+    }
+
     pub fn then_github_identity_and_edits_survive_import(&mut self) -> &mut Self {
         let fixture = self.fixture.as_ref().expect("Issue fixture");
         let kinds: Vec<_> = (1..=4)
