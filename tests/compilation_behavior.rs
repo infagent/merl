@@ -96,6 +96,15 @@ fn an_issue_comment_keeps_its_named_decision_in_bounded_context() {
 }
 
 #[test]
+fn issue_coverage_excludes_other_threads_and_optional_notes() {
+    CompilationScenario::given_required_and_optional_issue_notes()
+        .when_issue_coverage_is_inspected()
+        .then_only_the_required_issue_note_is_a_gap()
+        .when_the_required_issue_note_is_compiled()
+        .then_issue_coverage_is_complete_with_an_optional_attachment();
+}
+
+#[test]
 fn pending_compiler_work_records_every_selection_limit() {
     CompilationScenario::given_a_note_for_an_external_compiler()
         .when_the_authority_prepares_the_compiler_run()

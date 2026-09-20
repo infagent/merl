@@ -249,6 +249,75 @@ impl CompilationScenario {
         scenario
     }
 
+    pub fn given_required_and_optional_issue_notes() -> Self {
+        let mut scenario = Self::new();
+        scenario.capture_in_scope(
+            "required-issue-note",
+            "A decision is needed.",
+            "issue-204",
+            CoverageRequirement::Required,
+        );
+        scenario.capture_in_scope(
+            "optional-issue-note",
+            "Background reading.",
+            "issue-204",
+            CoverageRequirement::Optional,
+        );
+        scenario.capture_in_scope(
+            "other-issue-note",
+            "Other issue needs work.",
+            "issue-999",
+            CoverageRequirement::Required,
+        );
+        scenario.note = SourceVersionId::try_from("required-issue-note").expect("source");
+        scenario
+    }
+
+    pub fn when_issue_coverage_is_inspected(&mut self) -> &mut Self {
+        self.coverage = Some(
+            self.store
+                .semantic_coverage_in_scope(&self.project, "issue-204")
+                .expect("Issue coverage"),
+        );
+        self
+    }
+
+    pub fn then_only_the_required_issue_note_is_a_gap(&mut self) -> &mut Self {
+        let coverage = self.coverage.expect("coverage");
+        assert_eq!(coverage.observation_head, 2);
+        assert_eq!(coverage.processed_through, 0);
+        assert_eq!(coverage.required_gaps, 1);
+        assert_eq!(coverage.required_pending, 0);
+        assert_eq!(coverage.optional_cold, 1);
+        self
+    }
+
+    pub fn when_the_required_issue_note_is_compiled(&mut self) -> &mut Self {
+        run_compiler(
+            &mut self.store,
+            &self.project,
+            &self.note,
+            &FakeCompiler,
+            RunRequest {
+                id: "required-issue-run",
+                limits: limits(),
+                mode: RunMode::Live,
+                now_millis: 30,
+            },
+        )
+        .expect("compile required note");
+        self.when_issue_coverage_is_inspected()
+    }
+
+    pub fn then_issue_coverage_is_complete_with_an_optional_attachment(&mut self) -> &mut Self {
+        let coverage = self.coverage.expect("coverage");
+        assert_eq!(coverage.observation_head, 2);
+        assert_eq!(coverage.processed_through, 2);
+        assert_eq!(coverage.required_gaps, 0);
+        assert_eq!(coverage.optional_cold, 1);
+        self
+    }
+
     pub fn given_many_unrelated_objects_and_a_named_decision() -> Self {
         let mut scenario = Self::new();
         let mut events: Vec<_> = (0..9)

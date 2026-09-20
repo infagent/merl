@@ -454,8 +454,12 @@ pub struct StructuralAssertion {
 pub struct SemanticCoverage {
     /// Latest captured observation.
     pub observation_head: u64,
+    /// Highest observation before the first unprocessed required source.
+    pub processed_through: u64,
     /// Number of required versions with no successful compilation.
     pub required_gaps: u64,
+    /// Required versions with a durable run still awaiting a final result.
+    pub required_pending: u64,
     /// Required versions whose latest live compiler attempt failed.
     pub required_failed: u64,
     /// Number of optional versions retained without successful compilation.
@@ -1310,7 +1314,35 @@ impl Store {
     /// # Errors
     /// Returns a storage error if the project is unavailable.
     pub fn semantic_coverage(&self, project: &ProjectId) -> Result<SemanticCoverage, StoreError> {
-        let observation_head = self.source_observation_head(project)?;
+        self.semantic_coverage_for_scope(project, None)
+    }
+
+    /// Reports only the required and optional observations attached to one Issue thread.
+    ///
+    /// # Errors
+    /// Returns a storage error if the project or source metadata is unavailable.
+    pub fn semantic_coverage_in_scope(
+        &self,
+        project: &ProjectId,
+        scope: &str,
+    ) -> Result<SemanticCoverage, StoreError> {
+        if scope.is_empty() || scope.len() > 512 {
+            return Err(StoreError::InvalidSource);
+        }
+        self.semantic_coverage_for_scope(project, Some(scope))
+    }
+
+    fn semantic_coverage_for_scope(
+        &self,
+        project: &ProjectId,
+        scope: Option<&str>,
+    ) -> Result<SemanticCoverage, StoreError> {
+        let observation_head: i64 = self.connection.query_row(
+            "SELECT COALESCE(MAX(sequence), 0) FROM source_versions
+             WHERE project_id=?1 AND (?2 IS NULL OR context_scope_id=?2)",
+            params![project.as_str(), scope],
+            |row| row.get(0),
+        )?;
         let (required_gaps, required_failed, optional_cold): (i64, i64, i64) =
             self.connection.query_row(
                 "SELECT
@@ -1341,13 +1373,43 @@ impl Store {
                 WHERE compilation_runs.project_id=source_versions.project_id
                   AND source_version_id=source_versions.id AND compilation_results.outcome='succeeded' AND mode='live'
               ) THEN 1 ELSE 0 END),0)
-             FROM source_versions WHERE project_id=?1",
-                [project.as_str()],
+             FROM source_versions WHERE project_id=?1 AND (?2 IS NULL OR context_scope_id=?2)",
+                params![project.as_str(), scope],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
+        let (first_gap, required_pending): (Option<i64>, i64) = self.connection.query_row(
+            "SELECT MIN(CASE WHEN coverage_requirement='required' AND NOT EXISTS (
+                SELECT 1 FROM compilation_runs r JOIN compilation_results c
+                  ON c.project_id=r.project_id AND c.run_id=r.id
+                WHERE r.project_id=s.project_id AND r.source_version_id=s.id
+                  AND r.mode='live' AND c.outcome='succeeded'
+             ) THEN sequence END),
+             COALESCE(SUM(CASE WHEN coverage_requirement='required' AND NOT EXISTS (
+                SELECT 1 FROM compilation_runs r JOIN compilation_results c
+                  ON c.project_id=r.project_id AND c.run_id=r.id
+                WHERE r.project_id=s.project_id AND r.source_version_id=s.id
+                  AND r.mode='live' AND c.outcome='succeeded'
+             ) AND EXISTS (
+                SELECT 1 FROM compilation_runs r LEFT JOIN compilation_results c
+                  ON c.project_id=r.project_id AND c.run_id=r.id
+                WHERE r.project_id=s.project_id AND r.source_version_id=s.id
+                  AND r.mode='live' AND (c.outcome IS NULL OR c.outcome='needs_context')
+             ) THEN 1 ELSE 0 END),0)
+             FROM source_versions s WHERE project_id=?1
+               AND (?2 IS NULL OR context_scope_id=?2)",
+            params![project.as_str(), scope],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let head = u64::try_from(observation_head).map_err(|_| StoreError::CorruptHistory)?;
         Ok(SemanticCoverage {
-            observation_head,
+            observation_head: head,
+            processed_through: first_gap
+                .map(|gap| u64::try_from(gap - 1).map_err(|_| StoreError::CorruptHistory))
+                .transpose()?
+                .unwrap_or(head),
             required_gaps: u64::try_from(required_gaps).map_err(|_| StoreError::CorruptHistory)?,
+            required_pending: u64::try_from(required_pending)
+                .map_err(|_| StoreError::CorruptHistory)?,
             required_failed: u64::try_from(required_failed)
                 .map_err(|_| StoreError::CorruptHistory)?,
             optional_cold: u64::try_from(optional_cold).map_err(|_| StoreError::CorruptHistory)?,
