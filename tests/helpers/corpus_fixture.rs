@@ -7,7 +7,9 @@ pub struct CorpusFixture {
     fixture: Fixture,
     cutoff: Option<u64>,
     expected_leak: Option<(String, u64)>,
+    future_support_validation: Option<Result<(), ValidationError>>,
     invalid_variant_results: Vec<Result<(), ValidationError>>,
+    deferred_task_validation: Vec<Result<(), ValidationError>>,
 }
 
 impl CorpusFixture {
@@ -16,7 +18,9 @@ impl CorpusFixture {
             fixture: serde_json::from_str(source).expect("controlled fixture should parse"),
             cutoff: None,
             expected_leak: None,
+            future_support_validation: None,
             invalid_variant_results: Vec::new(),
+            deferred_task_validation: Vec::new(),
         }
     }
 
@@ -127,7 +131,7 @@ impl CorpusFixture {
         self.then_task_starts_after_pr_merge(task, pull_request)
     }
 
-    pub fn then_rejects_deferred_task_without_reason_or_condition(self, task: &str) {
+    pub fn when_deferred_task_lacks_reason_or_condition(mut self, task: &str) -> Self {
         let cutoff = self.cutoff.expect("a cutoff must be selected first");
         for field in ["deferral_reason", "start_after"] {
             let mut changed = self.fixture.clone();
@@ -149,9 +153,17 @@ impl CorpusFixture {
             } else {
                 plan.start_after = None;
             }
+            self.deferred_task_validation.push(validate(&changed));
+        }
+        self
+    }
+
+    pub fn then_rejects_deferred_task_without_reason_or_condition(self, task: &str) {
+        assert_eq!(self.deferred_task_validation.len(), 2);
+        for result in &self.deferred_task_validation {
             assert_eq!(
-                validate(&changed),
-                Err(ValidationError::InvalidTaskPlan(task.to_owned()))
+                result,
+                &Err(ValidationError::InvalidTaskPlan(task.to_owned()))
             );
         }
     }
@@ -238,6 +250,7 @@ impl CorpusFixture {
                 role: merl_corpus::fixture::EvidenceRole::Supports,
             });
         self.expected_leak = Some((object.to_owned(), observation));
+        self.future_support_validation = Some(validate(&self.fixture));
         self
     }
 
@@ -247,7 +260,8 @@ impl CorpusFixture {
             .expected_leak
             .expect("future support must be added before checking rejection");
         assert_eq!(
-            validate(&self.fixture),
+            self.future_support_validation
+                .expect("future support must be validated first"),
             Err(ValidationError::FutureLeakage {
                 object,
                 cutoff,

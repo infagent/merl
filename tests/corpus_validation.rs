@@ -52,6 +52,7 @@ fn one_note_can_report_a_fact_propose_a_claim_and_request_work() {
             "github:example/parser/pull/229",
         )
         .then_is_candidate("weaken-double-read")
+        .when_deferred_task_lacks_reason_or_condition("repair-checksum-parser")
         .then_rejects_deferred_task_without_reason_or_condition("repair-checksum-parser");
 }
 

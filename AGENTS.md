@@ -29,6 +29,8 @@ Write acceptance tests so a non-developer can understand the rule they protect. 
 
 Root `tests/*.rs` files contain short acceptance scenarios. Write their steps as `given_...`, `when_...`, and `then_...` calls in that order; put setup, commands, and assertions in `tests/helpers/`. CI checks this shape, but a passing convention check does not replace a readability review. Narrow unit tests inside crates do not need the scenario DSL.
 
+Keep the step meanings honest: `given_` prepares the case, `when_` performs the action, and `then_` inspects its recorded result. A `then_` helper must not create another input or run another capture, command, or validation.
+
 Keep integration tests under `tests/` when they exercise only public APIs. Use unit tests for narrow algorithms and invariants that need closer access. Every bug fix starts with a regression test.
 
 Use the fewest tests that prove the behavior and its distinct risks. Before adding a test, name the failure it would catch that the existing suite would miss. Prefer one table-driven test or readable scenario over several copies with different inputs. Do not repeat the same assertion at unit, integration, and CLI layers unless each layer protects a separate contract. Do not test the Rust compiler, a dependency's documented behavior, or private implementation steps. Add cases when boundaries carry different risk, not to make the suite look thorough.

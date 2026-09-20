@@ -27,6 +27,9 @@ jobs:
       - name: Check acceptance scenarios
         run: python3 scripts/check_test_conventions.py
 
+      - name: Test convention checker
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
   rust:
     name: Rust checks
     runs-on: ubuntu-24.04
