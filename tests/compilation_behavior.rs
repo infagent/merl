@@ -12,6 +12,17 @@ fn late_compilation_keeps_the_authors_world_separate_from_today() {
 }
 
 #[test]
+fn source_replay_rebuilds_the_recorded_input_without_changing_accepted_history() {
+    CompilationScenario::given_a_note_followed_by_a_later_decision()
+        .when_the_note_is_compiled_on_demand()
+        .when_the_recorded_input_is_rebuilt_and_the_compiler_is_rerun()
+        .then_replay_matches_the_recorded_input_and_leaves_the_decision_alone()
+        .when_the_source_bytes_are_erased()
+        .when_the_recorded_input_is_rebuilt_again()
+        .then_replay_reports_missing_evidence();
+}
+
+#[test]
 fn required_failures_are_visible_but_optional_cold_notes_do_not_block_coverage() {
     CompilationScenario::given_required_and_optional_notes()
         .when_the_required_note_fails_its_output_budget()

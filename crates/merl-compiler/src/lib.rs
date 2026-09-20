@@ -178,6 +178,45 @@ pub fn build_context(
     build_context_with_basis(store, project, trigger, basis, limits, false)
 }
 
+/// Rebuilds an earlier compiler input from causal evidence and checks its saved manifest.
+///
+/// This checks source bytes again; reading the retained rendered payload alone would
+/// hide a later purge or a renderer change from replay.
+///
+/// # Errors
+/// Reports missing evidence, changed selection, or a digest mismatch as noncausal history.
+pub fn rebuild_recorded_context(
+    store: &Store,
+    project: &ProjectId,
+    run_id: &str,
+    limits: CompilerLimits,
+) -> Result<CompilationContext, CompileError> {
+    let status = store
+        .compilation_run_status(project, run_id)?
+        .ok_or(CompileError::NonCausalHistory)?;
+    if status.limits != limits.recorded() {
+        return Err(CompileError::NonCausalHistory);
+    }
+    let saved = store
+        .load_compilation_context(project, run_id)
+        .map_err(|_| CompileError::NonCausalHistory)?;
+    let rebuilt = build_context(store, project, &status.source, limits)?;
+    let mut rebuilt_objects = rebuilt.objects.clone();
+    let mut saved_objects = saved.objects;
+    rebuilt_objects.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
+    saved_objects.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
+    if rebuilt.interpretation_basis_revision != status.interpretation_basis_revision
+        || rebuilt.source_observation_cutoff != status.source_observation_cutoff
+        || rebuilt.source_window != saved.source_window
+        || rebuilt_objects != saved_objects
+        || Sha256::digest(&rebuilt.rendered).as_slice() != status.context_digest
+        || rebuilt.rendered != saved.rendered
+    {
+        return Err(CompileError::NonCausalHistory);
+    }
+    Ok(rebuilt)
+}
+
 /// Binds historical observations in order, recording the accepted revision at each step.
 pub struct SequentialReplay {
     project: ProjectId,
