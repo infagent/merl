@@ -1,6 +1,6 @@
 //! SQLite authority for accepted events and independently erasable payloads.
 
-use std::{error::Error, fmt, path::Path};
+use std::{error::Error, fmt, fmt::Write as _, path::Path};
 
 use merl_core::{
     ActorId, AgentId, CapturePolicyVersion, CompilationMode, CoverageRequirement, DomainEvent,
@@ -12,7 +12,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -107,6 +107,8 @@ pub struct ProjectedObject {
     pub payload: Option<PayloadId>,
     /// Issue conversation that owns this semantic object, when known.
     pub issue_scope: Option<String>,
+    /// Evidence health, independent of the object's accepted revision.
+    pub support: SupportStatus,
     /// Revision of this object, independent of the project revision.
     pub revision: ObjectRevision,
     /// Project revision in which the object last changed.
@@ -483,6 +485,36 @@ pub struct SemanticCoverage {
     pub optional_cold: u64,
 }
 
+/// Evidence health is separate from the accepted object's lifecycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SupportStatus {
+    /// No supporting source has changed since acceptance or revalidation.
+    Current,
+    /// Every known support is awaiting reconsideration.
+    RevalidationPending,
+    /// Some support remains current while other support awaits reconsideration.
+    PartiallySupported,
+    /// No retained support currently justifies the object.
+    Unsupported,
+}
+
+/// Immutable evidence change that scheduled reconsideration of one accepted support.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EvidenceImpact {
+    /// Stable audit identity.
+    pub id: String,
+    /// Accepted event whose support may have changed.
+    pub support_event: merl_core::EventId,
+    /// Source version available when that event was accepted.
+    pub changed_source: SourceVersionId,
+    /// New source version, absent when retained source bytes were erased.
+    pub replacement: Option<SourceVersionId>,
+    /// Recompile when new bytes exist; reevaluate when evidence is unavailable.
+    pub next_action: String,
+    /// A later accepted event that resolved this impact, if any.
+    pub revalidated_by: Option<merl_core::EventId>,
+}
+
 /// Inspectable outcome of a retained compiler attempt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompilationRunStatus {
@@ -597,7 +629,10 @@ impl Store {
                 transaction
                     .execute_batch(include_str!("../migrations/0006_policy_event_origins.sql"))?;
             }
-            transaction.execute_batch(include_str!("../migrations/0007_issue_scope.sql"))?;
+            if version < 7 {
+                transaction.execute_batch(include_str!("../migrations/0007_issue_scope.sql"))?;
+            }
+            transaction.execute_batch(include_str!("../migrations/0008_evidence_health.sql"))?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         }
@@ -683,13 +718,36 @@ impl Store {
     /// # Errors
     /// Returns an error if the reference does not exist or storage fails.
     pub fn erase_payload(&mut self, project: &ProjectId, id: &PayloadId) -> Result<(), StoreError> {
-        let changed = self.connection.execute(
-            "UPDATE payloads SET bytes = NULL, erased = 1 WHERE project_id = ?1 AND id = ?2",
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let source: Option<String> = transaction
+            .query_row(
+                "SELECT id FROM source_versions WHERE project_id=?1 AND payload_id=?2",
+                params![project.as_str(), id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let changed = transaction.execute(
+            "UPDATE payloads SET bytes = NULL, erased = 1 WHERE project_id = ?1 AND id = ?2 AND erased=0",
             params![project.as_str(), id.as_str()],
         )?;
         if changed == 0 {
-            return Err(StoreError::PayloadMissing);
+            let exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM payloads WHERE project_id=?1 AND id=?2)",
+                params![project.as_str(), id.as_str()],
+                |row| row.get(0),
+            )?;
+            return if exists {
+                Ok(())
+            } else {
+                Err(StoreError::PayloadMissing)
+            };
         }
+        if let Some(source) = source {
+            record_evidence_impacts(&transaction, project, &source, None, "reevaluate", 0)?;
+        }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -811,6 +869,20 @@ impl Store {
                 edit_diff: edit_diff_payload.as_ref(),
             },
         )?;
+        if let Some(previous) = previous {
+            record_evidence_impacts(
+                &transaction,
+                project,
+                &previous,
+                Some(capture.version.as_str()),
+                if capture.body.is_some() {
+                    "recompile"
+                } else {
+                    "reevaluate"
+                },
+                capture.observed_at_millis,
+            )?;
+        }
         transaction.execute(
             "UPDATE projects SET source_observation_head = ?2 WHERE id = ?1",
             params![project.as_str(), sequence],
@@ -2328,6 +2400,7 @@ impl Store {
                     .transpose()
                     .map_err(|_| StoreError::CorruptHistory)?,
                 issue_scope,
+                support: self.object_support_status(project, id)?,
                 revision: ObjectRevision::try_from(
                     u64::try_from(revision).map_err(|_| StoreError::CorruptHistory)?,
                 )
@@ -2338,6 +2411,120 @@ impl Store {
             })
         })
         .transpose()
+    }
+
+    /// Reports evidence health without changing the accepted object's lifecycle.
+    ///
+    /// # Errors
+    /// Returns a storage error if support history is unreadable.
+    pub fn object_support_status(
+        &self,
+        project: &ProjectId,
+        object: &ObjectId,
+    ) -> Result<SupportStatus, StoreError> {
+        let (supports, pending, current, unsupported): (i64, i64, i64, i64) =
+            self.connection.query_row(
+                "SELECT COUNT(*),
+              COALESCE(SUM(CASE WHEN EXISTS (
+                SELECT 1 FROM evidence_impacts i WHERE i.project_id=s.project_id
+                  AND i.object_id=s.object_id AND i.support_event_id=s.event_id
+                  AND i.next_action='recompile'
+                  AND NOT EXISTS (SELECT 1 FROM evidence_revalidations r
+                    WHERE r.project_id=i.project_id AND r.impact_id=i.id)
+              ) THEN 1 ELSE 0 END),0),
+              COALESCE(SUM(CASE WHEN NOT EXISTS (
+                SELECT 1 FROM evidence_impacts i WHERE i.project_id=s.project_id
+                  AND i.object_id=s.object_id AND i.support_event_id=s.event_id
+                  AND (NOT EXISTS (SELECT 1 FROM evidence_revalidations r
+                    WHERE r.project_id=i.project_id AND r.impact_id=i.id)
+                    OR EXISTS (SELECT 1 FROM evidence_revalidations r
+                    WHERE r.project_id=i.project_id AND r.impact_id=i.id
+                      AND r.outcome='unsupported'))
+              ) THEN 1 ELSE 0 END),0),
+              COALESCE(SUM(CASE WHEN EXISTS (
+                SELECT 1 FROM evidence_impacts i WHERE i.project_id=s.project_id
+                  AND i.object_id=s.object_id AND i.support_event_id=s.event_id
+                  AND ((i.next_action='reevaluate' AND NOT EXISTS
+                    (SELECT 1 FROM evidence_revalidations r
+                     WHERE r.project_id=i.project_id AND r.impact_id=i.id))
+                    OR EXISTS (SELECT 1 FROM evidence_revalidations r
+                     WHERE r.project_id=i.project_id AND r.impact_id=i.id
+                       AND r.outcome='unsupported'))
+              ) THEN 1 ELSE 0 END),0)
+             FROM evidence_supports s WHERE s.project_id=?1 AND s.object_id=?2",
+                params![project.as_str(), object.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        Ok(match (supports, pending, current, unsupported) {
+            (0, _, _, _) | (_, 0, _, 0) => SupportStatus::Current,
+            (_, 0, 0, _) => SupportStatus::Unsupported,
+            (_, _, 0, _) => SupportStatus::RevalidationPending,
+            _ => SupportStatus::PartiallySupported,
+        })
+    }
+
+    /// Counts durable evidence impacts still waiting for revalidation.
+    ///
+    /// # Errors
+    /// Returns a storage error if the impact log is unreadable.
+    pub fn pending_revalidation_count(&self, project: &ProjectId) -> Result<u64, StoreError> {
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM evidence_impacts i WHERE i.project_id=?1
+               AND NOT EXISTS (SELECT 1 FROM evidence_revalidations r
+                 WHERE r.project_id=i.project_id AND r.impact_id=i.id)",
+            [project.as_str()],
+            |row| row.get(0),
+        )?;
+        u64::try_from(count).map_err(|_| StoreError::CorruptHistory)
+    }
+
+    /// Returns the append-only impact trail for one accepted object.
+    ///
+    /// # Errors
+    /// Rejects corrupt structural identities or unreadable storage.
+    pub fn evidence_impacts_for_object(
+        &self,
+        project: &ProjectId,
+        object: &ObjectId,
+    ) -> Result<Vec<EvidenceImpact>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT i.id,i.support_event_id,i.source_version_id,i.replacement_version_id,
+                    i.next_action,r.event_id
+             FROM evidence_impacts i LEFT JOIN evidence_revalidations r
+               ON r.project_id=i.project_id AND r.impact_id=i.id
+             WHERE i.project_id=?1 AND i.object_id=?2 ORDER BY i.id",
+        )?;
+        let rows = statement.query_map(params![project.as_str(), object.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (id, support_event, changed_source, replacement, next_action, revalidated_by) =
+                row?;
+            Ok(EvidenceImpact {
+                id,
+                support_event: merl_core::EventId::try_from(support_event.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                changed_source: SourceVersionId::try_from(changed_source.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                replacement: replacement
+                    .map(|id| SourceVersionId::try_from(id.as_str()))
+                    .transpose()
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                next_action,
+                revalidated_by: revalidated_by
+                    .map(|id| merl_core::EventId::try_from(id.as_str()))
+                    .transpose()
+                    .map_err(|_| StoreError::CorruptHistory)?,
+            })
+        })
+        .collect()
     }
 
     /// Reads the current Issue state without mixing provider facts into semantic objects.
@@ -2960,7 +3147,111 @@ fn insert_policy_record(
                  VALUES (?1,?2,?3,?4)",
                 params![evaluation.project.as_str(), evaluation.id.as_str(), origin.event.as_str(), i64::from(origin.input_index)],
             )?;
+            record_accepted_support(transaction, evaluation, origin)?;
         }
+    }
+    Ok(())
+}
+
+fn record_accepted_support(
+    transaction: &Transaction<'_>,
+    evaluation: &PolicyEvaluation,
+    origin: &merl_core::PolicyEventOrigin,
+) -> Result<(), StoreError> {
+    let Some(merl_core::PolicyInputDecision {
+        input: merl_core::PolicyInput::ObservedAssertion { run, index, .. },
+        ..
+    }) = evaluation.inputs.get(origin.input_index as usize)
+    else {
+        return Ok(());
+    };
+    let source: String = transaction.query_row(
+        "SELECT source_version_id FROM observed_assertions
+         WHERE project_id=?1 AND run_id=?2 AND assertion_index=?3",
+        params![evaluation.project.as_str(), run.as_str(), i64::from(*index)],
+        |row| row.get(0),
+    )?;
+    let object: String = transaction.query_row(
+        "SELECT object_id FROM domain_events WHERE project_id=?1 AND id=?2",
+        params![evaluation.project.as_str(), origin.event.as_str()],
+        |row| row.get(0),
+    )?;
+    transaction.execute(
+        "INSERT INTO evidence_supports (project_id,object_id,source_version_id,event_id)
+         VALUES (?1,?2,?3,?4)",
+        params![
+            evaluation.project.as_str(),
+            object,
+            source,
+            origin.event.as_str()
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO evidence_revalidations (project_id,impact_id,event_id,outcome)
+         SELECT project_id,id,?4,'current' FROM evidence_impacts
+         WHERE project_id=?1 AND object_id=?2 AND replacement_version_id=?3
+           AND NOT EXISTS (SELECT 1 FROM evidence_revalidations r
+             WHERE r.project_id=evidence_impacts.project_id AND r.impact_id=evidence_impacts.id)",
+        params![
+            evaluation.project.as_str(),
+            object,
+            source,
+            origin.event.as_str()
+        ],
+    )?;
+    Ok(())
+}
+
+fn record_evidence_impacts(
+    transaction: &Transaction<'_>,
+    project: &ProjectId,
+    previous: &str,
+    replacement: Option<&str>,
+    next_action: &str,
+    recorded_at_millis: i64,
+) -> Result<(), StoreError> {
+    let mut statement = transaction.prepare(
+        "SELECT object_id,event_id FROM evidence_supports
+         WHERE project_id=?1 AND source_version_id=?2
+         UNION
+         SELECT s.object_id,s.event_id FROM evidence_supports s
+         JOIN policy_evaluation_domain_events pe
+           ON pe.project_id=s.project_id AND pe.event_id=s.event_id
+         JOIN policy_evaluation_inputs pi
+           ON pi.project_id=pe.project_id AND pi.evaluation_id=pe.evaluation_id
+          AND pi.input_index=pe.input_index
+         JOIN policy_assertion_inputs pa
+           ON pa.project_id=pi.project_id AND pa.evaluation_id=pi.evaluation_id
+          AND pa.input_id=pi.input_id
+         JOIN compilation_context_sources cs
+           ON cs.project_id=pa.project_id AND cs.run_id=pa.run_id
+         WHERE s.project_id=?1 AND cs.source_version_id=?2
+         ORDER BY object_id,event_id",
+    )?;
+    let supports = statement
+        .query_map(params![project.as_str(), previous], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    for (object, support_event) in supports {
+        let digest = Sha256::digest(
+            format!(
+                "{previous}/{}/{support_event}",
+                replacement.unwrap_or("purged")
+            )
+            .as_bytes(),
+        );
+        let mut id = String::from("impact_");
+        for byte in digest {
+            write!(&mut id, "{byte:02x}").expect("writing a digest is infallible");
+        }
+        transaction.execute(
+            "INSERT INTO evidence_impacts
+             (project_id,id,object_id,support_event_id,source_version_id,replacement_version_id,next_action,recorded_at_millis)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![project.as_str(), id, object, support_event, previous, replacement, next_action, recorded_at_millis],
+        )?;
     }
     Ok(())
 }

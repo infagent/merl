@@ -74,3 +74,28 @@ fn a_rejected_command_cannot_reuse_its_identity_with_new_content() {
         .when_an_administrator_performs_a_maintenance_action()
         .then_only_the_administrators_action_changes_accepted_state();
 }
+
+#[test]
+fn editing_decision_evidence_requires_revalidation_without_withdrawing_the_decision() {
+    PolicyScenario::given_a_decision_supported_by_an_issue_comment()
+        .when_the_comment_is_edited()
+        .then_the_decision_is_active_with_revalidation_pending()
+        .when_the_object_projection_is_rebuilt()
+        .then_the_decision_is_active_with_revalidation_pending()
+        .when_the_edit_confirms_the_same_decision()
+        .then_the_decision_has_current_support_again();
+}
+
+#[test]
+fn erasing_the_only_source_marks_decision_support_unavailable() {
+    PolicyScenario::given_a_decision_supported_by_an_issue_comment()
+        .when_the_source_bytes_are_erased()
+        .then_the_decision_remains_but_support_is_unsupported();
+}
+
+#[test]
+fn editing_context_evidence_reconsiders_an_assertion_citing_another_comment() {
+    PolicyScenario::given_a_decision_compiled_with_an_earlier_comment()
+        .when_the_earlier_comment_is_edited()
+        .then_the_decision_is_active_with_revalidation_pending();
+}

@@ -302,7 +302,7 @@ An assertion remains a historical record of what one compiler inferred from one 
 
 Accepted-object lifecycle and evidence support are separate. An object may remain `active` while its support awaits revalidation. Individual support relations use `current`, `evidence_changed`, `revalidation_pending`, or `unsupported`. The object view derives an aggregate support status: `current`, `revalidation_pending`, `partially_supported`, or `unsupported`.
 
-Source supersession enqueues a new compilation context at the new causal position. Policy compares the resulting assertions with prior support and emits domain events that keep the object active with an updated support status, supersede it, or invalidate it. Until that work finishes, the object remains in its prior lifecycle state and its support status shows the pending revalidation. A cosmetic edit therefore need not erase an active decision, while a material correction cannot leave the old evidence looking current.
+Source supersession records one impact for each accepted support that cited the old source or used it in its compiler context. The impact is also a durable revalidation intent. A new accepted assertion that confirms the same object records a separate resolution; neither record rewrites the original assertion. Until then, the object remains accepted and its view shows pending support. A material correction may instead supersede or invalidate the old object through policy. If the source bytes disappear, the view marks that support unavailable. The later administrative purge workflow must audit the erasure and its retention scope; low-level payload erasure alone does not make that claim.
 
 ### Policy evaluations
 
