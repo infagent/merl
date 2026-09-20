@@ -2,7 +2,8 @@ CREATE TABLE policy_conflicts (
     project_id TEXT NOT NULL,
     evaluation_id TEXT NOT NULL,
     reason_code TEXT NOT NULL CHECK (reason_code IN
-        ('basis_ahead', 'object_read_changed', 'kind_collection_changed', 'object_write_changed')),
+        ('basis_ahead', 'object_read_changed', 'kind_collection_changed',
+         'object_write_changed', 'accepted_input_overlap')),
     target_id TEXT,
     expected_revision INTEGER,
     actual_revision INTEGER,

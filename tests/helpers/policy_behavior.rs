@@ -115,6 +115,7 @@ pub struct PolicyScenario {
     project: ProjectId,
     rules: PolicyRules,
     prepared: Option<PreparedPolicy>,
+    prepared_retry: Option<PreparedPolicy>,
     result: Option<Result<Option<merl_core::ProjectRevision>, StoreError>>,
     stale_result: Option<Result<Option<merl_core::ProjectRevision>, StoreError>>,
     retry_disposition: Option<PolicyDisposition>,
@@ -123,6 +124,242 @@ pub struct PolicyScenario {
 }
 
 impl PolicyScenario {
+    pub fn given_a_prepared_batch_with_one_competing_input() -> Self {
+        let mut scenario = Self::new();
+        scenario.prepared = Some(scenario.command(
+            "shared-command",
+            "first-eval",
+            "first-batch",
+            "first-event",
+            "D1",
+        ));
+        scenario.prepared_retry = Some(
+            evaluate(
+                &scenario.store,
+                &scenario.project,
+                &id("alice"),
+                id("mixed-eval"),
+                id("mixed-batch"),
+                NOW,
+                &scenario.rules,
+                &[
+                    Proposal::Command {
+                        id: id("shared-command"),
+                        event: event("mixed-event-one", "D1", "decision", None),
+                    },
+                    Proposal::Command {
+                        id: id("new-command"),
+                        event: event("mixed-event-two", "D2", "decision", None),
+                    },
+                ],
+            )
+            .expect("prepare mixed batch"),
+        );
+        scenario
+    }
+
+    pub fn when_the_competing_input_commits_first(&mut self) -> &mut Self {
+        self.when_both_are_committed()
+    }
+
+    pub fn then_the_mixed_batch_conflicts_without_applying_its_new_input(&mut self) {
+        assert!(matches!(
+            self.stale_result,
+            Some(Err(StoreError::PolicyConflict))
+        ));
+        assert!(
+            self.store
+                .object(&self.project, &id("D2"))
+                .expect("object lookup")
+                .is_none()
+        );
+        assert_eq!(
+            self.store
+                .project_revision(&self.project)
+                .expect("revision")
+                .get(),
+            1
+        );
+        let record = self
+            .store
+            .policy_evaluation(&self.project, &id("mixed-eval"))
+            .expect("policy record")
+            .expect("conflict outcome");
+        assert_eq!(
+            record.conflict.expect("overlap").reason_code,
+            "accepted_input_overlap"
+        );
+    }
+
+    pub fn given_two_prepared_evaluations_of_the_same_command() -> Self {
+        let mut scenario = Self::new();
+        scenario.prepared = Some(scenario.command(
+            "shared-command",
+            "first-eval",
+            "first-batch",
+            "first-event",
+            "D1",
+        ));
+        scenario.prepared_retry = Some(scenario.command(
+            "shared-command",
+            "second-eval",
+            "second-batch",
+            "second-event",
+            "D1",
+        ));
+        scenario
+    }
+
+    pub fn given_two_prepared_evaluations_of_one_assertion() -> Self {
+        let mut scenario = Self::new();
+        let body = "Use fixed gain";
+        scenario.capture("direct-v1", body, "alice");
+        scenario.compile("direct-v1", body.len(), None, "direct-run");
+        for (slot, handle, evaluation, batch, event_id) in [
+            (
+                0,
+                "first-handle",
+                "first-eval",
+                "first-batch",
+                "first-event",
+            ),
+            (
+                1,
+                "second-handle",
+                "second-eval",
+                "second-batch",
+                "second-event",
+            ),
+        ] {
+            let prepared = evaluate(
+                &scenario.store,
+                &scenario.project,
+                &id("authority"),
+                id(evaluation),
+                id(batch),
+                NOW + 3,
+                &scenario.rules,
+                &[Proposal::ObservedAssertion {
+                    id: id(handle),
+                    run: id("direct-run"),
+                    index: 0,
+                    event: event(event_id, "D1", "decision", None),
+                }],
+            )
+            .expect("prepare assertion");
+            if slot == 0 {
+                scenario.prepared = Some(prepared);
+            } else {
+                scenario.prepared_retry = Some(prepared);
+            }
+        }
+        scenario
+    }
+
+    pub fn when_both_are_committed(&mut self) -> &mut Self {
+        self.result = Some(
+            self.prepared
+                .take()
+                .expect("first evaluation")
+                .commit(&mut self.store),
+        );
+        self.stale_result = Some(
+            self.prepared_retry
+                .take()
+                .expect("second evaluation")
+                .commit(&mut self.store),
+        );
+        self
+    }
+
+    pub fn then_the_second_is_recorded_as_a_duplicate(&mut self) {
+        assert_eq!(
+            self.result
+                .as_ref()
+                .expect("first outcome")
+                .as_ref()
+                .expect("first commit")
+                .map(ProjectRevision::get),
+            Some(1)
+        );
+        assert!(matches!(self.stale_result, Some(Ok(None))));
+        let record = self
+            .store
+            .policy_evaluation(&self.project, &id("second-eval"))
+            .expect("policy lookup")
+            .expect("second evaluation");
+        assert_eq!(record.inputs[0].disposition, PolicyDisposition::Duplicate);
+        assert_eq!(
+            self.store
+                .project_revision(&self.project)
+                .expect("revision")
+                .get(),
+            1
+        );
+        assert_eq!(
+            self.store
+                .accepted_event_count(&self.project)
+                .expect("events"),
+            1
+        );
+    }
+
+    pub fn given_two_authorized_command_proposals() -> Self {
+        Self::file_backed()
+    }
+
+    pub fn when_they_are_accepted_together(&mut self) -> &mut Self {
+        let prepared = evaluate(
+            &self.store,
+            &self.project,
+            &id("alice"),
+            id("compound-eval"),
+            id("compound-batch"),
+            NOW,
+            &self.rules,
+            &[
+                Proposal::Command {
+                    id: id("command-one"),
+                    event: event("event-one", "D1", "decision", None),
+                },
+                Proposal::Command {
+                    id: id("command-two"),
+                    event: event("event-two", "D2", "decision", None),
+                },
+            ],
+        )
+        .expect("evaluate compound decision");
+        self.result = Some(prepared.commit(&mut self.store));
+        self
+    }
+
+    pub fn then_each_object_resolves_to_its_own_input(&mut self) {
+        assert_eq!(
+            self.result
+                .as_ref()
+                .expect("result")
+                .as_ref()
+                .expect("commit")
+                .map(ProjectRevision::get),
+            Some(1)
+        );
+        self.store = Store::open(&self.persisted_file.as_ref().expect("store file").0)
+            .expect("reopen authority");
+        for (object, event, command) in [
+            ("D1", "event-one", "command-one"),
+            ("D2", "event-two", "command-two"),
+        ] {
+            let origin = self
+                .store
+                .object_policy_origin(&self.project, &id(object))
+                .expect("origin lookup")
+                .expect("policy origin");
+            assert_eq!(origin.evaluation, id("compound-eval"));
+            assert_eq!(origin.event, id(event));
+            assert_eq!(origin.input, merl_core::PolicyInput::Command(id(command)));
+        }
+    }
+
     fn new() -> Self {
         let mut store = Store::open_in_memory().expect("store");
         let project = id("policy-project");
@@ -137,6 +374,7 @@ impl PolicyScenario {
                 administrators: vec![id("admin")],
             },
             prepared: None,
+            prepared_retry: None,
             result: None,
             stale_result: None,
             retry_disposition: None,

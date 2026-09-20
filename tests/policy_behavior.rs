@@ -4,6 +4,34 @@ mod policy_behavior;
 use policy_behavior::PolicyScenario;
 
 #[test]
+fn each_accepted_object_identifies_the_input_that_produced_it() {
+    PolicyScenario::given_two_authorized_command_proposals()
+        .when_they_are_accepted_together()
+        .then_each_object_resolves_to_its_own_input();
+}
+
+#[test]
+fn concurrent_preparation_of_the_same_command_applies_it_once() {
+    PolicyScenario::given_two_prepared_evaluations_of_the_same_command()
+        .when_both_are_committed()
+        .then_the_second_is_recorded_as_a_duplicate();
+}
+
+#[test]
+fn concurrent_preparation_of_one_assertion_under_two_handles_applies_it_once() {
+    PolicyScenario::given_two_prepared_evaluations_of_one_assertion()
+        .when_both_are_committed()
+        .then_the_second_is_recorded_as_a_duplicate();
+}
+
+#[test]
+fn a_prepared_batch_with_old_and_new_inputs_waits_for_reevaluation() {
+    PolicyScenario::given_a_prepared_batch_with_one_competing_input()
+        .when_the_competing_input_commits_first()
+        .then_the_mixed_batch_conflicts_without_applying_its_new_input();
+}
+
+#[test]
 fn a_relay_does_not_borrow_the_quoted_humans_authority() {
     PolicyScenario::given_an_authorized_human_and_an_agent_relay()
         .when_both_propose_the_same_decision()
