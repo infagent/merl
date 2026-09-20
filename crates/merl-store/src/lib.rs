@@ -12,7 +12,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -105,10 +105,27 @@ pub struct ProjectedObject {
     pub kind: ObjectKind,
     /// Protected content reference, if any.
     pub payload: Option<PayloadId>,
+    /// Issue conversation that owns this semantic object, when known.
+    pub issue_scope: Option<String>,
     /// Revision of this object, independent of the project revision.
     pub revision: ObjectRevision,
     /// Project revision in which the object last changed.
     pub project_revision: ProjectRevision,
+}
+
+type ObjectRow = (String, Option<String>, Option<String>, i64, i64);
+
+/// Provider-owned facts and accepted semantic objects for one Issue thread.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IssueState {
+    /// Project revision shared by provider and semantic changes.
+    pub project_revision: ProjectRevision,
+    /// Latest accepted provider observation, if one has arrived.
+    pub provider: Option<AcceptedProviderObservation>,
+    /// Merl-owned objects attached to this Issue, excluding provider mirror records.
+    pub semantics: Vec<ProjectedObject>,
+    /// Scope-specific coverage; accepted revision alone does not imply completeness.
+    pub coverage: SemanticCoverage,
 }
 
 /// An accepted change waiting for an agent to read its project delta.
@@ -576,8 +593,11 @@ impl Store {
                 transaction
                     .execute_batch(include_str!("../migrations/0005_policy_conflicts.sql"))?;
             }
-            transaction
-                .execute_batch(include_str!("../migrations/0006_policy_event_origins.sql"))?;
+            if version < 6 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0006_policy_event_origins.sql"))?;
+            }
+            transaction.execute_batch(include_str!("../migrations/0007_issue_scope.sql"))?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         }
@@ -1088,6 +1108,33 @@ impl Store {
         revision: ProjectRevision,
         limit: usize,
     ) -> Result<SelectedObjects, StoreError> {
+        self.objects_at_revision_with_scope(project, revision, limit, None)
+    }
+
+    /// Selects Issue-owned accepted objects first, without crossing the causal revision.
+    ///
+    /// # Errors
+    /// Rejects future revisions or damaged accepted history.
+    pub fn objects_at_revision_for_scope(
+        &self,
+        project: &ProjectId,
+        revision: ProjectRevision,
+        limit: usize,
+        scope: &str,
+    ) -> Result<SelectedObjects, StoreError> {
+        if !valid_provider_id(scope) {
+            return Err(StoreError::InvalidCompilation);
+        }
+        self.objects_at_revision_with_scope(project, revision, limit, Some(scope))
+    }
+
+    fn objects_at_revision_with_scope(
+        &self,
+        project: &ProjectId,
+        revision: ProjectRevision,
+        limit: usize,
+        scope: Option<&str>,
+    ) -> Result<SelectedObjects, StoreError> {
         if revision > self.project_revision(project)? || limit == 0 {
             return Err(StoreError::InvalidCompilation);
         }
@@ -1095,7 +1142,7 @@ impl Store {
         let lookahead = limit.checked_add(1).ok_or(StoreError::InvalidCompilation)?;
         let mut statement = self.connection.prepare(
             "WITH history AS (
-               SELECT domain_events.object_id, domain_events.payload_id,
+               SELECT domain_events.object_id, domain_events.payload_id, domain_events.issue_scope_id,
                       COUNT(*) OVER (PARTITION BY domain_events.object_id) AS object_revision,
                       ROW_NUMBER() OVER (PARTITION BY domain_events.object_id
                         ORDER BY domain_event_batches.revision DESC, domain_events.event_index DESC) AS rank
@@ -1104,10 +1151,10 @@ impl Store {
                 AND domain_event_batches.id = domain_events.batch_id
                WHERE domain_events.project_id = ?1 AND domain_event_batches.revision <= ?2
              ) SELECT object_id, payload_id, object_revision FROM history
-               WHERE rank = 1 ORDER BY object_id LIMIT ?3",
+               WHERE rank = 1 ORDER BY CASE WHEN ?4 IS NOT NULL AND issue_scope_id=?4 THEN 0 ELSE 1 END, object_id LIMIT ?3",
         )?;
         let basis = i64::try_from(revision.get()).map_err(|_| StoreError::InvalidCompilation)?;
-        let mut rows = statement.query(params![project.as_str(), basis, lookahead])?;
+        let mut rows = statement.query(params![project.as_str(), basis, lookahead, scope])?;
         let mut objects = Vec::new();
         while let Some(row) = rows.next()? {
             let id: String = row.get(0)?;
@@ -2263,15 +2310,15 @@ impl Store {
         project: &ProjectId,
         id: &ObjectId,
     ) -> Result<Option<ProjectedObject>, StoreError> {
-        let row: Option<(String, Option<String>, i64, i64)> = self
+        let row: Option<ObjectRow> = self
             .connection
             .query_row(
-                "SELECT kind, payload_id, object_revision, project_revision FROM objects WHERE project_id = ?1 AND id = ?2",
+                "SELECT kind, payload_id, issue_scope_id, object_revision, project_revision FROM objects WHERE project_id = ?1 AND id = ?2",
                 params![project.as_str(), id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
             )
             .optional()?;
-        row.map(|(kind, payload, revision, project_revision)| {
+        row.map(|(kind, payload, issue_scope, revision, project_revision)| {
             Ok(ProjectedObject {
                 id: id.clone(),
                 kind: ObjectKind::try_from(kind.as_str())
@@ -2280,6 +2327,7 @@ impl Store {
                     .map(|value| PayloadId::try_from(value.as_str()))
                     .transpose()
                     .map_err(|_| StoreError::CorruptHistory)?,
+                issue_scope,
                 revision: ObjectRevision::try_from(
                     u64::try_from(revision).map_err(|_| StoreError::CorruptHistory)?,
                 )
@@ -2290,6 +2338,44 @@ impl Store {
             })
         })
         .transpose()
+    }
+
+    /// Reads the current Issue state without mixing provider facts into semantic objects.
+    ///
+    /// # Errors
+    /// Rejects an invalid scope or corrupt accepted metadata.
+    pub fn issue_state(
+        &self,
+        project: &ProjectId,
+        issue: &ObjectId,
+        scope: &str,
+    ) -> Result<IssueState, StoreError> {
+        if !valid_provider_id(scope) {
+            return Err(StoreError::InvalidSource);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT id FROM objects WHERE project_id=?1 AND issue_scope_id=?2
+               AND kind!='provider_issue' ORDER BY id",
+        )?;
+        let ids = statement
+            .query_map(params![project.as_str(), scope], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut semantics = Vec::with_capacity(ids.len());
+        for id in ids {
+            let id = ObjectId::try_from(id.as_str()).map_err(|_| StoreError::CorruptHistory)?;
+            semantics.push(
+                self.object(project, &id)?
+                    .ok_or(StoreError::CorruptHistory)?,
+            );
+        }
+        Ok(IssueState {
+            project_revision: self.project_revision(project)?,
+            provider: self.provider_issue_head(project, issue)?,
+            semantics,
+            coverage: self.semantic_coverage_in_scope(project, scope)?,
+        })
     }
 
     /// Returns the latest accepted provider fact for an Issue mirror.
@@ -2432,7 +2518,7 @@ impl Store {
             [project.as_str()],
         )?;
         let mut statement = transaction.prepare(
-            "SELECT b.revision, e.object_id, e.object_kind, e.payload_id
+            "SELECT b.revision, e.object_id, e.object_kind, e.payload_id, e.issue_scope_id
              FROM domain_events e JOIN domain_event_batches b
              ON e.project_id = b.project_id AND e.batch_id = b.id
              WHERE e.project_id = ?1 ORDER BY b.revision, e.event_index",
@@ -2443,11 +2529,12 @@ impl Store {
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?;
         let mut latest_revision = 0_i64;
         for row in rows {
-            let (revision, object, kind, payload) = row?;
+            let (revision, object, kind, payload, issue_scope) = row?;
             latest_revision = revision;
             let object =
                 ObjectId::try_from(object.as_str()).map_err(|_| StoreError::CorruptHistory)?;
@@ -2463,6 +2550,7 @@ impl Store {
                 &object,
                 &kind,
                 payload.as_ref(),
+                issue_scope.as_deref(),
                 revision,
             )?;
         }
@@ -2521,6 +2609,10 @@ fn validate_policy_shape(
             if batch.project != evaluation.project
                 || batch.actor != evaluation.actor
                 || batch.events.is_empty()
+                || (provider.is_none()
+                    && batch.events.iter().any(|event| {
+                        matches!(event, DomainEvent::PutObject { kind, .. } if kind.as_str() == "provider_issue")
+                    }))
             {
                 return Err(StoreError::InvalidPolicyEvaluation);
             }
@@ -2958,11 +3050,16 @@ fn policy_evaluation_digest(
                 object,
                 kind,
                 payload,
+                issue_scope,
             } = event;
             part(id.as_str().as_bytes());
             part(object.as_str().as_bytes());
             part(kind.as_str().as_bytes());
             part(payload.as_ref().map_or("", PayloadId::as_str).as_bytes());
+            if let Some(scope) = issue_scope {
+                part(b"issue_scope_v1");
+                part(scope.as_bytes());
+            }
         }
     }
     part(&[u8::from(provider.is_some())]);
@@ -3014,7 +3111,24 @@ fn insert_accepted_batch(
                 object,
                 kind,
                 payload,
+                issue_scope,
             } => {
+                let existing_kind: Option<String> = transaction
+                    .query_row(
+                        "SELECT kind FROM objects WHERE project_id=?1 AND id=?2",
+                        params![batch.project.as_str(), object.as_str()],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if existing_kind.as_deref() == Some("provider_issue") && observation.is_none() {
+                    return Err(StoreError::InvalidBatch);
+                }
+                if issue_scope
+                    .as_deref()
+                    .is_some_and(|scope| !valid_provider_id(scope))
+                {
+                    return Err(StoreError::InvalidBatch);
+                }
                 if let Some(payload) = payload {
                     let available: Option<i64> = transaction
                         .query_row(
@@ -3028,8 +3142,8 @@ fn insert_accepted_batch(
                     }
                 }
                 transaction.execute(
-                    "INSERT INTO domain_events (project_id, batch_id, id, event_index, event_kind, object_id, object_kind, payload_id) VALUES (?1, ?2, ?3, ?4, 'put_object', ?5, ?6, ?7)",
-                    params![batch.project.as_str(), batch.id.as_str(), id.as_str(), i64::try_from(index).map_err(|_| StoreError::InvalidBatch)?, object.as_str(), kind.as_str(), payload.as_ref().map(PayloadId::as_str)],
+                    "INSERT INTO domain_events (project_id, batch_id, id, event_index, event_kind, object_id, object_kind, payload_id, issue_scope_id) VALUES (?1, ?2, ?3, ?4, 'put_object', ?5, ?6, ?7, ?8)",
+                    params![batch.project.as_str(), batch.id.as_str(), id.as_str(), i64::try_from(index).map_err(|_| StoreError::InvalidBatch)?, object.as_str(), kind.as_str(), payload.as_ref().map(PayloadId::as_str), issue_scope],
                 )?;
                 apply_put(
                     transaction,
@@ -3037,6 +3151,7 @@ fn insert_accepted_batch(
                     object,
                     kind,
                     payload.as_ref(),
+                    issue_scope.as_deref(),
                     revision,
                 )?;
             }
@@ -3203,14 +3318,16 @@ fn apply_put(
     object: &ObjectId,
     kind: &ObjectKind,
     payload: Option<&PayloadId>,
+    issue_scope: Option<&str>,
     revision: i64,
 ) -> Result<(), StoreError> {
     transaction.execute(
-        "INSERT INTO objects (project_id, id, kind, payload_id, object_revision, project_revision)
-         VALUES (?1, ?2, ?3, ?4, 1, ?5)
+        "INSERT INTO objects (project_id, id, kind, payload_id, issue_scope_id, object_revision, project_revision)
+         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
          ON CONFLICT(project_id, id) DO UPDATE SET
            kind = excluded.kind,
            payload_id = excluded.payload_id,
+           issue_scope_id = COALESCE(excluded.issue_scope_id, objects.issue_scope_id),
            object_revision = objects.object_revision + 1,
            project_revision = excluded.project_revision",
         params![
@@ -3218,6 +3335,7 @@ fn apply_put(
             object.as_str(),
             kind.as_str(),
             payload.map(PayloadId::as_str),
+            issue_scope,
             revision
         ],
     )?;

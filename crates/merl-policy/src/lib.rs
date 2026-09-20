@@ -273,6 +273,16 @@ fn disposition_for(
     rules: &PolicyRules,
     proposal: &Proposal,
 ) -> Result<(PolicyDisposition, &'static str), PolicyError> {
+    if !matches!(proposal, Proposal::ProviderObservation { .. }) {
+        let DomainEvent::PutObject { object, kind, .. } = proposal.event();
+        if kind.as_str() == "provider_issue"
+            || store
+                .object(project, object)?
+                .is_some_and(|current| current.kind.as_str() == "provider_issue")
+        {
+            return Err(PolicyError::InvalidProposal);
+        }
+    }
     match proposal {
         Proposal::Command { .. } => Ok(if rules.command_actors.contains(actor) {
             (PolicyDisposition::Accepted, "authorized_command")
@@ -292,11 +302,13 @@ fn disposition_for(
                 object,
                 kind,
                 payload,
+                issue_scope,
                 ..
             } = event;
             if object != &observation.issue
                 || kind.as_str() != "provider_issue"
                 || payload.as_ref() != Some(&observation.snapshot_payload)
+                || issue_scope.is_some()
             {
                 return Err(PolicyError::InvalidProposal);
             }
@@ -323,6 +335,7 @@ fn disposition_for(
                 object,
                 kind,
                 payload,
+                issue_scope,
                 ..
             } = event;
             if assertion.subject != object.as_str()
@@ -330,6 +343,9 @@ fn disposition_for(
                 || assertion.value != payload.as_ref().map_or("none", PayloadId::as_str)
                 || source.source_author.as_ref().map(ActorId::as_str)
                     != assertion.asserted_by.as_deref()
+                || issue_scope
+                    .as_deref()
+                    .is_some_and(|scope| scope != source.context_scope_id)
             {
                 return Err(PolicyError::InvalidProposal);
             }
@@ -374,11 +390,16 @@ fn input_digest(proposal: &Proposal, actor: &ActorId) -> [u8; 32] {
         object,
         kind,
         payload,
+        issue_scope,
         ..
     } = proposal.event();
     part(object.as_str().as_bytes());
     part(kind.as_str().as_bytes());
     part(payload.as_ref().map_or("", PayloadId::as_str).as_bytes());
+    if let Some(scope) = issue_scope {
+        part(b"issue_scope_v1");
+        part(scope.as_bytes());
+    }
     if let Proposal::ProviderObservation { observation, .. } = proposal {
         part(observation.binding.as_str().as_bytes());
         part(observation.issue.as_str().as_bytes());

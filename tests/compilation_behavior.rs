@@ -96,6 +96,13 @@ fn an_issue_comment_keeps_its_named_decision_in_bounded_context() {
 }
 
 #[test]
+fn an_issue_comment_gets_its_own_decision_without_naming_the_handle() {
+    CompilationScenario::given_many_other_issue_objects_and_one_local_decision()
+        .when_the_issue_comment_is_compiled()
+        .then_its_issue_decision_is_selected();
+}
+
+#[test]
 fn issue_coverage_excludes_other_threads_and_optional_notes() {
     CompilationScenario::given_required_and_optional_issue_notes()
         .when_issue_coverage_is_inspected()

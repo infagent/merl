@@ -149,6 +149,12 @@ struct RenderedObject {
     body: Option<String>,
 }
 
+struct ObjectContext {
+    references: Vec<(ObjectId, ObjectRevision)>,
+    views: Vec<RenderedObject>,
+    truncated: bool,
+}
+
 /// Selects only observations and accepted state available at the trigger's position.
 ///
 /// # Errors
@@ -253,32 +259,16 @@ fn build_context_with_basis(
             body: String::from_utf8(body).map_err(|_| CompileError::InvalidResponse)?,
         });
     }
-    let selection = select_objects(store, project, basis, trigger, &sources, limits.objects)?;
-    let mut objects = Vec::new();
-    let mut object_views = Vec::new();
-    for (id, revision, payload) in selection.items {
-        let body = match payload {
-            Some(payload) => match store.read_payload(project, &payload)? {
-                PayloadRead::Available(bytes) => {
-                    payload_bytes = payload_bytes
-                        .checked_add(bytes.len())
-                        .ok_or(CompileError::InputBudget)?;
-                    if payload_bytes > limits.payload_bytes {
-                        return Err(CompileError::InputBudget);
-                    }
-                    Some(String::from_utf8(bytes).map_err(|_| CompileError::InvalidResponse)?)
-                }
-                PayloadRead::Unavailable => return Err(CompileError::NonCausalHistory),
-            },
-            None => None,
-        };
-        object_views.push(RenderedObject {
-            id: id.to_string(),
-            revision: revision.get(),
-            body,
-        });
-        objects.push((id, revision));
-    }
+    let selection = select_objects(
+        store,
+        project,
+        basis,
+        trigger,
+        &source.context_scope_id,
+        &sources,
+        limits.objects,
+    )?;
+    let object_context = render_objects(store, project, selection, &mut payload_bytes, limits)?;
     let rendered = serde_json::to_vec(&RenderedContext {
         schema: "merl.compilation-context/v1",
         context_scope_id: source.context_scope_id,
@@ -286,8 +276,8 @@ fn build_context_with_basis(
         source_observation_cutoff: source.sequence,
         trigger: trigger.to_string(),
         sources,
-        objects: object_views,
-        objects_truncated: selection.truncated,
+        objects: object_context.views,
+        objects_truncated: object_context.truncated,
     })
     .map_err(|_| CompileError::InvalidResponse)?;
     if rendered.len() > limits.input_bytes {
@@ -298,8 +288,47 @@ fn build_context_with_basis(
         interpretation_basis_revision: basis,
         source_observation_cutoff: source.sequence,
         source_window,
-        objects,
+        objects: object_context.references,
         rendered,
+    })
+}
+
+fn render_objects(
+    store: &Store,
+    project: &ProjectId,
+    selection: SelectedObjects,
+    payload_bytes: &mut usize,
+    limits: CompilerLimits,
+) -> Result<ObjectContext, CompileError> {
+    let mut references = Vec::new();
+    let mut views = Vec::new();
+    for (id, revision, payload) in selection.items {
+        let body = match payload {
+            Some(payload) => match store.read_payload(project, &payload)? {
+                PayloadRead::Available(bytes) => {
+                    *payload_bytes = payload_bytes
+                        .checked_add(bytes.len())
+                        .ok_or(CompileError::InputBudget)?;
+                    if *payload_bytes > limits.payload_bytes {
+                        return Err(CompileError::InputBudget);
+                    }
+                    Some(String::from_utf8(bytes).map_err(|_| CompileError::InvalidResponse)?)
+                }
+                PayloadRead::Unavailable => return Err(CompileError::NonCausalHistory),
+            },
+            None => None,
+        };
+        views.push(RenderedObject {
+            id: id.to_string(),
+            revision: revision.get(),
+            body,
+        });
+        references.push((id, revision));
+    }
+    Ok(ObjectContext {
+        references,
+        views,
+        truncated: selection.truncated,
     })
 }
 
@@ -308,6 +337,7 @@ fn select_objects(
     project: &ProjectId,
     basis: ProjectRevision,
     trigger: &SourceVersionId,
+    scope: &str,
     sources: &[RenderedSource],
     budget: usize,
 ) -> Result<SelectedObjects, CompileError> {
@@ -335,8 +365,12 @@ fn select_objects(
             }
         }
     }
-    let historical =
-        store.objects_at_revision(project, basis, budget.saturating_add(named.len()))?;
+    let historical = store.objects_at_revision_for_scope(
+        project,
+        basis,
+        budget.saturating_add(named.len()),
+        scope,
+    )?;
     let mut selected = named;
     let total_visible = selected.len()
         + historical
@@ -757,7 +791,7 @@ pub fn prepare_compilation(
         interpretation_basis_revision: context.interpretation_basis_revision,
         source_observation_cutoff: context.source_observation_cutoff,
         renderer_version: "json_v1",
-        selector_version: "named_handle_v1",
+        selector_version: "issue_context_v1",
         compiler_id: adapter.id(),
         compiler_version: adapter.version(),
         model_id: adapter.model(),

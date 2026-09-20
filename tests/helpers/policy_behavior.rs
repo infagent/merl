@@ -55,6 +55,7 @@ fn event(id_value: &str, object: &str, kind: &str, payload: Option<PayloadId>) -
         object: id(object),
         kind: id(kind),
         payload,
+        issue_scope: None,
     }
 }
 

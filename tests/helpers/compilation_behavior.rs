@@ -94,6 +94,7 @@ impl HistoricalIssue {
                     object: ObjectId::try_from("gain-decision").expect("object"),
                     kind: ObjectKind::try_from("decision").expect("kind"),
                     payload: Some(payload),
+                    issue_scope: None,
                 }],
             })
             .expect("accept decision");
@@ -124,6 +125,7 @@ impl HistoricalIssue {
                     object: ObjectId::try_from("future-decision").expect("object"),
                     kind: ObjectKind::try_from("decision").expect("kind"),
                     payload: Some(payload),
+                    issue_scope: None,
                 }],
             })
             .expect("accept future decision");
@@ -211,6 +213,7 @@ impl CompilationScenario {
                     object: ObjectId::try_from("future-decision").expect("object"),
                     kind: ObjectKind::try_from("decision").expect("kind"),
                     payload: Some(payload),
+                    issue_scope: None,
                 }],
             })
             .expect("accept later decision");
@@ -229,6 +232,7 @@ impl CompilationScenario {
                 object: ObjectId::try_from(format!("object-{index}").as_str()).expect("object"),
                 kind: ObjectKind::try_from("decision").expect("kind"),
                 payload: None,
+                issue_scope: None,
             })
             .collect();
         scenario
@@ -326,6 +330,7 @@ impl CompilationScenario {
                 object: ObjectId::try_from(format!("A{index}").as_str()).expect("object"),
                 kind: ObjectKind::try_from("fact").expect("kind"),
                 payload: None,
+                issue_scope: None,
             })
             .collect();
         events.push(DomainEvent::PutObject {
@@ -333,6 +338,7 @@ impl CompilationScenario {
             object: ObjectId::try_from("D18").expect("object"),
             kind: ObjectKind::try_from("decision").expect("kind"),
             payload: None,
+            issue_scope: None,
         });
         scenario
             .store
@@ -352,6 +358,51 @@ impl CompilationScenario {
         );
         scenario.note = SourceVersionId::try_from("issue-comment-v1").expect("source");
         scenario
+    }
+
+    pub fn given_many_other_issue_objects_and_one_local_decision() -> Self {
+        let mut scenario = Self::new();
+        let mut events: Vec<_> = (0..9)
+            .map(|index| DomainEvent::PutObject {
+                id: EventId::try_from(format!("other-event-{index}").as_str()).expect("event"),
+                object: ObjectId::try_from(format!("A{index}").as_str()).expect("object"),
+                kind: ObjectKind::try_from("fact").expect("kind"),
+                payload: None,
+                issue_scope: Some("issue-999".into()),
+            })
+            .collect();
+        events.push(DomainEvent::PutObject {
+            id: EventId::try_from("local-decision-event").expect("event"),
+            object: ObjectId::try_from("D18").expect("object"),
+            kind: ObjectKind::try_from("decision").expect("kind"),
+            payload: None,
+            issue_scope: Some("issue-204".into()),
+        });
+        scenario
+            .store
+            .commit_unchecked_bootstrap(&DomainEventBatch {
+                id: BatchId::try_from("scoped-state").expect("batch"),
+                project: scenario.project.clone(),
+                actor: ActorId::try_from("owner").expect("actor"),
+                occurred_at_millis: 5,
+                events,
+            })
+            .expect("accepted state");
+        scenario.capture_in_scope(
+            "local-comment",
+            "Does the prior decision still apply?",
+            "issue-204",
+            CoverageRequirement::Required,
+        );
+        scenario.note = SourceVersionId::try_from("local-comment").expect("source");
+        scenario
+    }
+
+    pub fn then_its_issue_decision_is_selected(&mut self) -> &mut Self {
+        let context = self.context.as_ref().expect("context");
+        let objects = context["objects"].as_array().expect("objects");
+        assert!(objects.iter().any(|object| object["id"] == "D18"));
+        self
     }
 
     pub fn when_the_issue_comment_is_compiled(&mut self) -> &mut Self {

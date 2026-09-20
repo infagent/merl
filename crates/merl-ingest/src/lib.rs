@@ -366,6 +366,7 @@ fn observe_terminal_issue_snapshot(
             kind: ObjectKind::try_from("provider_issue")
                 .map_err(|_| ImportError::InvalidIdentity)?,
             payload: Some(payload.clone()),
+            issue_scope: None,
         }],
     };
     let observation = ProviderObservation {

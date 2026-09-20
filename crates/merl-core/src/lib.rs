@@ -507,6 +507,8 @@ pub enum DomainEvent {
         kind: ObjectKind,
         /// Protected content, if this object has any.
         payload: Option<PayloadId>,
+        /// Source conversation this semantic object belongs to, when known.
+        issue_scope: Option<String>,
     },
 }
 
