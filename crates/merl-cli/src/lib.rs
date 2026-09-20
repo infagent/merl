@@ -52,6 +52,9 @@ impl From<StoreError> for CliError {
             StoreError::InvalidSource => "INVALID_SOURCE",
             StoreError::StaleProviderObservation => "STALE_PROVIDER_OBSERVATION",
             StoreError::InvalidCompilation => "INVALID_COMPILATION",
+            StoreError::PolicyConflict => "POLICY_CONFLICT",
+            StoreError::PolicyInputConflict => "POLICY_INPUT_CONFLICT",
+            StoreError::InvalidPolicyEvaluation => "INVALID_POLICY_EVALUATION",
             StoreError::Storage(_) => "STORAGE_ERROR",
         };
         Self {
@@ -77,6 +80,10 @@ impl From<ImportError> for CliError {
             },
             ImportError::Serialization(_) => Self {
                 code: "SERIALIZATION_ERROR",
+                message: error.to_string(),
+            },
+            ImportError::Policy(_) => Self {
+                code: "POLICY_ERROR",
                 message: error.to_string(),
             },
         }
