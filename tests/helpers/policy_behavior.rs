@@ -119,6 +119,7 @@ pub struct PolicyScenario {
     stale_result: Option<Result<Option<merl_core::ProjectRevision>, StoreError>>,
     retry_disposition: Option<PolicyDisposition>,
     persisted_file: Option<TempStoreFile>,
+    invalid_result: Option<Result<Option<merl_core::ProjectRevision>, StoreError>>,
 }
 
 impl PolicyScenario {
@@ -140,6 +141,7 @@ impl PolicyScenario {
             stale_result: None,
             retry_disposition: None,
             persisted_file: None,
+            invalid_result: None,
         }
     }
 
@@ -533,6 +535,63 @@ impl PolicyScenario {
         self
     }
 
+    pub fn when_a_batch_references_an_unavailable_payload(&mut self) -> &mut Self {
+        let prepared = evaluate(
+            &self.store,
+            &self.project,
+            &id("alice"),
+            id("invalid-eval"),
+            id("invalid-batch"),
+            NOW,
+            &self.rules,
+            &[Proposal::Command {
+                id: id("invalid-command"),
+                event: event(
+                    "invalid-event",
+                    "D9",
+                    "decision",
+                    Some(id("missing-payload")),
+                ),
+            }],
+        )
+        .expect("evaluate invalid proposal");
+        self.invalid_result = Some(prepared.commit(&mut self.store));
+        self
+    }
+
+    pub fn then_neither_state_nor_inbox_exposes_that_batch(&mut self) -> &mut Self {
+        assert!(matches!(
+            self.invalid_result,
+            Some(Err(StoreError::InvalidBatch))
+        ));
+        assert_eq!(
+            self.store
+                .project_revision(&self.project)
+                .expect("revision")
+                .get(),
+            0
+        );
+        assert!(
+            self.store
+                .object(&self.project, &id("D9"))
+                .expect("projection")
+                .is_none()
+        );
+        assert!(
+            self.store
+                .inbox_after(&self.project, &id("engineer"), 0.into())
+                .expect("inbox")
+                .is_empty()
+        );
+        assert!(
+            self.store
+                .policy_evaluation(&self.project, &id("invalid-eval"))
+                .expect("evaluation lookup")
+                .is_none()
+        );
+        self
+    }
+
     pub fn then_one_revision_and_one_inbox_entry_exist(&mut self) -> &mut Self {
         assert_eq!(
             self.result
@@ -596,5 +655,148 @@ impl PolicyScenario {
                 .expect("provenance"),
             Some(id("provider-eval"))
         );
+    }
+
+    pub fn given_an_agent_without_decision_authority() -> Self {
+        Self::new()
+    }
+
+    pub fn when_the_agent_requests_a_decision(&mut self) -> &mut Self {
+        let prepared = evaluate(
+            &self.store,
+            &self.project,
+            &id("agent"),
+            id("denied-eval"),
+            id("denied-batch"),
+            NOW,
+            &self.rules,
+            &[Proposal::Command {
+                id: id("same-command"),
+                event: event("denied-event", "D1", "decision", None),
+            }],
+        )
+        .expect("evaluate request");
+        self.result = Some(prepared.commit(&mut self.store));
+        self
+    }
+
+    pub fn then_the_request_is_rejected_without_a_project_change(&mut self) -> &mut Self {
+        assert_eq!(
+            self.result
+                .as_ref()
+                .expect("outcome")
+                .as_ref()
+                .expect("recorded"),
+            &None
+        );
+        let record = self
+            .store
+            .policy_evaluation(&self.project, &id("denied-eval"))
+            .expect("policy record")
+            .expect("evaluation");
+        assert_eq!(record.inputs[0].disposition, PolicyDisposition::Rejected);
+        assert_eq!(
+            self.store
+                .project_revision(&self.project)
+                .expect("revision")
+                .get(),
+            0
+        );
+        self
+    }
+
+    pub fn when_the_agent_reuses_the_command_id_for_another_decision(&mut self) -> &mut Self {
+        let prepared = evaluate(
+            &self.store,
+            &self.project,
+            &id("agent"),
+            id("changed-eval"),
+            id("changed-batch"),
+            NOW + 1,
+            &self.rules,
+            &[Proposal::Command {
+                id: id("same-command"),
+                event: event("changed-event", "D2", "decision", None),
+            }],
+        )
+        .expect("evaluate changed request");
+        self.stale_result = Some(prepared.commit(&mut self.store));
+        self
+    }
+
+    pub fn then_the_second_request_conflicts_without_a_project_change(&mut self) -> &mut Self {
+        assert!(matches!(
+            self.stale_result,
+            Some(Err(StoreError::PolicyInputConflict))
+        ));
+        assert_eq!(
+            self.store
+                .project_revision(&self.project)
+                .expect("revision")
+                .get(),
+            0
+        );
+        assert!(
+            self.store
+                .policy_evaluation(&self.project, &id("changed-eval"))
+                .expect("policy lookup")
+                .is_none()
+        );
+        self
+    }
+
+    pub fn when_an_administrator_performs_a_maintenance_action(&mut self) -> &mut Self {
+        let prepared = evaluate(
+            &self.store,
+            &self.project,
+            &id("admin"),
+            id("admin-eval"),
+            id("admin-batch"),
+            NOW + 2,
+            &self.rules,
+            &[Proposal::AdministrativeAction {
+                id: id("maintenance-1"),
+                event: event("admin-event", "D3", "decision", None),
+            }],
+        )
+        .expect("evaluate maintenance action");
+        self.stale_result = Some(prepared.commit(&mut self.store));
+        self
+    }
+
+    pub fn then_only_the_administrators_action_changes_accepted_state(&mut self) {
+        assert_eq!(
+            self.stale_result
+                .as_ref()
+                .expect("outcome")
+                .as_ref()
+                .expect("commit")
+                .map(ProjectRevision::get),
+            Some(1)
+        );
+        assert!(
+            self.store
+                .object(&self.project, &id("D1"))
+                .expect("first decision")
+                .is_none()
+        );
+        assert!(
+            self.store
+                .object(&self.project, &id("D2"))
+                .expect("second decision")
+                .is_none()
+        );
+        assert!(
+            self.store
+                .object(&self.project, &id("D3"))
+                .expect("maintenance result")
+                .is_some()
+        );
+        let record = self
+            .store
+            .policy_evaluation(&self.project, &id("admin-eval"))
+            .expect("policy record")
+            .expect("accepted evaluation");
+        assert_eq!(record.inputs[0].input.kind(), "administrative_action");
     }
 }

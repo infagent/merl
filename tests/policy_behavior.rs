@@ -25,7 +25,20 @@ fn unrelated_work_does_not_stale_an_evaluation_but_a_changed_dependency_does() {
 #[test]
 fn accepted_provider_facts_and_inbox_delivery_are_atomic_and_idempotent() {
     PolicyScenario::given_a_subscriber_and_a_trusted_issue_observation()
+        .when_a_batch_references_an_unavailable_payload()
+        .then_neither_state_nor_inbox_exposes_that_batch()
         .when_the_provider_observation_is_accepted_twice()
         .then_one_revision_and_one_inbox_entry_exist()
         .then_the_provider_fact_has_a_policy_provenance_path();
+}
+
+#[test]
+fn a_rejected_command_cannot_reuse_its_identity_with_new_content() {
+    PolicyScenario::given_an_agent_without_decision_authority()
+        .when_the_agent_requests_a_decision()
+        .then_the_request_is_rejected_without_a_project_change()
+        .when_the_agent_reuses_the_command_id_for_another_decision()
+        .then_the_second_request_conflicts_without_a_project_change()
+        .when_an_administrator_performs_a_maintenance_action()
+        .then_only_the_administrators_action_changes_accepted_state();
 }

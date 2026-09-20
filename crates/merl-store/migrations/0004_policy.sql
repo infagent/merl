@@ -29,6 +29,17 @@ CREATE TABLE policy_evaluation_inputs (
 
 CREATE INDEX policy_input_history ON policy_evaluation_inputs(project_id, input_kind, input_id);
 
+-- The first receipt fixes a command's meaning even when policy rejects it.
+CREATE TABLE policy_input_receipts (
+    project_id TEXT NOT NULL,
+    input_kind TEXT NOT NULL,
+    input_id TEXT NOT NULL,
+    input_digest BLOB NOT NULL CHECK (length(input_digest) = 32),
+    first_evaluation_id TEXT NOT NULL,
+    PRIMARY KEY (project_id, input_kind, input_id),
+    FOREIGN KEY (project_id, first_evaluation_id) REFERENCES policy_evaluations(project_id, id)
+) STRICT;
+
 CREATE TABLE policy_assertion_inputs (
     project_id TEXT NOT NULL,
     evaluation_id TEXT NOT NULL,
@@ -116,6 +127,10 @@ CREATE TRIGGER policy_evaluation_inputs_no_update
 BEFORE UPDATE ON policy_evaluation_inputs BEGIN SELECT RAISE(ABORT, 'policy input decision is append-only'); END;
 CREATE TRIGGER policy_evaluation_inputs_no_delete
 BEFORE DELETE ON policy_evaluation_inputs BEGIN SELECT RAISE(ABORT, 'policy input decision is append-only'); END;
+CREATE TRIGGER policy_input_receipts_no_update
+BEFORE UPDATE ON policy_input_receipts BEGIN SELECT RAISE(ABORT, 'policy input receipt is append-only'); END;
+CREATE TRIGGER policy_input_receipts_no_delete
+BEFORE DELETE ON policy_input_receipts BEGIN SELECT RAISE(ABORT, 'policy input receipt is append-only'); END;
 CREATE TRIGGER policy_assertion_inputs_no_update
 BEFORE UPDATE ON policy_assertion_inputs BEGIN SELECT RAISE(ABORT, 'policy assertion link is append-only'); END;
 CREATE TRIGGER policy_assertion_inputs_no_delete
