@@ -224,6 +224,8 @@ impl IssueHistory {
             observed_at_millis: 2,
             actor: None,
             provider_actor_id: None,
+            source_author: None,
+            provider_source_author_id: None,
             body: Some(b"Use fixed gain."),
             edit_diff: None,
             edit_deleted_at_millis: None,

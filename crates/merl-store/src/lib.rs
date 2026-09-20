@@ -167,6 +167,10 @@ pub struct SourceCapture<'a> {
     pub actor: Option<ActorId>,
     /// Stable upstream actor ID, when the provider exposes one.
     pub provider_actor_id: Option<&'a str>,
+    /// Author of the external entity, independent of who edited this version.
+    pub source_author: Option<ActorId>,
+    /// Stable provider ID of the external entity's author.
+    pub provider_source_author_id: Option<&'a str>,
     /// Exact bytes, kept in the project's erasable payload scope.
     pub body: Option<&'a [u8]>,
     /// Provider edit diff, also protected because it can contain source text.
@@ -220,6 +224,12 @@ pub struct StoredSourceVersion {
     pub observed_at_millis: i64,
     /// Stable upstream actor ID, if available.
     pub provider_actor_id: Option<String>,
+    /// Author of the external entity, which may differ from the edit actor.
+    pub source_author: Option<ActorId>,
+    /// Actor who created this source version or edit.
+    pub version_actor: Option<ActorId>,
+    /// Stable provider ID of the entity author, when known.
+    pub provider_source_author_id: Option<String>,
     /// Effective compilation mode selected at capture.
     pub compilation_mode: CompilationMode,
     /// Effective coverage requirement selected at capture.
@@ -341,7 +351,7 @@ pub struct StructuralAssertion {
     /// Confidence in thousandths, avoiding float ambiguity in the event log.
     pub confidence_millis: u16,
     /// Speaker who made this assertion, not a quoted authority.
-    pub asserted_by: String,
+    pub asserted_by: Option<String>,
     /// Quoted or relayed actor, if one was named.
     pub attributed_to: Option<String>,
     /// Whether the attribution was independently verified.
@@ -405,6 +415,15 @@ pub struct StoredCompilationContext {
     pub source_window: Vec<SourceVersionId>,
     /// Historical object revisions selected for that input.
     pub objects: Vec<(ObjectId, ObjectRevision)>,
+}
+
+/// Bounded historical objects and whether the selector omitted more.
+#[derive(Debug)]
+pub struct SelectedObjects {
+    /// The chosen historical object revisions, sorted by stable object ID.
+    pub items: Vec<(ObjectId, ObjectRevision, Option<PayloadId>)>,
+    /// True when other objects existed at the same basis revision.
+    pub truncated: bool,
 }
 
 /// One SQLite connection used as a local serialized project authority.
@@ -718,7 +737,8 @@ impl Store {
                     occurred_at_millis, created_at_millis, upstream_updated_at_millis, observed_at_millis,
                     provider_actor_id, compilation_mode, coverage_requirement,
                     capture_policy_version, body_digest, missing_body_reason, payload_id,
-                    edit_diff_payload_id, edit_deleted_at_millis, context_scope_id
+                    edit_diff_payload_id, edit_deleted_at_millis, context_scope_id,
+                    source_author_id, provider_source_author_id, actor_id
              FROM source_versions WHERE project_id = ?1 AND id = ?2",
                 params![project.as_str(), id.as_str()],
                 RawSourceVersion::from_row,
@@ -757,6 +777,17 @@ impl Store {
                 upstream_updated_at_millis: row.upstream_updated_at_millis,
                 observed_at_millis: row.observed_at_millis,
                 provider_actor_id: row.provider_actor_id,
+                source_author: row
+                    .source_author_id
+                    .map(|value| ActorId::try_from(value.as_str()))
+                    .transpose()
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                version_actor: row
+                    .version_actor_id
+                    .map(|value| ActorId::try_from(value.as_str()))
+                    .transpose()
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                provider_source_author_id: row.provider_source_author_id,
                 compilation_mode: CompilationMode::try_from(row.compilation_mode.as_str())
                     .map_err(|_| StoreError::CorruptHistory)?,
                 coverage_requirement: CoverageRequirement::try_from(
@@ -941,11 +972,12 @@ impl Store {
         project: &ProjectId,
         revision: ProjectRevision,
         limit: usize,
-    ) -> Result<Vec<(ObjectId, ObjectRevision, Option<PayloadId>)>, StoreError> {
+    ) -> Result<SelectedObjects, StoreError> {
         if revision > self.project_revision(project)? || limit == 0 {
             return Err(StoreError::InvalidCompilation);
         }
         let limit = i64::try_from(limit).map_err(|_| StoreError::InvalidCompilation)?;
+        let lookahead = limit.checked_add(1).ok_or(StoreError::InvalidCompilation)?;
         let mut statement = self.connection.prepare(
             "WITH history AS (
                SELECT domain_events.object_id, domain_events.payload_id,
@@ -960,7 +992,7 @@ impl Store {
                WHERE rank = 1 ORDER BY object_id LIMIT ?3",
         )?;
         let basis = i64::try_from(revision.get()).map_err(|_| StoreError::InvalidCompilation)?;
-        let mut rows = statement.query(params![project.as_str(), basis, limit])?;
+        let mut rows = statement.query(params![project.as_str(), basis, lookahead])?;
         let mut objects = Vec::new();
         while let Some(row) = rows.next()? {
             let id: String = row.get(0)?;
@@ -978,7 +1010,13 @@ impl Store {
                     .map_err(|_| StoreError::CorruptHistory)?,
             ));
         }
-        Ok(objects)
+        let truncated =
+            objects.len() > usize::try_from(limit).map_err(|_| StoreError::InvalidCompilation)?;
+        objects.truncate(usize::try_from(limit).map_err(|_| StoreError::InvalidCompilation)?);
+        Ok(SelectedObjects {
+            items: objects,
+            truncated,
+        })
     }
 
     /// Persists work and its exact causal input before the compiler runs.
@@ -1439,7 +1477,7 @@ impl Store {
                 row.get::<_, String>(7)?,
                 row.get::<_, String>(8)?,
                 row.get::<_, i64>(9)?,
-                row.get::<_, String>(10)?,
+                row.get::<_, Option<String>>(10)?,
                 row.get::<_, Option<String>>(11)?,
                 row.get::<_, i64>(12)?,
             ))
@@ -2055,8 +2093,8 @@ fn insert_source_version(
              occurred_at_millis, created_at_millis, upstream_updated_at_millis, observed_at_millis, actor_id, provider_actor_id,
              body_digest, edit_diff_digest, capture_digest, payload_id, edit_diff_payload_id, edit_deleted_at_millis, missing_body_reason,
              compilation_mode, coverage_requirement, capture_policy_version, interpretation_basis_revision,
-             interpretation_basis_known
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
+             interpretation_basis_known, source_author_id, provider_source_author_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)",
         params![
             project.as_str(), capture.version.as_str(), capture.source.as_str(),
             capture.provider_entity_id, capture.context_scope_id, capture.provider_version_id,
@@ -2070,7 +2108,8 @@ fn insert_source_version(
             payloads.edit_diff.map(PayloadId::as_str), capture.edit_deleted_at_millis,
             capture.missing_body_reason.map(MissingSourceBody::as_str),
             capture.compilation_mode.as_str(), capture.coverage_requirement.as_str(),
-            capture.policy_version.as_str(), basis.revision, i64::from(basis.known)
+            capture.policy_version.as_str(), basis.revision, i64::from(basis.known),
+            capture.source_author.as_ref().map(ActorId::as_str), capture.provider_source_author_id
         ],
     )?;
     Ok(())
@@ -2093,6 +2132,9 @@ struct RawSourceVersion {
     upstream_updated_at_millis: Option<i64>,
     observed_at_millis: i64,
     provider_actor_id: Option<String>,
+    source_author_id: Option<String>,
+    provider_source_author_id: Option<String>,
+    version_actor_id: Option<String>,
     compilation_mode: String,
     coverage_requirement: String,
     capture_policy_version: String,
@@ -2130,6 +2172,9 @@ impl RawSourceVersion {
             edit_diff_payload_id: row.get(21)?,
             edit_deleted_at_millis: row.get(22)?,
             context_scope_id: row.get(23)?,
+            source_author_id: row.get(24)?,
+            provider_source_author_id: row.get(25)?,
+            version_actor_id: row.get(26)?,
         })
     }
 }
@@ -2171,6 +2216,9 @@ fn validate_source_capture(capture: &SourceCapture<'_>) -> Result<(), StoreError
         || !valid_provider_id(capture.provider_version_id)
         || capture
             .provider_actor_id
+            .is_some_and(|id| !valid_provider_id(id))
+        || capture
+            .provider_source_author_id
             .is_some_and(|id| !valid_provider_id(id))
         || Sha256::digest(capture.binding.provider_namespace_id.as_bytes()).as_slice()
             != capture.binding.namespace_digest
@@ -2268,10 +2316,13 @@ fn insert_assertions(
                 assertion.act.as_str(),
                 assertion.epistemic_basis.as_str(),
                 assertion.polarity.as_str(),
-                assertion.asserted_by.as_str(),
             ]
             .iter()
             .all(|value| valid_record_id(value))
+            || assertion
+                .asserted_by
+                .as_deref()
+                .is_some_and(|value| !valid_record_id(value))
             || assertion
                 .attributed_to
                 .as_deref()
@@ -2343,8 +2394,8 @@ fn source_capture_digest(
         digest.update((value.len() as u64).to_be_bytes());
         digest.update(value.as_bytes());
     }
-    // Poll time, upstream update time, and effective policy belong to the first
-    // capture. A metadata-only provider update can leave the body version intact.
+    // Author metadata joins poll time and effective policy as first-capture
+    // provenance. Excluding it keeps retries of pre-migration versions stable.
     for value in [capture.created_at_millis, capture.occurred_at_millis] {
         digest.update(value.to_be_bytes());
     }

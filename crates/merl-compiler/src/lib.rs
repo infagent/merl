@@ -124,6 +124,7 @@ struct RenderedContext {
     trigger: String,
     sources: Vec<RenderedSource>,
     objects: Vec<RenderedObject>,
+    objects_truncated: bool,
 }
 
 #[derive(JsonSchema, Serialize)]
@@ -131,6 +132,10 @@ struct RenderedContext {
 struct RenderedSource {
     id: String,
     observation: u64,
+    source_author_id: Option<String>,
+    version_actor_id: Option<String>,
+    created_at_millis: i64,
+    occurred_at_millis: i64,
     body: String,
 }
 
@@ -239,13 +244,17 @@ fn build_context_with_basis(
         sources.push(RenderedSource {
             id: item.id.to_string(),
             observation: item.sequence,
+            source_author_id: item.source_author.map(|actor| actor.to_string()),
+            version_actor_id: item.version_actor.map(|actor| actor.to_string()),
+            created_at_millis: item.created_at_millis,
+            occurred_at_millis: item.occurred_at_millis,
             body: String::from_utf8(body).map_err(|_| CompileError::InvalidResponse)?,
         });
     }
     let historical = store.objects_at_revision(project, basis, limits.objects)?;
     let mut objects = Vec::new();
     let mut object_views = Vec::new();
-    for (id, revision, payload) in historical {
+    for (id, revision, payload) in historical.items {
         let body = match payload {
             Some(payload) => match store.read_payload(project, &payload)? {
                 PayloadRead::Available(bytes) => {
@@ -276,6 +285,7 @@ fn build_context_with_basis(
         trigger: trigger.to_string(),
         sources,
         objects: object_views,
+        objects_truncated: historical.truncated,
     })
     .map_err(|_| CompileError::InvalidResponse)?;
     if rendered.len() > limits.input_bytes {
@@ -367,12 +377,8 @@ pub struct Assertion {
     pub polarity: String,
     /// Confidence in thousandths.
     pub confidence_millis: u16,
-    /// Speaker of the assertion.
-    pub asserted_by: String,
     /// Quoted or relayed actor, if any.
     pub attributed_to: Option<String>,
-    /// Whether the original actor was independently verified.
-    pub attribution_verified: bool,
 }
 
 /// A bounded request for more source context.
@@ -694,7 +700,7 @@ pub fn prepare_compilation(
         interpretation_basis_revision: context.interpretation_basis_revision,
         source_observation_cutoff: context.source_observation_cutoff,
         renderer_version: "json_v1",
-        selector_version: "recent_v1",
+        selector_version: "object_id_prefix_v1",
         compiler_id: adapter.id(),
         compiler_version: adapter.version(),
         model_id: adapter.model(),
@@ -862,14 +868,9 @@ fn validate_response(
                 || item.span_start >= item.span_end
                 || !source_span_valid(&rendered, &item.source, item.span_start, item.span_end)
                 || item.confidence_millis > 1000
-                || ![
-                    &item.subject,
-                    &item.predicate,
-                    &item.value,
-                    &item.asserted_by,
-                ]
-                .iter()
-                .all(|value| valid_id(value))
+                || ![&item.subject, &item.predicate, &item.value]
+                    .iter()
+                    .all(|value| valid_id(value))
                 || item
                     .attributed_to
                     .as_ref()
@@ -886,6 +887,15 @@ fn validate_response(
             {
                 return Err(CompileError::InvalidResponse);
             }
+            let asserted_by = rendered["sources"]
+                .as_array()
+                .and_then(|sources| {
+                    sources
+                        .iter()
+                        .find(|candidate| candidate["id"] == item.source)
+                })
+                .and_then(|source| source["source_author_id"].as_str())
+                .map(str::to_owned);
             Ok(StructuralAssertion {
                 source,
                 span_start: item.span_start,
@@ -897,9 +907,9 @@ fn validate_response(
                 epistemic_basis: item.epistemic_basis,
                 polarity: item.polarity,
                 confidence_millis: item.confidence_millis,
-                asserted_by: item.asserted_by,
+                asserted_by,
                 attributed_to: item.attributed_to,
-                attribution_verified: item.attribution_verified,
+                attribution_verified: false,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -955,7 +965,7 @@ mod tests {
             "source":"s1", "span_start":0, "span_end":5, "subject":"capture",
             "predicate":"gain", "value":"fixed", "act":"report",
             "epistemic_basis":"observed", "polarity":"positive", "confidence_millis":900,
-            "asserted_by":"alice", "attributed_to":null, "attribution_verified":false
+            "attributed_to":null
         }]});
         assert_eq!(
             validate_response(&serde_json::to_vec(&valid).expect("JSON"), &context, limits)
@@ -968,6 +978,11 @@ mod tests {
             {
                 let mut value = valid.clone();
                 value["rationale"] = serde_json::json!("essay");
+                value
+            },
+            {
+                let mut value = valid.clone();
+                value["assertions"][0]["attribution_verified"] = serde_json::json!(true);
                 value
             },
             {
