@@ -4,9 +4,9 @@ use std::{collections::HashSet, error::Error, fmt};
 
 use merl_core::{
     ActorId, BatchId, DomainEvent, DomainEventBatch, PayloadId, PolicyDisposition,
-    PolicyEvaluation, PolicyEvaluationId, PolicyInput, PolicyInputDecision, PolicyInputId,
-    PolicyRead, PolicyVersion, PolicyWrite, ProjectId, ProjectRevision, ProviderObservation,
-    ReasonCode,
+    PolicyEvaluation, PolicyEvaluationId, PolicyEventOrigin, PolicyInput, PolicyInputDecision,
+    PolicyInputId, PolicyRead, PolicyVersion, PolicyWrite, ProjectId, ProjectRevision,
+    ProviderObservation, ReasonCode,
 };
 use merl_store::{Store, StoreError};
 use sha2::{Digest, Sha256};
@@ -191,6 +191,7 @@ pub fn evaluate(
     let mut events = Vec::new();
     let mut reads = Vec::new();
     let mut writes = Vec::new();
+    let mut event_origins = Vec::new();
     let mut targets = HashSet::new();
     let mut provider = None;
     for proposal in proposals {
@@ -205,6 +206,7 @@ pub fn evaluate(
             } else {
                 disposition_for(store, project, actor, rules, proposal)?
             };
+        let input_index = u32::try_from(inputs.len()).map_err(|_| PolicyError::InvalidProposal)?;
         inputs.push(PolicyInputDecision {
             input,
             input_digest: digest,
@@ -225,6 +227,11 @@ pub fn evaluate(
             writes.push(PolicyWrite {
                 object: object.clone(),
                 expected_revision: revision,
+            });
+            let DomainEvent::PutObject { id, .. } = proposal.event();
+            event_origins.push(PolicyEventOrigin {
+                input_index,
+                event: id.clone(),
             });
             events.push(proposal.event().clone());
             if let Proposal::ProviderObservation { observation, .. } = proposal
@@ -252,6 +259,7 @@ pub fn evaluate(
             inputs,
             reads,
             writes,
+            event_origins,
             batch,
         },
         provider,

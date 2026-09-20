@@ -323,6 +323,15 @@ pub struct PolicyWrite {
     pub expected_revision: Option<ObjectRevision>,
 }
 
+/// One accepted input's exact contribution to an event in its batch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyEventOrigin {
+    /// Position of the accepted input in the evaluation.
+    pub input_index: u32,
+    /// Event produced by that input.
+    pub event: EventId,
+}
+
 /// Auditable decision prepared against accepted state before the final transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PolicyEvaluation {
@@ -344,6 +353,8 @@ pub struct PolicyEvaluation {
     pub reads: Vec<PolicyRead>,
     /// Targets proposed for accepted mutation.
     pub writes: Vec<PolicyWrite>,
+    /// Exact input-to-event links for accepted changes.
+    pub event_origins: Vec<PolicyEventOrigin>,
     /// Accepted events, if this evaluation changes project state.
     pub batch: Option<DomainEventBatch>,
 }

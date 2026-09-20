@@ -12,7 +12,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -149,6 +149,17 @@ pub struct RecordedPolicyEvaluation {
     pub events: Vec<merl_core::EventId>,
 }
 
+/// Exact accepted input responsible for an object's latest event.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObjectPolicyOrigin {
+    /// Accepted event that last changed the object.
+    pub event: merl_core::EventId,
+    /// Evaluation that accepted the event.
+    pub evaluation: PolicyEvaluationId,
+    /// Input within that evaluation that produced the event.
+    pub input: merl_core::PolicyInput,
+}
+
 /// Structural reason a prepared policy result could not commit.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PolicyConflictDetail {
@@ -160,6 +171,11 @@ pub struct PolicyConflictDetail {
     pub expected_revision: Option<i64>,
     /// Revision observed by the authority at commit time, when applicable.
     pub actual_revision: Option<i64>,
+}
+
+enum PolicyOverlap {
+    Duplicate,
+    Conflict(PolicyConflictDetail),
 }
 
 struct PolicyHeader {
@@ -537,44 +553,27 @@ impl Store {
         if !(0..=SCHEMA_VERSION).contains(&version) {
             return Err(StoreError::UnsupportedSchema(version));
         }
-        if version == 0 {
+        if version < SCHEMA_VERSION {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            transaction.execute_batch(include_str!("../migrations/0001_initial.sql"))?;
-            transaction.execute_batch(include_str!("../migrations/0002_sources.sql"))?;
-            transaction.execute_batch(include_str!("../migrations/0003_compilation.sql"))?;
-            transaction.execute_batch(include_str!("../migrations/0004_policy.sql"))?;
-            transaction.execute_batch(include_str!("../migrations/0005_policy_conflicts.sql"))?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-            transaction.commit()?;
-        } else if version == 1 {
-            let transaction =
-                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            transaction.execute_batch(include_str!("../migrations/0002_sources.sql"))?;
-            transaction.execute_batch(include_str!("../migrations/0003_compilation.sql"))?;
-            transaction.execute_batch(include_str!("../migrations/0004_policy.sql"))?;
-            transaction.execute_batch(include_str!("../migrations/0005_policy_conflicts.sql"))?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-            transaction.commit()?;
-        } else if version == 2 {
-            let transaction =
-                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            transaction.execute_batch(include_str!("../migrations/0003_compilation.sql"))?;
-            transaction.execute_batch(include_str!("../migrations/0004_policy.sql"))?;
-            transaction.execute_batch(include_str!("../migrations/0005_policy_conflicts.sql"))?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-            transaction.commit()?;
-        } else if version == 3 {
-            let transaction =
-                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            transaction.execute_batch(include_str!("../migrations/0004_policy.sql"))?;
-            transaction.execute_batch(include_str!("../migrations/0005_policy_conflicts.sql"))?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-            transaction.commit()?;
-        } else if version == 4 {
-            let transaction =
-                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            transaction.execute_batch(include_str!("../migrations/0005_policy_conflicts.sql"))?;
+            if version < 1 {
+                transaction.execute_batch(include_str!("../migrations/0001_initial.sql"))?;
+            }
+            if version < 2 {
+                transaction.execute_batch(include_str!("../migrations/0002_sources.sql"))?;
+            }
+            if version < 3 {
+                transaction.execute_batch(include_str!("../migrations/0003_compilation.sql"))?;
+            }
+            if version < 4 {
+                transaction.execute_batch(include_str!("../migrations/0004_policy.sql"))?;
+            }
+            if version < 5 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0005_policy_conflicts.sql"))?;
+            }
+            transaction
+                .execute_batch(include_str!("../migrations/0006_policy_event_origins.sql"))?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         }
@@ -1726,7 +1725,26 @@ impl Store {
                 .transpose();
         }
         let current = next_revision(&transaction, &evaluation.project)? - 1;
-        validate_policy_inputs(&transaction, evaluation)?;
+        let duplicate_inputs = validate_policy_inputs(&transaction, evaluation)?;
+        if let Some(overlap) = policy_overlap(evaluation, &duplicate_inputs) {
+            let conflict = match &overlap {
+                PolicyOverlap::Duplicate => None,
+                PolicyOverlap::Conflict(detail) => Some(detail),
+            };
+            insert_policy_record(
+                &transaction,
+                evaluation,
+                digest,
+                None,
+                conflict,
+                conflict.is_none(),
+            )?;
+            transaction.commit()?;
+            return match overlap {
+                PolicyOverlap::Duplicate => Ok(None),
+                PolicyOverlap::Conflict(_) => Err(StoreError::PolicyConflict),
+            };
+        }
         let conflict = if to_sql_revision(evaluation.basis_project_revision)? > current {
             Some(PolicyConflictDetail {
                 reason_code: "basis_ahead".into(),
@@ -1738,7 +1756,14 @@ impl Store {
             validate_policy_dependencies(&transaction, evaluation)?
         };
         if let Some(conflict) = conflict {
-            insert_policy_record(&transaction, evaluation, digest, None, Some(&conflict))?;
+            insert_policy_record(
+                &transaction,
+                evaluation,
+                digest,
+                None,
+                Some(&conflict),
+                false,
+            )?;
             transaction.commit()?;
             return Err(StoreError::PolicyConflict);
         }
@@ -1749,7 +1774,7 @@ impl Store {
         } else {
             None
         };
-        insert_policy_record(&transaction, evaluation, digest, revision, None)?;
+        insert_policy_record(&transaction, evaluation, digest, revision, None, false)?;
         if let (Some(batch), Some(revision)) = (&evaluation.batch, revision) {
             transaction.execute(
                 "INSERT INTO inbox_entries (project_id, batch_id, agent_id, project_revision)
@@ -2051,6 +2076,51 @@ impl Store {
                 PolicyEvaluationId::try_from(value.as_str()).map_err(|_| StoreError::CorruptHistory)
             })
             .transpose()
+    }
+
+    /// Finds the exact policy input that produced an object's latest event.
+    ///
+    /// Kernel bootstrap fixtures have no policy path and return `None`.
+    ///
+    /// # Errors
+    /// Returns an error if an accepted event's policy link is incomplete.
+    pub fn object_policy_origin(
+        &self,
+        project: &ProjectId,
+        object: &ObjectId,
+    ) -> Result<Option<ObjectPolicyOrigin>, StoreError> {
+        let row: Option<(String, Option<String>, Option<i64>)> = self
+            .connection
+            .query_row(
+                "SELECT e.id,p.evaluation_id,p.input_index FROM domain_events e
+                 JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
+                 LEFT JOIN policy_evaluation_domain_events p
+                    ON p.project_id=e.project_id AND p.event_id=e.id
+                 WHERE e.project_id=?1 AND e.object_id=?2
+                 ORDER BY b.revision DESC,e.event_index DESC LIMIT 1",
+                params![project.as_str(), object.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((event, Some(evaluation), Some(input_index))) = row else {
+            return Ok(None);
+        };
+        let evaluation = PolicyEvaluationId::try_from(evaluation.as_str())
+            .map_err(|_| StoreError::CorruptHistory)?;
+        let record = self
+            .policy_evaluation(project, &evaluation)?
+            .ok_or(StoreError::CorruptHistory)?;
+        let index = usize::try_from(input_index).map_err(|_| StoreError::CorruptHistory)?;
+        let input = record.inputs.get(index).ok_or(StoreError::CorruptHistory)?;
+        if input.disposition != PolicyDisposition::Accepted {
+            return Err(StoreError::CorruptHistory);
+        }
+        Ok(Some(ObjectPolicyOrigin {
+            event: merl_core::EventId::try_from(event.as_str())
+                .map_err(|_| StoreError::CorruptHistory)?,
+            evaluation,
+            input: input.input.clone(),
+        }))
     }
 
     /// Seeds a kernel fixture without policy provenance.
@@ -2371,6 +2441,37 @@ fn validate_policy_shape(
             {
                 return Err(StoreError::InvalidPolicyEvaluation);
             }
+            if evaluation.event_origins.len() != batch.events.len() {
+                return Err(StoreError::InvalidPolicyEvaluation);
+            }
+            let mut origin_inputs = HashSet::new();
+            let mut origin_events = HashSet::new();
+            for origin in &evaluation.event_origins {
+                let index = usize::try_from(origin.input_index)
+                    .map_err(|_| StoreError::InvalidPolicyEvaluation)?;
+                if !evaluation
+                    .inputs
+                    .get(index)
+                    .is_some_and(|input| input.disposition == PolicyDisposition::Accepted)
+                    || !origin_inputs.insert(index)
+                    || !origin_events.insert(origin.event.as_str())
+                {
+                    return Err(StoreError::InvalidPolicyEvaluation);
+                }
+            }
+            if evaluation
+                .inputs
+                .iter()
+                .filter(|input| input.disposition == PolicyDisposition::Accepted)
+                .count()
+                != origin_inputs.len()
+                || !batch.events.iter().all(|event| {
+                    let DomainEvent::PutObject { id, .. } = event;
+                    origin_events.contains(id.as_str())
+                })
+            {
+                return Err(StoreError::InvalidPolicyEvaluation);
+            }
             if let Some(provider) = provider {
                 validate_provider_batch(batch, provider)?;
                 if !evaluation.inputs.iter().any(|input| {
@@ -2387,7 +2488,7 @@ fn validate_policy_shape(
                 return Err(StoreError::InvalidPolicyEvaluation);
             }
         }
-        (None, None) if evaluation.writes.is_empty() => {}
+        (None, None) if evaluation.writes.is_empty() && evaluation.event_origins.is_empty() => {}
         _ => return Err(StoreError::InvalidPolicyEvaluation),
     }
     Ok(())
@@ -2396,7 +2497,8 @@ fn validate_policy_shape(
 fn validate_policy_inputs(
     transaction: &Transaction<'_>,
     evaluation: &PolicyEvaluation,
-) -> Result<(), StoreError> {
+) -> Result<Vec<bool>, StoreError> {
+    let mut duplicates = Vec::with_capacity(evaluation.inputs.len());
     for input in &evaluation.inputs {
         let receipt: Option<Vec<u8>> = transaction
             .query_row(
@@ -2413,6 +2515,7 @@ fn validate_policy_inputs(
         if receipt.is_some_and(|digest| digest != input.input_digest) {
             return Err(StoreError::PolicyInputConflict);
         }
+        let mut duplicate = false;
         if input.disposition == PolicyDisposition::Accepted {
             let prior: Option<Vec<u8>> = transaction
                 .query_row(
@@ -2426,15 +2529,49 @@ fn validate_policy_inputs(
                     |row| row.get(0),
                 )
                 .optional()?;
-            if prior.is_some() {
-                return Err(StoreError::PolicyInputConflict);
+            if let Some(prior_digest) = prior {
+                if prior_digest != input.input_digest {
+                    return Err(StoreError::PolicyInputConflict);
+                }
+                duplicate = true;
             }
         }
         if let merl_core::PolicyInput::ObservedAssertion { run, index, .. } = &input.input {
             validate_observed_input(transaction, &evaluation.project, run, *index)?;
+            if input.disposition == PolicyDisposition::Accepted {
+                duplicate |= transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM accepted_assertions
+                     WHERE project_id=?1 AND run_id=?2 AND assertion_index=?3)",
+                    params![evaluation.project.as_str(), run.as_str(), i64::from(*index)],
+                    |row| row.get::<_, bool>(0),
+                )?;
+            }
         }
+        duplicates.push(duplicate);
     }
-    Ok(())
+    Ok(duplicates)
+}
+
+fn policy_overlap(evaluation: &PolicyEvaluation, duplicates: &[bool]) -> Option<PolicyOverlap> {
+    let accepted_count = evaluation
+        .inputs
+        .iter()
+        .filter(|input| input.disposition == PolicyDisposition::Accepted)
+        .count();
+    let duplicate_count = duplicates.iter().filter(|duplicate| **duplicate).count();
+    if duplicate_count == 0 {
+        return None;
+    }
+    if duplicate_count == accepted_count {
+        return Some(PolicyOverlap::Duplicate);
+    }
+    let index = duplicates.iter().position(|duplicate| *duplicate)?;
+    Some(PolicyOverlap::Conflict(PolicyConflictDetail {
+        reason_code: "accepted_input_overlap".into(),
+        target_id: Some(evaluation.inputs[index].input.id().as_str().into()),
+        expected_revision: None,
+        actual_revision: None,
+    }))
 }
 
 fn validate_policy_dependencies(
@@ -2533,26 +2670,28 @@ fn insert_policy_record(
     digest: [u8; 32],
     revision: Option<i64>,
     conflict: Option<&PolicyConflictDetail>,
+    duplicate: bool,
 ) -> Result<(), StoreError> {
     transaction.execute(
         "INSERT INTO policy_evaluations (project_id,id,actor_id,policy_version,policy_config_digest,basis_project_revision,evaluation_digest,batch_id,committed_revision)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![evaluation.project.as_str(), evaluation.id.as_str(), evaluation.actor.as_str(),
             evaluation.version.as_str(), evaluation.configuration_digest.as_slice(), to_sql_revision(evaluation.basis_project_revision)?, digest.as_slice(),
-            evaluation.batch.as_ref().filter(|_| conflict.is_none()).map(|batch| batch.id.as_str()), revision],
+            evaluation.batch.as_ref().filter(|_| conflict.is_none() && !duplicate).map(|batch| batch.id.as_str()), revision],
     )?;
     if let Some(conflict) = conflict {
         insert_policy_conflict(transaction, evaluation, conflict)?;
     }
     for (index, input) in evaluation.inputs.iter().enumerate() {
-        let disposition = if conflict.is_some() && input.disposition == PolicyDisposition::Accepted
-        {
-            PolicyDisposition::Conflict
-        } else {
-            input.disposition
+        let disposition = match (conflict, duplicate, input.disposition) {
+            (Some(_), _, PolicyDisposition::Accepted) => PolicyDisposition::Conflict,
+            (None, true, PolicyDisposition::Accepted) => PolicyDisposition::Duplicate,
+            _ => input.disposition,
         };
         let reason = if disposition == PolicyDisposition::Conflict {
             conflict.map_or(input.reason.as_str(), |detail| detail.reason_code.as_str())
+        } else if duplicate && input.disposition == PolicyDisposition::Accepted {
+            "already_accepted"
         } else {
             input.reason.as_str()
         };
@@ -2621,12 +2760,12 @@ fn insert_policy_record(
             params![evaluation.project.as_str(), evaluation.id.as_str(), write.object.as_str(), write.expected_revision.map(|value| i64::try_from(value.get()).map_err(|_| StoreError::CorruptHistory)).transpose()?],
         )?;
     }
-    if let Some(batch) = evaluation.batch.as_ref().filter(|_| conflict.is_none()) {
-        for event in &batch.events {
-            let DomainEvent::PutObject { id, .. } = event;
+    if conflict.is_none() && !duplicate {
+        for origin in &evaluation.event_origins {
             transaction.execute(
-                "INSERT INTO policy_evaluation_domain_events (project_id,evaluation_id,event_id) VALUES (?1,?2,?3)",
-                params![evaluation.project.as_str(), evaluation.id.as_str(), id.as_str()],
+                "INSERT INTO policy_evaluation_domain_events (project_id,evaluation_id,event_id,input_index)
+                 VALUES (?1,?2,?3,?4)",
+                params![evaluation.project.as_str(), evaluation.id.as_str(), origin.event.as_str(), i64::from(origin.input_index)],
             )?;
         }
     }
@@ -2701,6 +2840,11 @@ fn policy_evaluation_digest(
                 .map_or(0, ObjectRevision::get)
                 .to_be_bytes(),
         );
+    }
+    part(&(evaluation.event_origins.len() as u64).to_be_bytes());
+    for origin in &evaluation.event_origins {
+        part(&origin.input_index.to_be_bytes());
+        part(origin.event.as_str().as_bytes());
     }
     part(&[u8::from(evaluation.batch.is_some())]);
     if let Some(batch) = &evaluation.batch {
@@ -3399,5 +3543,63 @@ mod tests {
         let project = merl_core::ProjectId::try_from("P1").expect("project ID");
         assert_eq!(store.project_revision(&project).expect("revision").get(), 7);
         assert_eq!(store.source_observation_head(&project).expect("head"), 0);
+    }
+
+    #[test]
+    fn a_prior_policy_store_keeps_each_events_exact_input_during_migration() {
+        let connection = Connection::open_in_memory().expect("open SQLite");
+        for migration in [
+            include_str!("../migrations/0001_initial.sql"),
+            include_str!("../migrations/0002_sources.sql"),
+            include_str!("../migrations/0003_compilation.sql"),
+            include_str!("../migrations/0004_policy.sql"),
+            include_str!("../migrations/0005_policy_conflicts.sql"),
+        ] {
+            connection
+                .execute_batch(migration)
+                .expect("create prior schema");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO projects (id,current_revision) VALUES ('P1',1);
+                 INSERT INTO domain_event_batches (project_id,id,revision,actor_id,occurred_at_millis)
+                   VALUES ('P1','B1',1,'alice',1);
+                 INSERT INTO domain_events (project_id,batch_id,id,event_index,event_kind,object_id,object_kind)
+                   VALUES ('P1','B1','E-z',0,'put_object','D1','decision'),
+                          ('P1','B1','E-a',1,'put_object','D2','decision');
+                 INSERT INTO policy_evaluations
+                   (project_id,id,actor_id,policy_version,policy_config_digest,basis_project_revision,
+                    evaluation_digest,batch_id,committed_revision)
+                   VALUES ('P1','PE1','alice','v1',zeroblob(32),0,zeroblob(32),'B1',1);
+                 INSERT INTO policy_evaluation_inputs
+                   (project_id,evaluation_id,input_index,input_kind,input_id,input_digest,disposition,reason_code)
+                   VALUES ('P1','PE1',0,'command','C-z',zeroblob(32),'accepted','authorized_command'),
+                          ('P1','PE1',1,'command','C-a',zeroblob(32),'accepted','authorized_command');
+                 INSERT INTO policy_evaluation_domain_events (project_id,evaluation_id,event_id)
+                   VALUES ('P1','PE1','E-z'),('P1','PE1','E-a');",
+            )
+            .expect("seed prior policy history");
+        connection
+            .pragma_update(None, "user_version", 5)
+            .expect("mark prior schema");
+
+        let store = Store::from_connection(connection).expect("migrate event origins");
+        let project = merl_core::ProjectId::try_from("P1").expect("project ID");
+        let first = store
+            .object_policy_origin(
+                &project,
+                &merl_core::ObjectId::try_from("D1").expect("object"),
+            )
+            .expect("first origin")
+            .expect("first event");
+        let second = store
+            .object_policy_origin(
+                &project,
+                &merl_core::ObjectId::try_from("D2").expect("object"),
+            )
+            .expect("second origin")
+            .expect("second event");
+        assert_eq!(first.input.id().as_str(), "C-z");
+        assert_eq!(second.input.id().as_str(), "C-a");
     }
 }
