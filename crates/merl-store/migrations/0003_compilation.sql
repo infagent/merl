@@ -6,6 +6,16 @@ ALTER TABLE source_versions ADD COLUMN context_scope_id TEXT NOT NULL DEFAULT ''
 CREATE INDEX source_versions_by_context_scope
     ON source_versions(project_id, context_scope_id, sequence);
 
+CREATE TABLE replay_positions (
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    source_version_id TEXT NOT NULL,
+    source_sequence INTEGER NOT NULL,
+    interpretation_basis_revision INTEGER NOT NULL CHECK (interpretation_basis_revision >= 0),
+    PRIMARY KEY (project_id, source_version_id),
+    UNIQUE (project_id, source_sequence),
+    FOREIGN KEY (project_id, source_version_id) REFERENCES source_versions(project_id, id)
+) STRICT;
+
 CREATE TABLE compilation_runs (
     project_id TEXT NOT NULL REFERENCES projects(id),
     id TEXT NOT NULL,
@@ -23,6 +33,8 @@ CREATE TABLE compilation_runs (
     max_context_requests INTEGER NOT NULL,
     max_expansion_rounds INTEGER NOT NULL,
     max_payload_bytes INTEGER NOT NULL,
+    max_source_window INTEGER NOT NULL,
+    max_objects INTEGER NOT NULL,
     compiler_id TEXT NOT NULL,
     compiler_version TEXT NOT NULL,
     model_id TEXT NOT NULL,
@@ -39,7 +51,7 @@ CREATE INDEX compilation_runs_by_source ON compilation_runs(project_id, source_v
 CREATE TABLE compilation_results (
     project_id TEXT NOT NULL,
     run_id TEXT NOT NULL,
-    outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+    outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'needs_context', 'failed')),
     failure_code TEXT,
     response_digest BLOB CHECK (response_digest IS NULL OR length(response_digest) = 32),
     response_payload_id TEXT,
@@ -48,6 +60,7 @@ CREATE TABLE compilation_results (
     FOREIGN KEY (project_id, run_id) REFERENCES compilation_runs(project_id, id),
     FOREIGN KEY (project_id, response_payload_id) REFERENCES payloads(project_id, id),
     CHECK ((outcome = 'succeeded' AND failure_code IS NULL AND response_payload_id IS NOT NULL)
+        OR (outcome = 'needs_context' AND failure_code IS NULL AND response_payload_id IS NOT NULL)
         OR (outcome = 'failed' AND failure_code IS NOT NULL AND response_payload_id IS NULL))
 ) STRICT;
 
@@ -96,6 +109,10 @@ CREATE TRIGGER compilation_runs_no_update
 BEFORE UPDATE ON compilation_runs BEGIN SELECT RAISE(ABORT, 'compilation run is append-only'); END;
 CREATE TRIGGER compilation_runs_no_delete
 BEFORE DELETE ON compilation_runs BEGIN SELECT RAISE(ABORT, 'compilation run is append-only'); END;
+CREATE TRIGGER replay_positions_no_update
+BEFORE UPDATE ON replay_positions BEGIN SELECT RAISE(ABORT, 'replay position is append-only'); END;
+CREATE TRIGGER replay_positions_no_delete
+BEFORE DELETE ON replay_positions BEGIN SELECT RAISE(ABORT, 'replay position is append-only'); END;
 CREATE TRIGGER compilation_results_no_update
 BEFORE UPDATE ON compilation_results BEGIN SELECT RAISE(ABORT, 'compilation result is append-only'); END;
 CREATE TRIGGER compilation_results_no_delete

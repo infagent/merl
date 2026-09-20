@@ -52,3 +52,45 @@ fn a_comment_uses_its_own_issue_history() {
         .when_the_latest_comment_context_is_built()
         .then_other_issue_comments_are_absent();
 }
+
+#[test]
+fn a_request_for_more_context_does_not_complete_required_coverage() {
+    CompilationScenario::given_a_note_for_an_external_compiler()
+        .when_the_compiler_requests_more_context()
+        .then_the_run_needs_expansion_and_coverage_remains_open();
+}
+
+#[test]
+fn a_pending_run_uses_its_saved_context_when_the_original_source_is_unavailable() {
+    CompilationScenario::given_a_note_for_an_external_compiler()
+        .when_the_run_is_recovered_after_source_bytes_disappear()
+        .then_the_original_context_is_still_ready_for_execution();
+}
+
+#[test]
+fn historical_replay_cannot_assign_a_future_revision_to_an_old_comment() {
+    HistoricalIssue::given_a_four_comment_issue()
+        .when_a_future_decision_is_accepted_before_the_first_comment_is_bound()
+        .then_the_first_comment_rejects_the_future_basis();
+}
+
+#[test]
+fn hindsight_can_read_current_state_without_claiming_live_coverage() {
+    CompilationScenario::given_a_required_note_followed_by_a_later_decision()
+        .when_the_note_is_compiled_with_hindsight()
+        .then_current_state_is_visible_but_required_coverage_remains_open();
+}
+
+#[test]
+fn a_large_project_selects_only_the_budgeted_objects() {
+    CompilationScenario::given_more_accepted_objects_than_the_context_budget()
+        .when_the_latest_comment_context_is_built()
+        .then_only_the_budgeted_objects_are_selected();
+}
+
+#[test]
+fn pending_compiler_work_records_every_selection_limit() {
+    CompilationScenario::given_a_note_for_an_external_compiler()
+        .when_the_authority_prepares_the_compiler_run()
+        .then_all_nine_limits_are_retained();
+}

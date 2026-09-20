@@ -28,6 +28,8 @@ pub enum CompileError {
     OutputBudget,
     /// The adapter emitted invalid or unauthorized output.
     InvalidResponse,
+    /// The bounded run needs another context round before coverage is complete.
+    ContextRequired,
     /// The external compiler process failed to start or complete.
     Adapter(String),
 }
@@ -42,6 +44,7 @@ impl fmt::Display for CompileError {
             Self::InvalidResponse => {
                 f.write_str("compiler returned an invalid structured response")
             }
+            Self::ContextRequired => f.write_str("compiler requested more context"),
             Self::Adapter(message) => write!(f, "compiler adapter failed: {message}"),
         }
     }
@@ -79,7 +82,7 @@ pub struct CompilerLimits {
 }
 
 impl CompilerLimits {
-    const fn recorded(self) -> [usize; 7] {
+    const fn recorded(self) -> [usize; 9] {
         [
             self.input_bytes,
             self.output_bytes,
@@ -88,6 +91,8 @@ impl CompilerLimits {
             self.context_requests,
             self.expansion_rounds,
             self.payload_bytes,
+            self.source_window,
+            self.objects,
         ]
     }
 }
@@ -150,41 +155,52 @@ pub fn build_context(
     let source = store
         .source_version(project, trigger)?
         .ok_or(CompileError::NonCausalHistory)?;
-    if !source.interpretation_basis_known {
-        return Err(CompileError::NonCausalHistory);
-    }
-    build_context_at_basis(
-        store,
-        project,
-        trigger,
-        source.interpretation_basis_revision,
-        limits,
-    )
+    let basis = if source.interpretation_basis_known {
+        source.interpretation_basis_revision
+    } else {
+        store
+            .replay_basis(project, trigger)?
+            .ok_or(CompileError::NonCausalHistory)?
+    };
+    build_context_with_basis(store, project, trigger, basis, limits, false)
 }
 
-/// Builds one context at a basis supplied by an isolated sequential replay.
-///
-/// The replay runner must process observations in order. A bulk historical
-/// import cannot prove that an arbitrary current revision existed at an old
-/// source position.
-///
-/// # Errors
-/// Rejects future or mismatched live bases and unavailable historical bytes.
-pub fn build_context_at_basis(
+/// Binds historical observations in order, recording the accepted revision at each step.
+pub struct SequentialReplay {
+    project: ProjectId,
+}
+
+impl SequentialReplay {
+    #[must_use]
+    pub fn new(project: ProjectId) -> Self {
+        Self { project }
+    }
+
+    /// # Errors
+    /// Rejects skipped observations or a first observation bound after state advanced.
+    pub fn next_context(
+        &mut self,
+        store: &mut Store,
+        source: &SourceVersionId,
+        limits: CompilerLimits,
+    ) -> Result<CompilationContext, CompileError> {
+        store.bind_next_replay_position(&self.project, source)?;
+        build_context(store, &self.project, source, limits)
+    }
+}
+
+fn build_context_with_basis(
     store: &Store,
     project: &ProjectId,
     trigger: &SourceVersionId,
     basis: ProjectRevision,
     limits: CompilerLimits,
+    hindsight: bool,
 ) -> Result<CompilationContext, CompileError> {
     let source = store
         .source_version(project, trigger)?
         .ok_or(CompileError::NonCausalHistory)?;
-    if basis > store.project_revision(project)?
-        || (source.interpretation_basis_known && basis != source.interpretation_basis_revision)
-    {
-        return Err(CompileError::NonCausalHistory);
-    }
+    verify_basis(store, project, trigger, &source, basis, hindsight)?;
     if limits.source_window == 0 || limits.objects == 0 {
         return Err(CompileError::InputBudget);
     }
@@ -273,6 +289,27 @@ pub fn build_context_at_basis(
         objects,
         rendered,
     })
+}
+
+fn verify_basis(
+    store: &Store,
+    project: &ProjectId,
+    trigger: &SourceVersionId,
+    source: &merl_store::StoredSourceVersion,
+    basis: ProjectRevision,
+    hindsight: bool,
+) -> Result<(), CompileError> {
+    if basis > store.project_revision(project)?
+        || (!hindsight
+            && source.interpretation_basis_known
+            && basis != source.interpretation_basis_revision)
+        || (!hindsight
+            && !source.interpretation_basis_known
+            && store.replay_basis(project, trigger)? != Some(basis))
+    {
+        return Err(CompileError::NonCausalHistory);
+    }
+    Ok(())
 }
 
 /// A typed compiler response; unknown prose fields are rejected.
@@ -530,6 +567,8 @@ pub enum RunMode {
     Replay,
     /// Run a corpus experiment without changing live coverage.
     Eval,
+    /// Reinterpret an old source using currently accepted project state.
+    Hindsight,
 }
 
 impl RunMode {
@@ -538,6 +577,7 @@ impl RunMode {
             Self::Live => "live",
             Self::Replay => "replay",
             Self::Eval => "eval",
+            Self::Hindsight => "hindsight",
         }
     }
 }
@@ -549,10 +589,8 @@ pub struct RunRequest<'a> {
     pub id: &'a str,
     /// Input and output budgets.
     pub limits: CompilerLimits,
-    /// Live, replay, or evaluation purpose.
+    /// Live, replay, evaluation, or hindsight purpose.
     pub mode: RunMode,
-    /// Historical basis selected by an isolated sequential replay runner.
-    pub interpretation_basis_revision: Option<ProjectRevision>,
     /// Current UTC time in Unix milliseconds.
     pub now_millis: i64,
 }
@@ -595,21 +633,11 @@ pub fn prepare_compilation(
         id: run_id,
         limits,
         mode,
-        interpretation_basis_revision,
         now_millis,
     } = request;
-    let context = match interpretation_basis_revision {
-        Some(basis) if mode != RunMode::Live => {
-            build_context_at_basis(store, project, source, basis, limits)?
-        }
-        None => build_context(store, project, source, limits)?,
-        Some(_) => return Err(CompileError::NonCausalHistory),
-    };
     if let Some(existing) = store.compilation_run_status(project, run_id)? {
-        let digest: [u8; 32] = Sha256::digest(&context.rendered).into();
         if existing.source != *source
             || existing.mode != mode.as_str()
-            || existing.context_digest != digest
             || existing.compiler_id != adapter.id()
             || existing.compiler_version != adapter.version()
             || existing.model_id != adapter.model()
@@ -621,37 +649,69 @@ pub fn prepare_compilation(
         if existing.completed {
             return if existing.succeeded {
                 Ok(None)
+            } else if existing.needs_context {
+                Err(CompileError::ContextRequired)
             } else {
                 Err(error_from_code(existing.failure_code.as_deref()))
             };
         }
-    } else {
-        let intent = CompilationIntent {
-            id: run_id,
-            source,
-            context: &context.rendered,
-            source_window: &context.source_window,
-            objects: &context.objects,
-            interpretation_basis_revision: context.interpretation_basis_revision,
-            source_observation_cutoff: context.source_observation_cutoff,
-            renderer_version: "json_v1",
-            selector_version: "recent_v1",
-            compiler_id: adapter.id(),
-            compiler_version: adapter.version(),
-            model_id: adapter.model(),
+        let saved = store.load_compilation_context(project, run_id)?;
+        return Ok(Some(PreparedCompilation {
+            id: run_id.into(),
+            context: CompilationContext {
+                trigger: source.clone(),
+                interpretation_basis_revision: existing.interpretation_basis_revision,
+                source_observation_cutoff: existing.source_observation_cutoff,
+                source_window: saved.source_window,
+                objects: saved.objects,
+                rendered: saved.rendered,
+            },
+            limits,
+            compiler_id: adapter.id().into(),
+            compiler_version: adapter.version().into(),
+            model_id: adapter.model().into(),
             prompt_digest: adapter.prompt_digest(),
-            mode: mode.as_str(),
-            max_input_bytes: limits.input_bytes,
-            max_output_bytes: limits.output_bytes,
-            max_output_tokens: limits.output_tokens,
-            max_assertions: limits.assertions,
-            max_context_requests: limits.context_requests,
-            max_expansion_rounds: limits.expansion_rounds,
-            max_payload_bytes: limits.payload_bytes,
-            started_at_millis: now_millis,
-        };
-        store.prepare_compilation(project, &intent)?;
+        }));
     }
+    let context = if mode == RunMode::Hindsight {
+        build_context_with_basis(
+            store,
+            project,
+            source,
+            store.project_revision(project)?,
+            limits,
+            true,
+        )?
+    } else {
+        build_context(store, project, source, limits)?
+    };
+    let intent = CompilationIntent {
+        id: run_id,
+        source,
+        context: &context.rendered,
+        source_window: &context.source_window,
+        objects: &context.objects,
+        interpretation_basis_revision: context.interpretation_basis_revision,
+        source_observation_cutoff: context.source_observation_cutoff,
+        renderer_version: "json_v1",
+        selector_version: "recent_v1",
+        compiler_id: adapter.id(),
+        compiler_version: adapter.version(),
+        model_id: adapter.model(),
+        prompt_digest: adapter.prompt_digest(),
+        mode: mode.as_str(),
+        max_input_bytes: limits.input_bytes,
+        max_output_bytes: limits.output_bytes,
+        max_output_tokens: limits.output_tokens,
+        max_assertions: limits.assertions,
+        max_context_requests: limits.context_requests,
+        max_expansion_rounds: limits.expansion_rounds,
+        max_payload_bytes: limits.payload_bytes,
+        max_source_window: limits.source_window,
+        max_objects: limits.objects,
+        started_at_millis: now_millis,
+    };
+    store.prepare_compilation(project, &intent)?;
     Ok(Some(PreparedCompilation {
         id: run_id.into(),
         context,
@@ -697,6 +757,8 @@ pub fn record_compilation_result(
         if existing.completed {
             return if existing.succeeded {
                 Ok(())
+            } else if existing.needs_context {
+                Err(CompileError::ContextRequired)
             } else {
                 Err(error_from_code(existing.failure_code.as_deref()))
             };
@@ -706,22 +768,31 @@ pub fn record_compilation_result(
     }
     let validated = raw.and_then(|bytes| {
         validate_response(&bytes, &prepared.context, prepared.limits)
-            .map(|assertions| (bytes, assertions))
+            .map(|(assertions, needs_context)| (bytes, assertions, needs_context))
     });
-    let (response, assertions, failure): (Option<&[u8]>, &[StructuralAssertion], Option<&str>) =
-        match &validated {
-            Ok((bytes, assertions)) => (Some(bytes), assertions, None),
-            Err(error) => (None, &[], Some(error_code(error))),
-        };
+    let (response, assertions, needs_context, failure): (
+        Option<&[u8]>,
+        &[StructuralAssertion],
+        bool,
+        Option<&str>,
+    ) = match &validated {
+        Ok((bytes, assertions, needs_context)) => (Some(bytes), assertions, *needs_context, None),
+        Err(error) => (None, &[], false, Some(error_code(error))),
+    };
     let result = CompilationResult {
         run_id: &prepared.id,
         failure_code: failure,
         response,
         assertions,
+        needs_context,
         completed_at_millis,
     };
     store.complete_compilation(project, &result)?;
-    validated.map(|_| ())
+    match validated {
+        Ok((_, _, true)) => Err(CompileError::ContextRequired),
+        Ok(_) => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn error_code(error: &CompileError) -> &'static str {
@@ -730,6 +801,7 @@ fn error_code(error: &CompileError) -> &'static str {
         CompileError::Adapter(_) => "adapter_failure",
         CompileError::InputBudget => "input_budget",
         CompileError::NonCausalHistory => "noncausal_history",
+        CompileError::ContextRequired => "context_required",
         CompileError::Store(_) | CompileError::InvalidResponse => "invalid_response",
     }
 }
@@ -746,7 +818,7 @@ fn validate_response(
     bytes: &[u8],
     context: &CompilationContext,
     limits: CompilerLimits,
-) -> Result<Vec<StructuralAssertion>, CompileError> {
+) -> Result<(Vec<StructuralAssertion>, bool), CompileError> {
     if bytes.len() > limits.output_bytes {
         return Err(CompileError::OutputBudget);
     }
@@ -779,7 +851,8 @@ fn validate_response(
     {
         return Err(CompileError::InvalidResponse);
     }
-    response
+    let needs_context = !response.context_required.is_empty();
+    let assertions = response
         .assertions
         .into_iter()
         .map(|item| {
@@ -829,7 +902,8 @@ fn validate_response(
                 attribution_verified: item.attribution_verified,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((assertions, needs_context))
 }
 
 fn source_span_valid(rendered: &serde_json::Value, source: &str, start: usize, end: usize) -> bool {
@@ -886,6 +960,7 @@ mod tests {
         assert_eq!(
             validate_response(&serde_json::to_vec(&valid).expect("JSON"), &context, limits)
                 .expect("valid assertion")
+                .0
                 .len(),
             1
         );

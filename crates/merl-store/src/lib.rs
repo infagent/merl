@@ -292,6 +292,10 @@ pub struct CompilationIntent<'a> {
     pub max_expansion_rounds: usize,
     /// Hard limit on referenced payload bytes.
     pub max_payload_bytes: usize,
+    /// Hard cap on selected source versions.
+    pub max_source_window: usize,
+    /// Hard cap on selected accepted objects.
+    pub max_objects: usize,
     /// Time at which work became durable and recoverable.
     pub started_at_millis: i64,
 }
@@ -307,6 +311,8 @@ pub struct CompilationResult<'a> {
     pub response: Option<&'a [u8]>,
     /// Validated structural assertions emitted by a successful response.
     pub assertions: &'a [StructuralAssertion],
+    /// The compiler requested another bounded context round.
+    pub needs_context: bool,
     /// Completion time, including failures.
     pub completed_at_millis: i64,
 }
@@ -364,6 +370,8 @@ pub struct CompilationRunStatus {
     pub mode: String,
     /// Whether a bounded response was persisted.
     pub succeeded: bool,
+    /// A bounded response requested more context instead of finishing extraction.
+    pub needs_context: bool,
     /// Whether this run has an immutable outcome. Pending work survives restart.
     pub completed: bool,
     /// Durable scheduling time, used to reject impossible completion times.
@@ -385,7 +393,18 @@ pub struct CompilationRunStatus {
     /// Prompt or ruleset digest.
     pub prompt_digest: [u8; 32],
     /// Exact compiler budgets fixed by the first attempt with this run ID.
-    pub limits: [usize; 7],
+    pub limits: [usize; 9],
+}
+
+/// Exact compiler input and manifest retained for a pending run.
+#[derive(Debug)]
+pub struct StoredCompilationContext {
+    /// Protected rendered bytes used for the original attempt.
+    pub rendered: Vec<u8>,
+    /// Source versions selected when the intent was committed.
+    pub source_window: Vec<SourceVersionId>,
+    /// Historical object revisions selected for that input.
+    pub objects: Vec<(ObjectId, ObjectRevision)>,
 }
 
 /// One SQLite connection used as a local serialized project authority.
@@ -830,6 +849,89 @@ impl Store {
         Ok(selected)
     }
 
+    /// Binds the next historical observation to the state reached so far.
+    ///
+    /// A replay starts at project revision zero and advances observations in
+    /// capture order. The basis is recorded once; callers cannot supply one.
+    ///
+    /// # Errors
+    /// Rejects a skipped observation or a future state before the first one.
+    pub fn bind_next_replay_position(
+        &mut self,
+        project: &ProjectId,
+        source: &SourceVersionId,
+    ) -> Result<ProjectRevision, StoreError> {
+        let item = self
+            .source_version(project, source)?
+            .ok_or(StoreError::InvalidCompilation)?;
+        if item.interpretation_basis_known {
+            return Err(StoreError::InvalidCompilation);
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: Option<i64> = transaction
+            .query_row(
+                "SELECT interpretation_basis_revision FROM replay_positions
+                 WHERE project_id=?1 AND source_version_id=?2",
+                params![project.as_str(), source.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(basis) = existing {
+            return Ok(ProjectRevision::from(
+                u64::try_from(basis).map_err(|_| StoreError::CorruptHistory)?,
+            ));
+        }
+        let previous: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(source_sequence),0) FROM replay_positions WHERE project_id=?1",
+            [project.as_str()],
+            |row| row.get(0),
+        )?;
+        let sequence = i64::try_from(item.sequence).map_err(|_| StoreError::InvalidCompilation)?;
+        let basis = current_revision_in_transaction(&transaction, project)?;
+        if sequence != previous + 1 || (sequence == 1 && basis != 0) {
+            return Err(StoreError::InvalidCompilation);
+        }
+        transaction.execute(
+            "INSERT INTO replay_positions
+             (project_id,source_version_id,source_sequence,interpretation_basis_revision)
+             VALUES (?1,?2,?3,?4)",
+            params![project.as_str(), source.as_str(), sequence, basis],
+        )?;
+        transaction.commit()?;
+        Ok(ProjectRevision::from(
+            u64::try_from(basis).map_err(|_| StoreError::CorruptHistory)?,
+        ))
+    }
+
+    /// Returns the immutable interpretation basis established by sequential replay.
+    ///
+    /// # Errors
+    /// Rejects corrupt basis metadata or a failed SQLite read.
+    pub fn replay_basis(
+        &self,
+        project: &ProjectId,
+        source: &SourceVersionId,
+    ) -> Result<Option<ProjectRevision>, StoreError> {
+        let basis: Option<i64> = self
+            .connection
+            .query_row(
+                "SELECT interpretation_basis_revision FROM replay_positions
+             WHERE project_id=?1 AND source_version_id=?2",
+                params![project.as_str(), source.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        basis
+            .map(|value| {
+                Ok(ProjectRevision::from(
+                    u64::try_from(value).map_err(|_| StoreError::CorruptHistory)?,
+                ))
+            })
+            .transpose()
+    }
+
     /// Lists accepted object revisions as they stood at a historical revision.
     ///
     /// # Errors
@@ -858,7 +960,7 @@ impl Store {
                WHERE rank = 1 ORDER BY object_id LIMIT ?3",
         )?;
         let basis = i64::try_from(revision.get()).map_err(|_| StoreError::InvalidCompilation)?;
-        let mut rows = statement.query(params![project.as_str(), basis, limit + 1])?;
+        let mut rows = statement.query(params![project.as_str(), basis, limit])?;
         let mut objects = Vec::new();
         while let Some(row) = rows.next()? {
             let id: String = row.get(0)?;
@@ -875,9 +977,6 @@ impl Store {
                     .transpose()
                     .map_err(|_| StoreError::CorruptHistory)?,
             ));
-        }
-        if objects.len() > usize::try_from(limit).map_err(|_| StoreError::InvalidCompilation)? {
-            return Err(StoreError::InvalidCompilation);
         }
         Ok(objects)
     }
@@ -923,17 +1022,23 @@ impl Store {
             .map_err(|_| StoreError::InvalidCompilation)?;
         let max_payload =
             i64::try_from(record.max_payload_bytes).map_err(|_| StoreError::InvalidCompilation)?;
+        let max_source_window =
+            i64::try_from(record.max_source_window).map_err(|_| StoreError::InvalidCompilation)?;
+        let max_objects =
+            i64::try_from(record.max_objects).map_err(|_| StoreError::InvalidCompilation)?;
         transaction.execute(
             "INSERT INTO compilation_runs (
               project_id,id,source_version_id,context_digest,context_payload_id,
               interpretation_basis_revision,source_observation_cutoff,renderer_version,selector_version,
               max_input_bytes,max_output_bytes,max_output_tokens,max_assertions,max_context_requests,max_expansion_rounds,max_payload_bytes,
+              max_source_window,max_objects,
               compiler_id,compiler_version,model_id,prompt_digest,mode,started_at_millis
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
             params![project.as_str(), record.id, record.source.as_str(), context_digest.as_slice(),
                 context_payload, interpretation_basis, cutoff,
                 record.renderer_version, record.selector_version, max_input, max_output,
                 max_tokens, max_assertions, max_requests, max_rounds, max_payload,
+                max_source_window, max_objects,
                 record.compiler_id, record.compiler_version, record.model_id, record.prompt_digest.as_slice(),
                 record.mode, record.started_at_millis],
         )?;
@@ -962,6 +1067,7 @@ impl Store {
                 .is_some_and(|bytes| bytes.len() > status.limits[1])
             || result.assertions.len() > status.limits[3]
             || (result.response.is_none() && !result.assertions.is_empty())
+            || (result.needs_context && result.response.is_none())
             || result
                 .failure_code
                 .is_some_and(|code| !valid_record_id(code))
@@ -995,6 +1101,8 @@ impl Store {
                 result.run_id,
                 if result.failure_code.is_some() {
                     "failed"
+                } else if result.needs_context {
+                    "needs_context"
                 } else {
                     "succeeded"
                 },
@@ -1103,14 +1211,15 @@ impl Store {
             String,
             String,
             Vec<u8>,
-            [i64; 7],
+            [i64; 9],
             i64,
         );
         let raw: Option<RawStatus> = self.connection.query_row(
             "SELECT source_version_id,mode,compilation_results.outcome,compilation_results.failure_code,interpretation_basis_revision,
                     source_observation_cutoff,context_digest,compiler_id,compiler_version,model_id,prompt_digest,
                     max_input_bytes,max_output_bytes,max_output_tokens,max_assertions,
-                    max_context_requests,max_expansion_rounds,max_payload_bytes,started_at_millis
+                    max_context_requests,max_expansion_rounds,max_payload_bytes,
+                    max_source_window,max_objects,started_at_millis
              FROM compilation_runs LEFT JOIN compilation_results
                ON compilation_results.project_id=compilation_runs.project_id
               AND compilation_results.run_id=compilation_runs.id
@@ -1119,7 +1228,7 @@ impl Store {
                 row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,
                 row.get(8)?, row.get(9)?, row.get(10)?,
                 [row.get(11)?, row.get(12)?, row.get(13)?, row.get(14)?,
-                 row.get(15)?, row.get(16)?, row.get(17)?], row.get(18)?)),
+                 row.get(15)?, row.get(16)?, row.get(17)?, row.get(18)?, row.get(19)?], row.get(20)?)),
         ).optional()?;
         raw.map(
             |(
@@ -1142,6 +1251,7 @@ impl Store {
                         .map_err(|_| StoreError::CorruptHistory)?,
                     mode,
                     succeeded: outcome.as_deref() == Some("succeeded"),
+                    needs_context: outcome.as_deref() == Some("needs_context"),
                     completed: outcome.is_some(),
                     started_at_millis,
                     failure_code,
@@ -1185,6 +1295,57 @@ impl Store {
             SourceVersionId::try_from(row?.as_str()).map_err(|_| StoreError::CorruptHistory)
         })
         .collect()
+    }
+
+    /// Loads the committed context bytes and manifest without rebuilding history.
+    ///
+    /// # Errors
+    /// Reports unavailable protected bytes or corrupt structural provenance.
+    pub fn load_compilation_context(
+        &self,
+        project: &ProjectId,
+        run_id: &str,
+    ) -> Result<StoredCompilationContext, StoreError> {
+        let (payload_id, expected_digest): (String, Vec<u8>) = self.connection.query_row(
+            "SELECT context_payload_id,context_digest FROM compilation_runs
+             WHERE project_id=?1 AND id=?2",
+            params![project.as_str(), run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let payload_id =
+            PayloadId::try_from(payload_id.as_str()).map_err(|_| StoreError::CorruptHistory)?;
+        let rendered = match self.read_payload(project, &payload_id)? {
+            PayloadRead::Available(bytes) => bytes,
+            PayloadRead::Unavailable => return Err(StoreError::InvalidCompilation),
+        };
+        if Sha256::digest(&rendered).as_slice() != expected_digest {
+            return Err(StoreError::CorruptHistory);
+        }
+        let source_window = self.compilation_context_sources(project, run_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT object_id,object_revision FROM compilation_context_objects
+             WHERE project_id=?1 AND run_id=?2 ORDER BY object_id",
+        )?;
+        let rows = statement.query_map(params![project.as_str(), run_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let objects = rows
+            .map(|row| -> Result<(ObjectId, ObjectRevision), StoreError> {
+                let (id, revision) = row?;
+                Ok((
+                    ObjectId::try_from(id.as_str()).map_err(|_| StoreError::CorruptHistory)?,
+                    ObjectRevision::try_from(
+                        u64::try_from(revision).map_err(|_| StoreError::CorruptHistory)?,
+                    )
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(StoredCompilationContext {
+            rendered,
+            source_window,
+            objects,
+        })
     }
 
     /// Lists durable compiler work that has no recorded result yet.
@@ -2027,11 +2188,16 @@ fn validate_compilation_intent(
     let source = store
         .source_version(project, record.source)?
         .ok_or(StoreError::InvalidCompilation)?;
+    let causal_basis = if source.interpretation_basis_known {
+        Some(source.interpretation_basis_revision)
+    } else {
+        store.replay_basis(project, record.source)?
+    };
     if record.interpretation_basis_revision > store.project_revision(project)?
         || (!source.interpretation_basis_known && record.mode == "live")
         || record.source_observation_cutoff != source.sequence
-        || (source.interpretation_basis_known
-            && record.interpretation_basis_revision != source.interpretation_basis_revision)
+        || (record.mode != "hindsight"
+            && causal_basis != Some(record.interpretation_basis_revision))
         || record.context.len() > record.max_input_bytes
         || record.source_window.last() != Some(record.source)
         || record
