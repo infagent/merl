@@ -97,5 +97,15 @@ fn erasing_the_only_source_marks_decision_support_unavailable() {
 fn editing_context_evidence_reconsiders_an_assertion_citing_another_comment() {
     PolicyScenario::given_a_decision_compiled_with_an_earlier_comment()
         .when_the_earlier_comment_is_edited()
-        .then_the_decision_is_active_with_revalidation_pending();
+        .then_the_decision_is_active_with_revalidation_pending()
+        .when_the_authority_restarts()
+        .when_the_affected_derivation_is_recompiled_and_confirmed()
+        .then_the_context_impact_is_resolved_and_support_is_current();
+}
+
+#[test]
+fn provider_facts_cannot_replace_an_accepted_semantic_object() {
+    PolicyScenario::given_a_decision_supported_by_an_issue_comment()
+        .when_a_provider_observation_targets_that_decision()
+        .then_the_provider_observation_is_rejected_and_the_decision_remains();
 }

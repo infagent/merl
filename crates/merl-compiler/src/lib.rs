@@ -223,16 +223,52 @@ fn build_context_with_basis(
         source.sequence,
         limits.source_window,
     )?;
+    build_context_from_sources(
+        store,
+        project,
+        trigger,
+        basis,
+        source.sequence,
+        selected,
+        limits,
+    )
+}
+
+fn build_context_from_sources(
+    store: &Store,
+    project: &ProjectId,
+    trigger: &SourceVersionId,
+    basis: ProjectRevision,
+    cutoff: u64,
+    selected: Vec<SourceVersionId>,
+    limits: CompilerLimits,
+) -> Result<CompilationContext, CompileError> {
+    if selected.is_empty() || selected.len() > limits.source_window || limits.objects == 0 {
+        return Err(CompileError::InputBudget);
+    }
+    let source = store
+        .source_version(project, trigger)?
+        .ok_or(CompileError::NonCausalHistory)?;
+    if !selected.iter().any(|item| item == trigger) {
+        return Err(CompileError::NonCausalHistory);
+    }
     let mut sources = Vec::new();
     let mut source_window = Vec::new();
     let mut payload_bytes = 0usize;
+    let mut previous_sequence = 0_u64;
     for version in selected {
         let item = store
             .source_version(project, &version)?
             .ok_or(CompileError::NonCausalHistory)?;
-        if item.ambiguous_order_with_previous || item.payload.is_none() {
+        if item.ambiguous_order_with_previous
+            || item.payload.is_none()
+            || item.sequence > cutoff
+            || item.sequence <= previous_sequence
+            || item.context_scope_id != source.context_scope_id
+        {
             return Err(CompileError::NonCausalHistory);
         }
+        previous_sequence = item.sequence;
         let body = match store.read_payload(
             project,
             item.payload
@@ -273,7 +309,7 @@ fn build_context_with_basis(
         schema: "merl.compilation-context/v1",
         context_scope_id: source.context_scope_id,
         interpretation_basis_revision: basis.get(),
-        source_observation_cutoff: source.sequence,
+        source_observation_cutoff: cutoff,
         trigger: trigger.to_string(),
         sources,
         objects: object_context.views,
@@ -286,11 +322,65 @@ fn build_context_with_basis(
     Ok(CompilationContext {
         trigger: trigger.clone(),
         interpretation_basis_revision: basis,
-        source_observation_cutoff: source.sequence,
+        source_observation_cutoff: cutoff,
         source_window,
         objects: object_context.references,
         rendered,
     })
+}
+
+fn build_revalidation_context(
+    store: &Store,
+    project: &ProjectId,
+    trigger: &SourceVersionId,
+    impact: &merl_store::EvidenceImpact,
+    limits: CompilerLimits,
+) -> Result<CompilationContext, CompileError> {
+    if impact.next_action != "recompile" || impact.revalidated_by.is_some() {
+        return Err(CompileError::NonCausalHistory);
+    }
+    let replacement = impact
+        .replacement
+        .as_ref()
+        .ok_or(CompileError::NonCausalHistory)?;
+    let replacement_source = store
+        .source_version(project, replacement)?
+        .ok_or(CompileError::NonCausalHistory)?;
+    if replacement_source.supersedes.as_ref() != Some(&impact.changed_source) {
+        return Err(CompileError::NonCausalHistory);
+    }
+    let expected_trigger = if impact.trigger == impact.changed_source {
+        replacement
+    } else {
+        &impact.trigger
+    };
+    if trigger != expected_trigger {
+        return Err(CompileError::NonCausalHistory);
+    }
+    let mut selected = store.compilation_context_sources(project, impact.affected_run.as_str())?;
+    let changed = selected
+        .iter_mut()
+        .find(|version| **version == impact.changed_source)
+        .ok_or(CompileError::NonCausalHistory)?;
+    *changed = replacement.clone();
+    let mut ordered = Vec::with_capacity(selected.len());
+    for version in selected {
+        let source = store
+            .source_version(project, &version)?
+            .ok_or(CompileError::NonCausalHistory)?;
+        ordered.push((source.sequence, version));
+    }
+    ordered.sort_by_key(|item| item.0);
+    let selected = ordered.into_iter().map(|(_, version)| version).collect();
+    build_context_from_sources(
+        store,
+        project,
+        trigger,
+        store.project_revision(project)?,
+        store.source_observation_head(project)?,
+        selected,
+        limits,
+    )
 }
 
 fn render_objects(
@@ -771,14 +861,18 @@ pub fn prepare_compilation(
         }));
     }
     let context = if mode == RunMode::Hindsight {
-        build_context_with_basis(
-            store,
-            project,
-            source,
-            store.project_revision(project)?,
-            limits,
-            true,
-        )?
+        if let Some(impact) = store.evidence_impact(project, run_id)? {
+            build_revalidation_context(store, project, source, &impact, limits)?
+        } else {
+            build_context_with_basis(
+                store,
+                project,
+                source,
+                store.project_revision(project)?,
+                limits,
+                true,
+            )?
+        }
     } else {
         build_context(store, project, source, limits)?
     };

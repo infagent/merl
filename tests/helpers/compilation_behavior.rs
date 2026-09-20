@@ -982,6 +982,37 @@ impl CompilationScenario {
         self
     }
 
+    pub fn when_a_retry_is_prepared(&mut self) -> &mut Self {
+        prepare_compilation(
+            &mut self.store,
+            &self.project,
+            &self.note,
+            &FakeCompiler,
+            RunRequest {
+                id: "retry-run",
+                limits: limits(),
+                mode: RunMode::Live,
+                now_millis: 40,
+            },
+        )
+        .expect("prepare retry")
+        .expect("pending work");
+        self.coverage = Some(
+            self.store
+                .semantic_coverage(&self.project)
+                .expect("coverage"),
+        );
+        self
+    }
+
+    pub fn then_coverage_reports_pending_instead_of_failed(&mut self) {
+        let coverage = self.coverage.expect("coverage");
+        assert_eq!(coverage.required_gaps, 1);
+        assert_eq!(coverage.required_pending, 1);
+        assert_eq!(coverage.required_failed, 0);
+        assert_eq!(coverage.optional_cold, 1);
+    }
+
     pub fn when_the_required_note_is_compiled_for_evaluation(&mut self) -> &mut Self {
         run_compiler(
             &mut self.store,

@@ -12,7 +12,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -490,13 +490,13 @@ pub struct SemanticCoverage {
     pub observation_head: u64,
     /// Highest observation before the first unprocessed required source.
     pub processed_through: u64,
-    /// Number of required versions with no successful compilation.
+    /// Required versions whose latest live attempt has not succeeded.
     pub required_gaps: u64,
-    /// Required versions with a durable run still awaiting a final result.
+    /// Required versions awaiting a result or requested context.
     pub required_pending: u64,
     /// Required versions whose latest live compiler attempt failed.
     pub required_failed: u64,
-    /// Number of optional versions retained without successful compilation.
+    /// Optional versions whose latest live attempt has not succeeded.
     pub optional_cold: u64,
 }
 
@@ -513,13 +513,18 @@ pub enum SupportStatus {
     Unsupported,
 }
 
-/// Immutable evidence change that scheduled reconsideration of one accepted support.
+/// Immutable `evidence_changed` fact and the resulting reconsideration intent.
+/// An unresolved `recompile` impact means revalidation is pending.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EvidenceImpact {
     /// Stable audit identity.
     pub id: String,
     /// Accepted event whose support may have changed.
     pub support_event: merl_core::EventId,
+    /// Earlier compilation whose interpretation must be reconsidered.
+    pub affected_run: merl_core::CompilationRunId,
+    /// Source that triggered the earlier compilation.
+    pub trigger: SourceVersionId,
     /// Source version available when that event was accepted.
     pub changed_source: SourceVersionId,
     /// New source version, absent when retained source bytes were erased.
@@ -657,6 +662,10 @@ impl Store {
             if version < 10 {
                 transaction
                     .execute_batch(include_str!("../migrations/0010_object_lifecycle.sql"))?;
+            }
+            if version < 11 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0011_impact_derivation.sql"))?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -1487,62 +1496,29 @@ impl Store {
             params![project.as_str(), scope],
             |row| row.get(0),
         )?;
-        let (required_gaps, required_failed, optional_cold): (i64, i64, i64) =
-            self.connection.query_row(
-                "SELECT
-              COALESCE(SUM(CASE WHEN coverage_requirement='required' AND NOT EXISTS (
-                SELECT 1 FROM compilation_runs JOIN compilation_results
-                  ON compilation_results.project_id=compilation_runs.project_id
-                 AND compilation_results.run_id=compilation_runs.id
-                WHERE compilation_runs.project_id=source_versions.project_id
-                  AND source_version_id=source_versions.id AND compilation_results.outcome='succeeded' AND mode='live'
-              ) THEN 1 ELSE 0 END),0),
-              COALESCE(SUM(CASE WHEN coverage_requirement='required' AND EXISTS (
-                SELECT 1 FROM compilation_runs JOIN compilation_results
-                  ON compilation_results.project_id=compilation_runs.project_id
-                 AND compilation_results.run_id=compilation_runs.id
-                WHERE compilation_runs.project_id=source_versions.project_id
-                  AND source_version_id=source_versions.id AND compilation_results.outcome='failed' AND mode='live'
-              ) AND NOT EXISTS (
-                SELECT 1 FROM compilation_runs JOIN compilation_results
-                  ON compilation_results.project_id=compilation_runs.project_id
-                 AND compilation_results.run_id=compilation_runs.id
-                WHERE compilation_runs.project_id=source_versions.project_id
-                  AND source_version_id=source_versions.id AND compilation_results.outcome='succeeded' AND mode='live'
-              ) THEN 1 ELSE 0 END),0),
-              COALESCE(SUM(CASE WHEN coverage_requirement='optional' AND NOT EXISTS (
-                SELECT 1 FROM compilation_runs JOIN compilation_results
-                  ON compilation_results.project_id=compilation_runs.project_id
-                 AND compilation_results.run_id=compilation_runs.id
-                WHERE compilation_runs.project_id=source_versions.project_id
-                  AND source_version_id=source_versions.id AND compilation_results.outcome='succeeded' AND mode='live'
-              ) THEN 1 ELSE 0 END),0)
-             FROM source_versions WHERE project_id=?1 AND (?2 IS NULL OR context_scope_id=?2)",
-                params![project.as_str(), scope],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )?;
-        let (first_gap, required_pending): (Option<i64>, i64) = self.connection.query_row(
-            "SELECT MIN(CASE WHEN coverage_requirement='required' AND NOT EXISTS (
-                SELECT 1 FROM compilation_runs r JOIN compilation_results c
-                  ON c.project_id=r.project_id AND c.run_id=r.id
-                WHERE r.project_id=s.project_id AND r.source_version_id=s.id
-                  AND r.mode='live' AND c.outcome='succeeded'
-             ) THEN sequence END),
-             COALESCE(SUM(CASE WHEN coverage_requirement='required' AND NOT EXISTS (
-                SELECT 1 FROM compilation_runs r JOIN compilation_results c
-                  ON c.project_id=r.project_id AND c.run_id=r.id
-                WHERE r.project_id=s.project_id AND r.source_version_id=s.id
-                  AND r.mode='live' AND c.outcome='succeeded'
-             ) AND EXISTS (
-                SELECT 1 FROM compilation_runs r LEFT JOIN compilation_results c
-                  ON c.project_id=r.project_id AND c.run_id=r.id
-                WHERE r.project_id=s.project_id AND r.source_version_id=s.id
-                  AND r.mode='live' AND (c.outcome IS NULL OR c.outcome='needs_context')
-             ) THEN 1 ELSE 0 END),0)
-             FROM source_versions s WHERE project_id=?1
-               AND (?2 IS NULL OR context_scope_id=?2)",
+        let (required_gaps, required_failed, optional_cold, first_gap, required_pending):
+            (i64, i64, i64, Option<i64>, i64) = self.connection.query_row(
+            "WITH scoped AS (
+               SELECT s.sequence,s.coverage_requirement,
+                 COALESCE((SELECT COALESCE(c.outcome,'pending')
+                   FROM compilation_runs r LEFT JOIN compilation_results c
+                     ON c.project_id=r.project_id AND c.run_id=r.id
+                   WHERE r.project_id=s.project_id AND r.source_version_id=s.id
+                     AND r.mode='live'
+                   ORDER BY r.rowid DESC LIMIT 1),'unprocessed') AS latest_outcome
+               FROM source_versions s
+               WHERE s.project_id=?1 AND (?2 IS NULL OR s.context_scope_id=?2)
+             )
+             SELECT
+               COALESCE(SUM(coverage_requirement='required' AND latest_outcome!='succeeded'),0),
+               COALESCE(SUM(coverage_requirement='required' AND latest_outcome='failed'),0),
+               COALESCE(SUM(coverage_requirement='optional' AND latest_outcome!='succeeded'),0),
+               MIN(CASE WHEN coverage_requirement='required' AND latest_outcome!='succeeded'
+                   THEN sequence END),
+               COALESCE(SUM(coverage_requirement='required' AND latest_outcome IN ('pending','needs_context')),0)
+             FROM scoped",
             params![project.as_str(), scope],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )?;
         let head = u64::try_from(observation_head).map_err(|_| StoreError::CorruptHistory)?;
         Ok(SemanticCoverage {
@@ -1673,7 +1649,11 @@ impl Store {
         .transpose()
     }
 
-    fn compilation_context_sources(
+    /// Reads the source-version manifest without expanding retained prose.
+    ///
+    /// # Errors
+    /// Returns an error if the saved manifest is unreadable.
+    pub fn compilation_context_sources(
         &self,
         project: &ProjectId,
         run_id: &str,
@@ -2625,9 +2605,11 @@ impl Store {
     ) -> Result<Vec<EvidenceImpact>, StoreError> {
         let mut statement = self.connection.prepare(
             "SELECT i.id,i.support_event_id,i.source_version_id,i.replacement_version_id,
-                    i.next_action,r.event_id
+                    i.next_action,r.event_id,i.affected_run_id,cr.source_version_id
              FROM evidence_impacts i LEFT JOIN evidence_revalidations r
                ON r.project_id=i.project_id AND r.impact_id=i.id
+             LEFT JOIN compilation_runs cr
+               ON cr.project_id=i.project_id AND cr.id=i.affected_run_id
              WHERE i.project_id=?1 AND i.object_id=?2 ORDER BY i.id",
         )?;
         let rows = statement.query_map(params![project.as_str(), object.as_str()], |row| {
@@ -2638,15 +2620,33 @@ impl Store {
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })?;
         rows.map(|row| {
-            let (id, support_event, changed_source, replacement, next_action, revalidated_by) =
-                row?;
+            let (
+                id,
+                support_event,
+                changed_source,
+                replacement,
+                next_action,
+                revalidated_by,
+                affected_run,
+                trigger,
+            ) = row?;
             Ok(EvidenceImpact {
                 id,
                 support_event: merl_core::EventId::try_from(support_event.as_str())
                     .map_err(|_| StoreError::CorruptHistory)?,
+                affected_run: merl_core::CompilationRunId::try_from(
+                    affected_run.as_deref().ok_or(StoreError::CorruptHistory)?,
+                )
+                .map_err(|_| StoreError::CorruptHistory)?,
+                trigger: SourceVersionId::try_from(
+                    trigger.as_deref().ok_or(StoreError::CorruptHistory)?,
+                )
+                .map_err(|_| StoreError::CorruptHistory)?,
                 changed_source: SourceVersionId::try_from(changed_source.as_str())
                     .map_err(|_| StoreError::CorruptHistory)?,
                 replacement: replacement
@@ -2661,6 +2661,31 @@ impl Store {
             })
         })
         .collect()
+    }
+
+    /// Finds one durable revalidation intent, including the run to revisit.
+    ///
+    /// # Errors
+    /// Rejects damaged lineage or unreadable storage.
+    pub fn evidence_impact(
+        &self,
+        project: &ProjectId,
+        impact_id: &str,
+    ) -> Result<Option<EvidenceImpact>, StoreError> {
+        let object: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT object_id FROM evidence_impacts WHERE project_id=?1 AND id=?2",
+                params![project.as_str(), impact_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(object) = object else {
+            return Ok(None);
+        };
+        let object = ObjectId::try_from(object.as_str()).map_err(|_| StoreError::CorruptHistory)?;
+        self.evidence_impacts_for_object(project, &object)
+            .map(|items| items.into_iter().find(|item| item.id == impact_id))
     }
 
     /// Reads the current Issue state without mixing provider facts into semantic objects.
@@ -3469,14 +3494,39 @@ fn record_accepted_support(
     )?;
     transaction.execute(
         "INSERT INTO evidence_revalidations (project_id,impact_id,event_id,outcome)
-         SELECT project_id,id,?4,'current' FROM evidence_impacts
-         WHERE project_id=?1 AND object_id=?2 AND replacement_version_id=?3
+         SELECT i.project_id,i.id,?4,'current' FROM evidence_impacts i
+         JOIN compilation_runs prior
+           ON prior.project_id=i.project_id AND prior.id=i.affected_run_id
+         WHERE i.project_id=?1 AND i.object_id=?2 AND i.replacement_version_id=?3
+           AND i.source_version_id=prior.source_version_id
            AND NOT EXISTS (SELECT 1 FROM evidence_revalidations r
-             WHERE r.project_id=evidence_impacts.project_id AND r.impact_id=evidence_impacts.id)",
+             WHERE r.project_id=i.project_id AND r.impact_id=i.id)",
         params![
             evaluation.project.as_str(),
             object,
             source,
+            origin.event.as_str()
+        ],
+    )?;
+    transaction.execute(
+        "INSERT INTO evidence_revalidations (project_id,impact_id,event_id,outcome)
+         SELECT i.project_id,i.id,?4,'current' FROM evidence_impacts i
+         JOIN compilation_runs prior
+           ON prior.project_id=i.project_id AND prior.id=i.affected_run_id
+         JOIN compilation_runs revised
+           ON revised.project_id=i.project_id AND revised.id=?3
+         JOIN compilation_context_sources cs
+           ON cs.project_id=revised.project_id AND cs.run_id=revised.id
+          AND cs.source_version_id=i.replacement_version_id
+         WHERE i.project_id=?1 AND i.object_id=?2 AND i.id=?3
+           AND i.next_action='recompile' AND revised.mode='hindsight'
+           AND revised.source_version_id=prior.source_version_id
+           AND NOT EXISTS (SELECT 1 FROM evidence_revalidations r
+             WHERE r.project_id=i.project_id AND r.impact_id=i.id)",
+        params![
+            evaluation.project.as_str(),
+            object,
+            run.as_str(),
             origin.event.as_str()
         ],
     )?;
@@ -3492,10 +3542,7 @@ fn record_evidence_impacts(
     recorded_at_millis: i64,
 ) -> Result<(), StoreError> {
     let mut statement = transaction.prepare(
-        "SELECT object_id,event_id FROM evidence_supports
-         WHERE project_id=?1 AND source_version_id=?2
-         UNION
-         SELECT s.object_id,s.event_id FROM evidence_supports s
+        "SELECT DISTINCT s.object_id,s.event_id,pa.run_id FROM evidence_supports s
          JOIN policy_evaluation_domain_events pe
            ON pe.project_id=s.project_id AND pe.event_id=s.event_id
          JOIN policy_evaluation_inputs pi
@@ -3504,18 +3551,23 @@ fn record_evidence_impacts(
          JOIN policy_assertion_inputs pa
            ON pa.project_id=pi.project_id AND pa.evaluation_id=pi.evaluation_id
           AND pa.input_id=pi.input_id
-         JOIN compilation_context_sources cs
-           ON cs.project_id=pa.project_id AND cs.run_id=pa.run_id
-         WHERE s.project_id=?1 AND cs.source_version_id=?2
-         ORDER BY object_id,event_id",
+         WHERE s.project_id=?1 AND (s.source_version_id=?2 OR EXISTS (
+           SELECT 1 FROM compilation_context_sources cs
+           WHERE cs.project_id=pa.project_id AND cs.run_id=pa.run_id
+             AND cs.source_version_id=?2))
+         ORDER BY s.object_id,s.event_id",
     )?;
     let supports = statement
         .query_map(params![project.as_str(), previous], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     drop(statement);
-    for (object, support_event) in supports {
+    for (object, support_event, affected_run) in supports {
         let digest = Sha256::digest(
             format!(
                 "{previous}/{}/{support_event}",
@@ -3529,9 +3581,9 @@ fn record_evidence_impacts(
         }
         transaction.execute(
             "INSERT INTO evidence_impacts
-             (project_id,id,object_id,support_event_id,source_version_id,replacement_version_id,next_action,recorded_at_millis)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-            params![project.as_str(), id, object, support_event, previous, replacement, next_action, recorded_at_millis],
+             (project_id,id,object_id,support_event_id,source_version_id,replacement_version_id,next_action,recorded_at_millis,affected_run_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![project.as_str(), id, object, support_event, previous, replacement, next_action, recorded_at_millis, affected_run],
         )?;
     }
     Ok(())
@@ -3716,15 +3768,7 @@ fn insert_accepted_batch(
         let event_id = match event {
             DomainEvent::PutObject { id, .. } | DomainEvent::PutRelation { id, .. } => id,
         };
-        let reused: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM domain_events WHERE project_id=?1 AND id=?2
-             UNION ALL SELECT 1 FROM relation_events WHERE project_id=?1 AND id=?2)",
-            params![batch.project.as_str(), event_id.as_str()],
-            |row| row.get(0),
-        )?;
-        if reused {
-            return Err(StoreError::InvalidBatch);
-        }
+        ensure_event_id_unused(transaction, &batch.project, event_id)?;
         match event {
             DomainEvent::PutObject {
                 id,
@@ -3741,7 +3785,11 @@ fn insert_accepted_batch(
                         |row| row.get(0),
                     )
                     .optional()?;
-                if existing_kind.as_deref() == Some("provider_issue") && observation.is_none() {
+                if !provider_kind_transition_allowed(
+                    existing_kind.as_deref(),
+                    kind,
+                    observation.is_some(),
+                ) {
                     return Err(StoreError::InvalidBatch);
                 }
                 if issue_scope
@@ -3802,6 +3850,34 @@ fn insert_accepted_batch(
         params![batch.project.as_str(), revision],
     )?;
     Ok(())
+}
+
+fn ensure_event_id_unused(
+    transaction: &Transaction<'_>,
+    project: &ProjectId,
+    event: &merl_core::EventId,
+) -> Result<(), StoreError> {
+    let reused: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM domain_events WHERE project_id=?1 AND id=?2
+         UNION ALL SELECT 1 FROM relation_events WHERE project_id=?1 AND id=?2)",
+        params![project.as_str(), event.as_str()],
+        |row| row.get(0),
+    )?;
+    if reused {
+        Err(StoreError::InvalidBatch)
+    } else {
+        Ok(())
+    }
+}
+
+fn provider_kind_transition_allowed(
+    previous: Option<&str>,
+    next: &ObjectKind,
+    has_observation: bool,
+) -> bool {
+    !(previous == Some("provider_issue") && !has_observation
+        || next.as_str() == "provider_issue"
+            && previous.is_some_and(|kind| kind != "provider_issue"))
 }
 
 fn validate_provider_batch(
@@ -4224,13 +4300,16 @@ fn validate_compilation_intent(
     } else {
         store.replay_basis(project, record.source)?
     };
+    let hindsight = record.mode == "hindsight";
     if record.interpretation_basis_revision > store.project_revision(project)?
         || (!source.interpretation_basis_known && record.mode == "live")
-        || record.source_observation_cutoff != source.sequence
-        || (record.mode != "hindsight"
-            && causal_basis != Some(record.interpretation_basis_revision))
+        || record.source_observation_cutoff > store.source_observation_head(project)?
+        || (!hindsight && record.source_observation_cutoff != source.sequence)
+        || (hindsight && record.source_observation_cutoff < source.sequence)
+        || (!hindsight && causal_basis != Some(record.interpretation_basis_revision))
         || record.context.len() > record.max_input_bytes
-        || record.source_window.last() != Some(record.source)
+        || (hindsight && !record.source_window.contains(record.source))
+        || (!hindsight && record.source_window.last() != Some(record.source))
         || record
             .objects
             .iter()
@@ -4253,9 +4332,59 @@ fn validate_compilation_intent(
         let item = store
             .source_version(project, version)?
             .ok_or(StoreError::InvalidCompilation)?;
-        if item.sequence > source.sequence {
+        if item.sequence > record.source_observation_cutoff {
             return Err(StoreError::InvalidCompilation);
         }
+    }
+    if let Some(impact) = store.evidence_impact(project, record.id)? {
+        validate_revalidation_intent(store, project, record, &impact)?;
+    }
+    Ok(())
+}
+
+fn validate_revalidation_intent(
+    store: &Store,
+    project: &ProjectId,
+    record: &CompilationIntent<'_>,
+    impact: &EvidenceImpact,
+) -> Result<(), StoreError> {
+    let replacement = impact
+        .replacement
+        .as_ref()
+        .ok_or(StoreError::InvalidCompilation)?;
+    let expected_trigger = if impact.trigger == impact.changed_source {
+        replacement
+    } else {
+        &impact.trigger
+    };
+    let mut expected_window =
+        store.compilation_context_sources(project, impact.affected_run.as_str())?;
+    let changed = expected_window
+        .iter_mut()
+        .find(|version| **version == impact.changed_source)
+        .ok_or(StoreError::InvalidCompilation)?;
+    *changed = replacement.clone();
+    let mut expected_order = Vec::with_capacity(expected_window.len());
+    for version in expected_window {
+        let source = store
+            .source_version(project, &version)?
+            .ok_or(StoreError::InvalidCompilation)?;
+        expected_order.push((source.sequence, version));
+    }
+    expected_order.sort_by_key(|item| item.0);
+    let expected_window: Vec<_> = expected_order
+        .into_iter()
+        .map(|(_, version)| version)
+        .collect();
+    if record.mode != "hindsight"
+        || record.source != expected_trigger
+        || record.source_window != expected_window
+        || record.interpretation_basis_revision != store.project_revision(project)?
+        || record.source_observation_cutoff != store.source_observation_head(project)?
+        || impact.next_action != "recompile"
+        || impact.revalidated_by.is_some()
+    {
+        return Err(StoreError::InvalidCompilation);
     }
     Ok(())
 }
@@ -4539,5 +4668,49 @@ mod tests {
             )
             .expect("preserved write guard");
         assert_eq!(kind, "object");
+    }
+
+    #[test]
+    fn storage_rejects_provider_replacement_of_a_semantic_object() {
+        use merl_core::{
+            ActorId, BatchId, DomainEvent, DomainEventBatch, EventId, ObjectId, ObjectKind,
+            ObjectLifecycle, ProjectId,
+        };
+
+        let mut store = Store::open_in_memory().expect("store");
+        let project = ProjectId::try_from("P1").expect("project");
+        let object = ObjectId::try_from("D1").expect("object");
+        store.create_project(&project).expect("project");
+        let batch = |batch, event, kind| DomainEventBatch {
+            id: BatchId::try_from(batch).expect("batch"),
+            project: project.clone(),
+            actor: ActorId::try_from("owner").expect("actor"),
+            occurred_at_millis: 1,
+            events: vec![DomainEvent::PutObject {
+                id: EventId::try_from(event).expect("event"),
+                object: object.clone(),
+                kind: ObjectKind::try_from(kind).expect("kind"),
+                payload: None,
+                issue_scope: None,
+                lifecycle: ObjectLifecycle::Active,
+            }],
+        };
+        store
+            .commit_unchecked_bootstrap(&batch("B1", "E1", "decision"))
+            .expect("decision");
+        assert!(matches!(
+            store.commit_unchecked_bootstrap(&batch("B2", "E2", "provider_issue")),
+            Err(StoreError::InvalidBatch)
+        ));
+        assert_eq!(
+            store
+                .object(&project, &object)
+                .expect("object")
+                .expect("present")
+                .kind
+                .as_str(),
+            "decision"
+        );
+        assert_eq!(store.project_revision(&project).expect("revision").get(), 1);
     }
 }

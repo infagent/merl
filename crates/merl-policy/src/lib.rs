@@ -296,6 +296,10 @@ pub fn evaluate(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the policy matrix keeps each input kind's authority rule together"
+)]
 fn disposition_for(
     store: &Store,
     project: &ProjectId,
@@ -343,6 +347,9 @@ fn disposition_for(
                 || payload.as_ref() != Some(&observation.snapshot_payload)
                 || issue_scope.is_some()
                 || *lifecycle != merl_core::ObjectLifecycle::Active
+                || store
+                    .object(project, object)?
+                    .is_some_and(|current| current.kind.as_str() != "provider_issue")
             {
                 return Err(PolicyError::InvalidProposal);
             }

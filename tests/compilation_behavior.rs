@@ -19,6 +19,14 @@ fn required_failures_are_visible_but_optional_cold_notes_do_not_block_coverage()
 }
 
 #[test]
+fn a_pending_retry_replaces_a_prior_failure_in_coverage() {
+    CompilationScenario::given_required_and_optional_notes()
+        .when_the_required_note_fails_its_output_budget()
+        .when_a_retry_is_prepared()
+        .then_coverage_reports_pending_instead_of_failed();
+}
+
+#[test]
 fn an_evaluation_run_does_not_claim_live_semantic_coverage() {
     CompilationScenario::given_required_and_optional_notes()
         .when_the_required_note_is_compiled_for_evaluation()
