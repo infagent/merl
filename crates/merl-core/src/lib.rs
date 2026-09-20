@@ -334,6 +334,8 @@ pub struct PolicyEvaluation {
     pub actor: ActorId,
     /// Ruleset that produced this decision.
     pub version: PolicyVersion,
+    /// Digest of the exact authority configuration used with that ruleset.
+    pub configuration_digest: [u8; 32],
     /// Accepted state against which the rules ran.
     pub basis_project_revision: ProjectRevision,
     /// Typed inputs and their separate dispositions.

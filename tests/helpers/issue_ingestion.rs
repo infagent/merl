@@ -407,7 +407,9 @@ impl IssueHistory {
             .expect("policy decision")
             .expect("recorded decision");
         assert_eq!(
-            record.committed_revision.map(merl_core::ProjectRevision::get),
+            record
+                .committed_revision
+                .map(merl_core::ProjectRevision::get),
             Some(1)
         );
         assert_eq!(record.inputs.len(), 1);

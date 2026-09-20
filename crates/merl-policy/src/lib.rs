@@ -87,6 +87,31 @@ pub struct PolicyRules {
     pub administrators: Vec<ActorId>,
 }
 
+impl PolicyRules {
+    /// Hashes the exact grants used to decide an evaluation.
+    #[must_use]
+    pub fn configuration_digest(&self) -> [u8; 32] {
+        let mut hash = Sha256::new();
+        for (kind, actors) in [
+            ("decision_author", &self.decision_authors),
+            ("command_actor", &self.command_actors),
+            ("administrator", &self.administrators),
+        ] {
+            hash.update((kind.len() as u64).to_be_bytes());
+            hash.update(kind.as_bytes());
+            let mut names: Vec<&str> = actors.iter().map(ActorId::as_str).collect();
+            names.sort_unstable();
+            names.dedup();
+            hash.update((names.len() as u64).to_be_bytes());
+            for name in names {
+                hash.update((name.len() as u64).to_be_bytes());
+                hash.update(name.as_bytes());
+            }
+        }
+        hash.finalize().into()
+    }
+}
+
 /// A policy result prepared outside the final accepted-state transaction.
 #[derive(Clone, Debug)]
 pub struct PreparedPolicy {
@@ -220,6 +245,7 @@ pub fn evaluate(
             project: project.clone(),
             actor: actor.clone(),
             version: rules.version.clone(),
+            configuration_digest: rules.configuration_digest(),
             basis_project_revision: basis,
             inputs,
             reads,

@@ -131,6 +131,8 @@ pub struct RecordedPolicyEvaluation {
     pub actor: ActorId,
     /// Version of the rules that produced the result.
     pub version: merl_core::PolicyVersion,
+    /// Exact authority-configuration digest used with that version.
+    pub configuration_digest: [u8; 32],
     /// Accepted-state revision used during evaluation.
     pub basis_project_revision: ProjectRevision,
     /// Accepted revision, absent when every input remained candidate or rejected.
@@ -143,6 +145,14 @@ pub struct RecordedPolicyEvaluation {
     pub writes: Vec<merl_core::PolicyWrite>,
     /// Accepted event identities linked to this evaluation.
     pub events: Vec<merl_core::EventId>,
+}
+
+struct PolicyHeader {
+    actor: String,
+    version: String,
+    configuration_digest: Vec<u8>,
+    basis: i64,
+    revision: Option<i64>,
 }
 
 /// Stable project attachment for a provider namespace.
@@ -1764,16 +1774,22 @@ impl Store {
         project: &ProjectId,
         id: &PolicyEvaluationId,
     ) -> Result<Option<RecordedPolicyEvaluation>, StoreError> {
-        let header: Option<(String, String, i64, Option<i64>)> = self
+        let header: Option<PolicyHeader> = self
             .connection
             .query_row(
-                "SELECT actor_id, policy_version, basis_project_revision, committed_revision
+                "SELECT actor_id, policy_version, policy_config_digest, basis_project_revision, committed_revision
                  FROM policy_evaluations WHERE project_id=?1 AND id=?2",
                 params![project.as_str(), id.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| Ok(PolicyHeader {
+                    actor: row.get(0)?,
+                    version: row.get(1)?,
+                    configuration_digest: row.get(2)?,
+                    basis: row.get(3)?,
+                    revision: row.get(4)?,
+                }),
             )
             .optional()?;
-        let Some((actor, version, basis, revision)) = header else {
+        let Some(header) = header else {
             return Ok(None);
         };
         let mut statement = self.connection.prepare(
@@ -1910,13 +1926,19 @@ impl Store {
             .collect::<Result<Vec<_>, StoreError>>()?;
         Ok(Some(RecordedPolicyEvaluation {
             id: id.clone(),
-            actor: ActorId::try_from(actor.as_str()).map_err(|_| StoreError::CorruptHistory)?,
-            version: merl_core::PolicyVersion::try_from(version.as_str())
+            actor: ActorId::try_from(header.actor.as_str())
+                .map_err(|_| StoreError::CorruptHistory)?,
+            version: merl_core::PolicyVersion::try_from(header.version.as_str())
+                .map_err(|_| StoreError::CorruptHistory)?,
+            configuration_digest: header
+                .configuration_digest
+                .try_into()
                 .map_err(|_| StoreError::CorruptHistory)?,
             basis_project_revision: ProjectRevision::from(
-                u64::try_from(basis).map_err(|_| StoreError::CorruptHistory)?,
+                u64::try_from(header.basis).map_err(|_| StoreError::CorruptHistory)?,
             ),
-            committed_revision: revision
+            committed_revision: header
+                .revision
                 .map(|value| {
                     u64::try_from(value)
                         .map(ProjectRevision::from)
@@ -2429,10 +2451,10 @@ fn insert_policy_record(
     revision: Option<i64>,
 ) -> Result<(), StoreError> {
     transaction.execute(
-        "INSERT INTO policy_evaluations (project_id,id,actor_id,policy_version,basis_project_revision,evaluation_digest,batch_id,committed_revision)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        "INSERT INTO policy_evaluations (project_id,id,actor_id,policy_version,policy_config_digest,basis_project_revision,evaluation_digest,batch_id,committed_revision)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![evaluation.project.as_str(), evaluation.id.as_str(), evaluation.actor.as_str(),
-            evaluation.version.as_str(), to_sql_revision(evaluation.basis_project_revision)?, digest.as_slice(),
+            evaluation.version.as_str(), evaluation.configuration_digest.as_slice(), to_sql_revision(evaluation.basis_project_revision)?, digest.as_slice(),
             evaluation.batch.as_ref().map(|batch| batch.id.as_str()), revision],
     )?;
     for (index, input) in evaluation.inputs.iter().enumerate() {
@@ -2526,7 +2548,9 @@ fn policy_evaluation_digest(
     part(evaluation.project.as_str().as_bytes());
     part(evaluation.actor.as_str().as_bytes());
     part(evaluation.version.as_str().as_bytes());
+    part(&evaluation.configuration_digest);
     part(&evaluation.basis_project_revision.get().to_be_bytes());
+    part(&(evaluation.inputs.len() as u64).to_be_bytes());
     for input in &evaluation.inputs {
         part(input.input.kind().as_bytes());
         part(input.input.id().as_str().as_bytes());
@@ -2538,6 +2562,7 @@ fn policy_evaluation_digest(
         part(input.disposition.as_str().as_bytes());
         part(input.reason.as_str().as_bytes());
     }
+    part(&(evaluation.reads.len() as u64).to_be_bytes());
     for read in &evaluation.reads {
         match read {
             PolicyRead::Object { id, revision } => {
@@ -2555,6 +2580,7 @@ fn policy_evaluation_digest(
             }
         }
     }
+    part(&(evaluation.writes.len() as u64).to_be_bytes());
     for write in &evaluation.writes {
         part(write.object.as_str().as_bytes());
         part(
@@ -2564,9 +2590,11 @@ fn policy_evaluation_digest(
                 .to_be_bytes(),
         );
     }
+    part(&[u8::from(evaluation.batch.is_some())]);
     if let Some(batch) = &evaluation.batch {
         part(batch.id.as_str().as_bytes());
         part(&batch.occurred_at_millis.to_be_bytes());
+        part(&(batch.events.len() as u64).to_be_bytes());
         for event in &batch.events {
             let DomainEvent::PutObject {
                 id,
@@ -2580,6 +2608,7 @@ fn policy_evaluation_digest(
             part(payload.as_ref().map_or("", PayloadId::as_str).as_bytes());
         }
     }
+    part(&[u8::from(provider.is_some())]);
     if let Some(provider) = provider {
         part(provider.id.as_str().as_bytes());
         part(provider.snapshot_payload.as_str().as_bytes());
