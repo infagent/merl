@@ -212,6 +212,7 @@ impl IssueHistory {
             binding,
             source: SourceId::try_from("source").unwrap(),
             provider_entity_id: "issue-1",
+            context_scope_id: "issue-1",
             version: SourceVersionId::try_from("version").unwrap(),
             provider_version_id: "issue-1:initial",
             kind: SourceKind::try_from("issue").unwrap(),

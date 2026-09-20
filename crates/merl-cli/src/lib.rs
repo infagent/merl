@@ -51,6 +51,7 @@ impl From<StoreError> for CliError {
             StoreError::SourceConflict => "SOURCE_CONFLICT",
             StoreError::InvalidSource => "INVALID_SOURCE",
             StoreError::StaleProviderObservation => "STALE_PROVIDER_OBSERVATION",
+            StoreError::InvalidCompilation => "INVALID_COMPILATION",
             StoreError::Storage(_) => "STORAGE_ERROR",
         };
         Self {

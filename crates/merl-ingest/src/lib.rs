@@ -94,6 +94,34 @@ pub fn import_fixture(
     project: &ProjectId,
     fixture: &Fixture,
 ) -> Result<ImportReport, ImportError> {
+    import_fixture_inner(store, project, fixture, false)
+}
+
+/// Captures a historical fixture without accepting its terminal provider snapshot.
+///
+/// A replay runner can then compile each observation in order against the
+/// accepted state built from earlier observations. Use a fresh project: a
+/// terminal snapshot or unrelated accepted event would leak future state.
+///
+/// # Errors
+/// Rejects invalid fixtures or conflicting source versions.
+pub fn import_fixture_for_causal_replay(
+    store: &mut Store,
+    project: &ProjectId,
+    fixture: &Fixture,
+) -> Result<ImportReport, ImportError> {
+    if store.project_revision(project)?.get() != 0 || store.source_observation_head(project)? != 0 {
+        return Err(ImportError::Store(StoreError::InvalidCompilation));
+    }
+    import_fixture_inner(store, project, fixture, true)
+}
+
+fn import_fixture_inner(
+    store: &mut Store,
+    project: &ProjectId,
+    fixture: &Fixture,
+    historical: bool,
+) -> Result<ImportReport, ImportError> {
     validate(fixture)?;
     let binding = fixture_binding(fixture)?;
     let observed_at_millis = utc_millis(&fixture.capture.captured_at)?;
@@ -140,6 +168,7 @@ pub fn import_fixture(
             binding: binding.clone(),
             source,
             provider_entity_id: &observation.provider_id,
+            context_scope_id: &fixture.source.issue_provider_id,
             version,
             provider_version_id: &observation.version_id,
             kind: SourceKind::try_from(kind).map_err(|_| ImportError::InvalidIdentity)?,
@@ -172,10 +201,17 @@ pub fn import_fixture(
             coverage_requirement: CoverageRequirement::Required,
             policy_version: policy_version.clone(),
         };
-        captured += u64::from(store.capture_source_version(project, &capture)?);
+        captured += u64::from(if historical {
+            store.capture_historical_source_version(project, &capture)?
+        } else {
+            store.capture_source_version(project, &capture)?
+        });
     }
-    let provider_changed =
-        observe_terminal_issue_snapshot(store, project, fixture, &binding, observed_at_millis)?;
+    let provider_changed = if historical {
+        false
+    } else {
+        observe_terminal_issue_snapshot(store, project, fixture, &binding, observed_at_millis)?
+    };
     Ok(ImportReport {
         captured,
         observation_head: store.source_observation_head(project)?,
