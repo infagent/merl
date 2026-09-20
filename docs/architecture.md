@@ -320,11 +320,11 @@ The evaluation records:
 - the actor or process that requested evaluation
 - the result and reasons
 - proposed state mutations
-- links to domain events appended by a successful commit
+- the exact input that produced each domain event appended by a successful commit
 
 Possible input dispositions include accepted, candidate, rejected, duplicate, and conflict. One evaluation may accept one input while rejecting another, even when it considered both together.
 
-The evaluation record remains immutable. A successful commit adds the evaluation-to-event links as separate append-only relations in the same transaction as the domain events.
+The evaluation record remains immutable. A successful commit links each accepted event to its producing input in the same transaction as the event. Expanding an object's latest event can therefore name the exact input, even when one evaluation accepted several proposals.
 
 Policy applies authority as well as confidence. Merl may accept a deterministic observation from a trusted machine artifact. It may accept an explicit decision from a human who has authority over that project. An agent's interpretation of research direction can remain a candidate. Closing an issue, approving a merge, or superseding a major decision can require explicit permission.
 
@@ -711,12 +711,15 @@ sequenceDiagram
         A-->>C: New revision committed
         A->>W: Attempt wake-up
     else Dependency or write conflict
-        A->>DB: Roll back
+        A->>DB: Record failed guard and attempted evaluation
+        A->>DB: Commit audit outcome without a project revision
         A-->>C: Reevaluate or report conflict
     end
 ```
 
 An unrelated project change does not invalidate an evaluation when every recorded dependency still holds and the write set does not conflict. If a dependency changes before commit, the authority records the attempted evaluation and the failed guard without advancing project revision or notifying agents. The client receives a conflict and may request reevaluation. Compilation output remains immutable and need not run again merely because policy reevaluates it.
+
+If two evaluations prepared the same input before either committed, the first accepted transition wins. The authority records the second as a duplicate without creating another revision. When only part of a prepared batch overlaps accepted work, the authority records a conflict so policy can reevaluate the remaining inputs together.
 
 Object IDs alone cannot describe every dependency. A policy that depends on the absence of an object records a predicate or collection guard so a concurrent insertion invalidates the evaluation. The authority serializes the final transaction after these checks.
 
