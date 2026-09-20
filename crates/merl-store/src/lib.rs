@@ -12,7 +12,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -588,6 +588,8 @@ pub struct EvidenceImpact {
 /// Inspectable outcome of a retained compiler attempt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompilationRunStatus {
+    /// Project-local order in which the authority accepted this attempt.
+    pub attempt_order: u64,
     /// Source interpreted by the run.
     pub source: SourceVersionId,
     /// Live, replay, eval, or hindsight.
@@ -719,6 +721,11 @@ impl Store {
             }
             if version < 12 {
                 transaction.execute_batch(include_str!("../migrations/0012_inbox_cursor.sql"))?;
+            }
+            if version < 13 {
+                transaction.execute_batch(include_str!(
+                    "../migrations/0013_compilation_attempt_order.sql"
+                ))?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -1508,21 +1515,26 @@ impl Store {
             i64::try_from(record.max_source_window).map_err(|_| StoreError::InvalidCompilation)?;
         let max_objects =
             i64::try_from(record.max_objects).map_err(|_| StoreError::InvalidCompilation)?;
+        let attempt_order: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(attempt_order),0)+1 FROM compilation_runs WHERE project_id=?1",
+            [project.as_str()],
+            |row| row.get(0),
+        )?;
         transaction.execute(
             "INSERT INTO compilation_runs (
               project_id,id,source_version_id,context_digest,context_payload_id,
               interpretation_basis_revision,source_observation_cutoff,renderer_version,selector_version,
               max_input_bytes,max_output_bytes,max_output_tokens,max_assertions,max_context_requests,max_expansion_rounds,max_payload_bytes,
               max_source_window,max_objects,
-              compiler_id,compiler_version,model_id,prompt_digest,mode,started_at_millis
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
+              compiler_id,compiler_version,model_id,prompt_digest,mode,started_at_millis,attempt_order
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
             params![project.as_str(), record.id, record.source.as_str(), context_digest.as_slice(),
                 context_payload, interpretation_basis, cutoff,
                 record.renderer_version, record.selector_version, max_input, max_output,
                 max_tokens, max_assertions, max_requests, max_rounds, max_payload,
                 max_source_window, max_objects,
                 record.compiler_id, record.compiler_version, record.model_id, record.prompt_digest.as_slice(),
-                record.mode, record.started_at_millis],
+                record.mode, record.started_at_millis, attempt_order],
         )?;
         insert_context_references(&transaction, project, record)?;
         transaction.commit()?;
@@ -1642,7 +1654,7 @@ impl Store {
                      ON c.project_id=r.project_id AND c.run_id=r.id
                    WHERE r.project_id=s.project_id AND r.source_version_id=s.id
                      AND r.mode='live'
-                   ORDER BY r.rowid DESC LIMIT 1),'unprocessed') AS latest_outcome
+                   ORDER BY r.attempt_order DESC LIMIT 1),'unprocessed') AS latest_outcome
                FROM source_versions s
                WHERE s.project_id=?1 AND (?2 IS NULL OR s.context_scope_id=?2)
              )
@@ -1720,13 +1732,14 @@ impl Store {
             Vec<u8>,
             [i64; 9],
             i64,
+            i64,
         );
         let raw: Option<RawStatus> = self.connection.query_row(
             "SELECT source_version_id,mode,compilation_results.outcome,compilation_results.failure_code,interpretation_basis_revision,
                     source_observation_cutoff,context_digest,compiler_id,compiler_version,model_id,prompt_digest,
                     max_input_bytes,max_output_bytes,max_output_tokens,max_assertions,
                     max_context_requests,max_expansion_rounds,max_payload_bytes,
-                    max_source_window,max_objects,started_at_millis
+                    max_source_window,max_objects,started_at_millis,attempt_order
              FROM compilation_runs LEFT JOIN compilation_results
                ON compilation_results.project_id=compilation_runs.project_id
               AND compilation_results.run_id=compilation_runs.id
@@ -1735,7 +1748,7 @@ impl Store {
                 row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,
                 row.get(8)?, row.get(9)?, row.get(10)?,
                 [row.get(11)?, row.get(12)?, row.get(13)?, row.get(14)?,
-                 row.get(15)?, row.get(16)?, row.get(17)?, row.get(18)?, row.get(19)?], row.get(20)?)),
+                 row.get(15)?, row.get(16)?, row.get(17)?, row.get(18)?, row.get(19)?], row.get(20)?,row.get(21)?)),
         ).optional()?;
         raw.map(
             |(
@@ -1752,8 +1765,11 @@ impl Store {
                 prompt_digest,
                 limits,
                 started_at_millis,
+                attempt_order,
             )| {
                 Ok(CompilationRunStatus {
+                    attempt_order: u64::try_from(attempt_order)
+                        .map_err(|_| StoreError::CorruptHistory)?,
                     source: SourceVersionId::try_from(source.as_str())
                         .map_err(|_| StoreError::CorruptHistory)?,
                     mode,
