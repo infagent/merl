@@ -248,9 +248,10 @@ Import verifies the archive and advances the authority generation before enablin
 The main read commands are:
 
 ```bash
-merl project view [--role researcher|engineer|pm]
+merl project view [--role researcher|engineer|pm] [--focus T42]
 merl project coverage [--role researcher]
-merl project delta --since 481 [--role engineer]
+merl project delta --since 481
+merl project batch --batch DB482 [--offset 20]
 merl issue view github:acme/project-a#204 [--role researcher|engineer|pm]
 merl issue coverage github:acme/project-a#204 [--role researcher]
 merl pr view github:acme/project-a/pull/229 [--role reviewer]
@@ -262,7 +263,11 @@ merl artifact read A81 [--section protocol]
 
 Views show current accepted state by default. Superseded objects stay hidden unless the user asks for history. Every compact object can expand to detail and captured evidence. Accepted revision describes committed state; it does not imply that Merl has interpreted every captured source.
 
-The PM view puts tasks, blockers, decisions, and open questions ahead of research detail. Researcher and engineer views order the same accepted objects for their work. Each view reports truncation when its compact result reaches the item limit; role ordering does not create a separate version of project truth.
+An explicit focus object and its direct relations come before role ordering. For example, engineers focused on T17 and T44 receive different first items even though both use the engineer role. Without a focus, the PM view puts tasks, blockers, decisions, and open questions ahead of research detail. Every view uses the same accepted state and reports truncation at its item limit. The first release takes focus from the command; a later assignment system can supply it for the agent.
+
+An inbox poll or project delta may show only the first page of a large accepted batch. The result names the batch and the next offset. Use `merl inbox show --revision 482 --offset 20` or `merl project batch --batch DB482 --offset 20` to read the rest. Acknowledging an entry does not remove its batch pages. New subscribers start at the current project revision and receive changes from that point forward.
+
+`merl show D18 --source --history` follows the accepted evidence history even if a later command changed D18. It shows the original assertion's run, index, and exact source span alongside the object's current support status. A historical span is evidence of what Merl accepted then; its presence alone does not claim that the source still supports the decision now.
 
 Coverage is scoped to the view or question. It reports the source-observation head, the contiguous processed cutoff, and required gaps grouped as cold, pending, failed, purged, or excluded. A watermark never hides an earlier required hole. Negative answers remain qualified until all required observations in scope are processed. Optional cold sources do not weaken completeness; structurally linked ones appear separately as attachments.
 

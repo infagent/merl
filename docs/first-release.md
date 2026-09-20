@@ -66,7 +66,7 @@ The slice performs these actions:
 4. Validate a bounded structured compiler response, then store its assertions without granting them authority.
 5. Evaluate assertions or explicit semantic commands as typed policy inputs.
 6. Commit accepted events, the next project revision, materialized objects, and inbox entries atomically.
-7. Render compact researcher, engineer, and PM views with expansion to available evidence and scoped semantic-coverage metadata.
+7. Render compact researcher, engineer, and PM views with optional object focus, expansion to available evidence, and scoped semantic-coverage metadata.
 8. Ingest one new comment and expose only its accepted delta through a pollable inbox.
 9. Rebuild the same state from an empty database.
 10. Run the held-out benchmark against all four simpler baselines and publish correctness, break-even, and variance.
@@ -91,9 +91,9 @@ The release includes:
 - deterministic policy evaluation with recorded read dependencies and write sets;
 - append-only domain events, project revisions, and rebuildable projections;
 - evidence-impact records and support revalidation after source edits or deletions;
-- compact researcher, engineer, and PM views with semantic-coverage and freshness metadata;
+- compact, focusable researcher, engineer, and PM views with semantic-coverage and freshness metadata;
 - object and source expansion, including an explicit unavailable result after purge;
-- project deltas and a minimal pollable inbox with acknowledgement;
+- project deltas and a minimal pollable inbox with acknowledgement and paged access to large batches;
 - CLI commands for capture, compilation, review, correction, views, expansion, replay, purge, and evaluation;
 - hierarchical human and machine-readable help for the included commands, plus versioned JSON results and stable error codes;
 - development, held-out, and adversarial evaluation sets;

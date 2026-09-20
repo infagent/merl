@@ -820,7 +820,9 @@ A renderer receives accepted objects at a recorded project revision. It may expr
 
 ## Views and progressive disclosure
 
-A role view projects accepted objects into the smallest useful representation for that role. The first release gives researchers, engineers, and PMs different ordering over the same accepted state. Researchers see hypotheses and findings first; engineers see implementation work and requirements first; PMs see tasks, blockers, decisions, and questions first. Views hide superseded objects by default but retain their references for expansion. A bounded view reports when it omitted more objects.
+A view selects relevant accepted objects before it orders them. The first release accepts an explicit focus object: that object and its direct relations come first, then role ordering fills the remaining budget. Two engineers focused on different tasks therefore start with different context. Without a focus, researchers see hypotheses and findings first; engineers see implementation work and requirements first; PMs see tasks, blockers, decisions, and questions first. Assignment-derived focus belongs to the multi-agent milestone. These are projections of one accepted state, not separate role-specific truths. Views hide superseded objects by default and report truncation.
+
+Inbox entries and project deltas carry bounded reference pages. A truncated page includes a batch ID and an offset for the next page. The batch remains readable after acknowledgement, so advancing an inbox cursor cannot erase access to omitted references. A new subscription starts at the current project revision; it receives future changes, not a partial replay of earlier history.
 
 Accepted project revision and semantic coverage answer different questions. A revision says which accepted events the view contains. `SemanticCoverage` says whether every coverage-required observation for that view's scope has been processed. It records:
 
