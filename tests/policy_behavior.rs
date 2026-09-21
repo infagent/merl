@@ -63,6 +63,16 @@ fn accepted_provider_facts_and_inbox_delivery_are_atomic_and_idempotent() {
 }
 
 #[test]
+fn projection_rebuild_restores_provider_facts_and_latest_sighting() {
+    PolicyScenario::given_a_subscriber_and_a_trusted_issue_observation()
+        .when_the_provider_observation_is_accepted_twice()
+        .when_the_provider_reconfirms_the_issue()
+        .when_disposable_issue_projections_are_cleared()
+        .when_the_object_projection_is_rebuilt()
+        .then_the_provider_issue_state_and_sighting_are_restored();
+}
+
+#[test]
 fn a_rejected_command_cannot_reuse_its_identity_with_new_content() {
     PolicyScenario::given_an_agent_without_decision_authority()
         .when_the_agent_requests_a_decision()

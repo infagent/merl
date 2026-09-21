@@ -132,6 +132,8 @@ pub struct PolicyScenario {
     pending_impacts: Vec<EvidenceImpact>,
     purge_preview: Option<PurgePreview>,
     stale_purge_rejected: bool,
+    expected_provider: Option<merl_store::AcceptedProviderObservation>,
+    expected_issue: Option<merl_store::IssueState>,
 }
 
 impl PolicyScenario {
@@ -1010,6 +1012,8 @@ impl PolicyScenario {
             pending_impacts: Vec::new(),
             purge_preview: None,
             stale_purge_rejected: false,
+            expected_provider: None,
+            expected_issue: None,
         }
     }
 
@@ -1482,6 +1486,49 @@ impl PolicyScenario {
         self.retry_disposition = Some(retry.evaluation.inputs[0].disposition);
         self.stale_result = Some(retry.commit(&mut self.store));
         self
+    }
+
+    pub fn when_the_provider_reconfirms_the_issue(&mut self) -> &mut Self {
+        self.store
+            .note_provider_seen(&self.project, &id("I1"), NOW + 5)
+            .expect("provider sighting");
+        self.expected_provider = self
+            .store
+            .provider_issue_head(&self.project, &id("I1"))
+            .expect("current provider head");
+        self.expected_issue = Some(
+            self.store
+                .issue_state(&self.project, &id("I1"), "issue-v1")
+                .expect("current Issue state"),
+        );
+        self
+    }
+
+    pub fn when_disposable_issue_projections_are_cleared(&mut self) -> &mut Self {
+        let file = self.persisted_file.as_ref().expect("file-backed authority");
+        let connection = rusqlite::Connection::open(&file.0).expect("open disposable projection");
+        connection
+            .execute(
+                "DELETE FROM provider_issue_heads WHERE project_id=?1",
+                [self.project.as_str()],
+            )
+            .expect("clear provider head");
+        self
+    }
+
+    pub fn then_the_provider_issue_state_and_sighting_are_restored(&mut self) {
+        assert_eq!(
+            self.store
+                .provider_issue_head(&self.project, &id("I1"))
+                .expect("restored provider head"),
+            self.expected_provider,
+        );
+        assert_eq!(
+            self.store
+                .issue_state(&self.project, &id("I1"), "issue-v1")
+                .expect("restored Issue state"),
+            self.expected_issue.clone().expect("Issue before rebuild"),
+        );
     }
 
     pub fn when_a_batch_references_an_unavailable_payload(&mut self) -> &mut Self {

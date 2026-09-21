@@ -45,6 +45,7 @@ merl-ingest = { path = "crates/merl-ingest" }
 merl-compiler = { path = "crates/merl-compiler" }
 merl-policy = { path = "crates/merl-policy" }
 sha2.workspace = true
+rusqlite.workspace = true
 
 [lints]
 workspace = true

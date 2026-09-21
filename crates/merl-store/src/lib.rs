@@ -12,7 +12,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -487,6 +487,8 @@ pub struct AcceptedProviderObservation {
     pub input: ProviderObservation,
     /// Project revision at which the fact was accepted.
     pub revision: ProjectRevision,
+    /// Last provider sighting, including reconfirmations that did not advance the project.
+    pub last_seen_at_millis: i64,
 }
 
 /// Immutable intent and causal input for one compiler attempt.
@@ -791,6 +793,10 @@ impl Store {
             }
             if version < 14 {
                 transaction.execute_batch(include_str!("../migrations/0014_purge_audit.sql"))?;
+            }
+            if version < 15 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0015_provider_sightings.sql"))?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -3709,12 +3715,12 @@ impl Store {
         project: &ProjectId,
         issue: &ObjectId,
     ) -> Result<Option<AcceptedProviderObservation>, StoreError> {
-        let row: Option<(String, String, String, String, Option<i64>, Option<i64>, i64, i64, i64, i64)> = self
+        let row: Option<(String, String, String, String, Option<i64>, Option<i64>, i64, i64, i64, i64, i64)> = self
             .connection
             .query_row(
                 "SELECT o.id, o.binding_id, o.issue_state, o.snapshot_payload_id,
                     o.upstream_updated_at_millis, o.closed_at_millis, o.observed_at_millis, b.revision,
-                    o.label_ids_known, o.assignee_ids_known
+                    o.label_ids_known, o.assignee_ids_known, h.last_seen_at_millis
              FROM provider_issue_heads h
              JOIN provider_observations o
                ON o.project_id = h.project_id AND o.id = h.observation_id
@@ -3734,6 +3740,7 @@ impl Store {
                         row.get(7)?,
                         row.get(8)?,
                         row.get(9)?,
+                        row.get(10)?,
                     ))
                 },
             )
@@ -3750,6 +3757,7 @@ impl Store {
                 revision,
                 label_ids_known,
                 assignee_ids_known,
+                last_seen_at_millis,
             )| {
                 let label_provider_ids = provider_fact_ids(
                     &self.connection,
@@ -3791,6 +3799,7 @@ impl Store {
                     revision: ProjectRevision::from(
                         u64::try_from(revision).map_err(|_| StoreError::CorruptHistory)?,
                     ),
+                    last_seen_at_millis,
                 })
             },
         )
@@ -3810,7 +3819,20 @@ impl Store {
         issue: &ObjectId,
         observed_at_millis: i64,
     ) -> Result<(), StoreError> {
-        let changed = self.connection.execute(
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let observation: Option<String> = transaction.query_row(
+            "SELECT observation_id FROM provider_issue_heads WHERE project_id=?1 AND issue_id=?2",
+            params![project.as_str(), issue.as_str()], |row| row.get(0),
+        ).optional()?;
+        let observation = observation.ok_or(StoreError::CorruptHistory)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO provider_issue_sightings (project_id,issue_id,observation_id,seen_at_millis)
+             VALUES (?1,?2,?3,?4)",
+            params![project.as_str(),issue.as_str(),observation,observed_at_millis],
+        )?;
+        let changed = transaction.execute(
             "UPDATE provider_issue_heads
              SET last_seen_at_millis = MAX(last_seen_at_millis, ?3)
              WHERE project_id = ?1 AND issue_id = ?2",
@@ -3819,6 +3841,7 @@ impl Store {
         if changed == 0 {
             return Err(StoreError::CorruptHistory);
         }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -3841,6 +3864,10 @@ impl Store {
         )?;
         transaction.execute(
             "DELETE FROM objects WHERE project_id = ?1",
+            [project.as_str()],
+        )?;
+        transaction.execute(
+            "DELETE FROM provider_issue_heads WHERE project_id = ?1",
             [project.as_str()],
         )?;
         let mut statement = transaction.prepare(
@@ -3932,6 +3959,24 @@ impl Store {
             }
         }
         drop(statement);
+        transaction.execute(
+            "INSERT INTO provider_issue_heads
+             (project_id,issue_id,observation_id,observed_at_millis,last_seen_at_millis)
+             SELECT project_id,issue_id,id,observed_at_millis,
+               MAX(observed_at_millis,COALESCE((
+                 SELECT MAX(s.seen_at_millis) FROM provider_issue_sightings s
+                 WHERE s.project_id=ranked.project_id AND s.issue_id=ranked.issue_id
+                   AND s.observation_id=ranked.id
+               ),observed_at_millis))
+             FROM (
+               SELECT o.project_id,o.issue_id,o.id,o.observed_at_millis,
+                 ROW_NUMBER() OVER (PARTITION BY o.issue_id ORDER BY b.revision DESC) AS position
+               FROM provider_observations o JOIN domain_event_batches b
+                 ON b.project_id=o.project_id AND b.id=o.accepted_batch_id
+               WHERE o.project_id=?1
+             ) ranked WHERE position=1",
+            [project.as_str()],
+        )?;
         if u64::try_from(latest_revision).map_err(|_| StoreError::CorruptHistory)?
             != expected_revision.get()
         {
