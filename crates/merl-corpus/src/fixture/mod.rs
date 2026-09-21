@@ -12,8 +12,11 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 pub const FIXTURE_SCHEMA_V1: &str = "merl.corpus-fixture/v1";
 /// Captures upstream update time and stable label and assignee identities.
 pub const FIXTURE_SCHEMA_V2: &str = "merl.corpus-fixture/v2";
+/// States when retained body bytes were available, rather than implying that
+/// terminal capture bytes existed at every earlier source cutoff.
+pub const FIXTURE_SCHEMA_V3: &str = "merl.corpus-fixture/v3";
 /// Schema emitted by new corpus captures.
-pub const FIXTURE_SCHEMA: &str = FIXTURE_SCHEMA_V2;
+pub const FIXTURE_SCHEMA: &str = FIXTURE_SCHEMA_V3;
 
 /// A versioned evaluation fixture.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -115,6 +118,16 @@ pub enum HistoryFidelity {
     StagedExact,
 }
 
+/// Earliest point at which retained bytes may be disclosed to a causal reader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BodyAvailability {
+    /// Merl observed this body at its version event, or reconstructed it exactly.
+    AtObservation,
+    /// Only the terminal capture proves these bytes; earlier cutoffs must hide them.
+    AtCapture,
+}
+
 /// Provenance needed before corpus text can be redistributed.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Provenance {
@@ -213,6 +226,9 @@ pub struct Observation {
     /// Exact source text, absent when the provider cannot reconstruct it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// When the captured bytes became available to an evaluator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_availability: Option<BodyAvailability>,
     /// Hash of the exact captured version, absent with the body.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body_sha256: Option<String>,
@@ -694,11 +710,56 @@ pub fn require_exact_source_bodies_through(
         .iter()
         .filter(|item| item.sequence <= cutoff)
     {
-        if observation.body.is_none() {
+        if observation.body.is_none()
+            || body_availability(fixture, observation) != Some(BodyAvailability::AtObservation)
+        {
             return Err(ValidationError::MissingHistoricalBody(observation.sequence));
         }
     }
     Ok(())
+}
+
+/// Returns retained bytes only when the fixture proves they were available at this cutoff.
+///
+/// Older natural fixtures did not label individual bodies. For those, terminal
+/// capture bytes stay hidden until the final observation unless the fixture
+/// declares an exact observed or reconstructed history.
+#[must_use]
+pub fn available_body_at<'a>(
+    fixture: &Fixture,
+    observation: &'a Observation,
+    cutoff: u64,
+) -> Option<&'a str> {
+    let body = observation.body.as_deref()?;
+    match body_availability(fixture, observation)? {
+        BodyAvailability::AtObservation if observation.sequence <= cutoff => Some(body),
+        BodyAvailability::AtCapture
+            if cutoff == fixture.observations.last().map_or(0, |last| last.sequence) =>
+        {
+            Some(body)
+        }
+        BodyAvailability::AtObservation | BodyAvailability::AtCapture => None,
+    }
+}
+
+/// Effective body-availability claim, including conservative legacy inference.
+#[must_use]
+pub fn body_availability(fixture: &Fixture, observation: &Observation) -> Option<BodyAvailability> {
+    observation.body.as_ref()?;
+    observation.body_availability.or({
+        if matches!(fixture.origin, Origin::Controlled)
+            || matches!(
+                fixture.capture.history_fidelity,
+                HistoryFidelity::ExactObserved
+                    | HistoryFidelity::DiffReconstructable
+                    | HistoryFidelity::StagedExact
+            )
+        {
+            Some(BodyAvailability::AtObservation)
+        } else {
+            Some(BodyAvailability::AtCapture)
+        }
+    })
 }
 
 /// Refuses causal replay through a timestamp tie without established order.
@@ -761,13 +822,16 @@ fn is_false(value: &bool) -> bool {
     reason = "fixture integrity is checked as one public boundary"
 )]
 pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
-    if fixture.schema != FIXTURE_SCHEMA_V1 && fixture.schema != FIXTURE_SCHEMA_V2 {
+    if fixture.schema != FIXTURE_SCHEMA_V1
+        && fixture.schema != FIXTURE_SCHEMA_V2
+        && fixture.schema != FIXTURE_SCHEMA_V3
+    {
         return Err(ValidationError::UnsupportedSchema(fixture.schema.clone()));
     }
 
     let captured_at = parse_timestamp(&fixture.capture.captured_at)?;
     let snapshot = &fixture.provider_snapshot;
-    if fixture.schema == FIXTURE_SCHEMA_V2
+    if fixture.schema != FIXTURE_SCHEMA_V1
         && (snapshot
             .updated_at
             .as_deref()
@@ -791,7 +855,7 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
         return Err(ValidationError::InvalidProviderSnapshot);
     }
     let mut label_ids = HashSet::new();
-    if fixture.schema == FIXTURE_SCHEMA_V2
+    if fixture.schema != FIXTURE_SCHEMA_V1
         && (snapshot.label_refs.iter().any(|label| {
             label.provider_id.is_empty() || !label_ids.insert(label.provider_id.as_str())
         }) || snapshot
@@ -814,6 +878,8 @@ pub fn validate(fixture: &Fixture) -> Result<(), ValidationError> {
         let body_is_exact = observation.body.is_some();
         if body_is_exact != observation.body_sha256.is_some()
             || body_is_exact == observation.missing_body_reason.is_some()
+            || (fixture.schema == FIXTURE_SCHEMA_V3
+                && body_is_exact != observation.body_availability.is_some())
             || observation
                 .body
                 .as_ref()

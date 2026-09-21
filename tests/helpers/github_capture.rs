@@ -189,7 +189,12 @@ impl GithubCapture {
     }
 
     pub fn then_uses_the_new_schema(self) -> Self {
-        assert_eq!(self.fixture().schema, "merl.corpus-fixture/v2");
+        assert_eq!(self.fixture().schema, "merl.corpus-fixture/v3");
+        assert!(self.fixture().observations.iter().all(|observation| {
+            observation.body.is_none()
+                || observation.body_availability
+                    == Some(merl_corpus::fixture::BodyAvailability::AtCapture)
+        }));
         self
     }
 

@@ -4,9 +4,10 @@ use serde::Deserialize;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::fixture::{
-    ActorRef, Capture, ContentEdit, FIXTURE_SCHEMA, Fixture, HistoryFidelity, MissingBodyReason,
-    Observation, ObservationKind, Origin, Partition, Provenance, ProviderLabelRef,
-    ProviderSnapshot, RedistributionReview, Source, body_digest, source_digest, validate,
+    ActorRef, BodyAvailability, Capture, ContentEdit, FIXTURE_SCHEMA, Fixture, HistoryFidelity,
+    MissingBodyReason, Observation, ObservationKind, Origin, Partition, Provenance,
+    ProviderLabelRef, ProviderSnapshot, RedistributionReview, Source, body_digest, source_digest,
+    validate,
 };
 
 /// Parse captured GraphQL pages and preserve missing prior edit bodies as gaps.
@@ -355,6 +356,7 @@ fn observation(
         created_at: created_at.to_owned(),
         updated_at: None,
         body: body.map(str::to_owned),
+        body_availability: body.map(|_| BodyAvailability::AtCapture),
         body_sha256: body.map(body_digest),
         missing_body_reason,
         edit,

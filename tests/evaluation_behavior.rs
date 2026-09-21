@@ -26,6 +26,7 @@ fn five_reading_methods_share_one_question_and_count_preparation_per_trial() {
     EvaluationScenario::given_the_gain_discussion()
         .when_five_methods_answer_two_paired_trials_at(4)
         .then_every_reader_received_the_same_question()
+        .then_each_pair_shares_one_randomness_setting_and_repeats_differ()
         .then_the_report_has_two_trials_per_method()
         .then_summary_and_merl_preparation_are_counted_once_per_trial()
         .then_correctness_and_provenance_are_reported_with_variance()
@@ -45,4 +46,21 @@ fn an_inexact_history_cannot_be_scored_as_a_causal_trial() {
     EvaluationScenario::given_the_gain_discussion_with_inexact_earlier_bodies()
         .when_a_causal_reader_requests_the_history()
         .then_a_causal_reader_refuses_it();
+}
+
+#[test]
+fn an_available_evidence_reader_marks_a_missing_body_without_using_its_later_version() {
+    EvaluationScenario::given_an_edit_with_an_unavailable_first_body()
+        .when_a_reader_revisits_the_first_observation()
+        .then_the_missing_body_is_visible_as_a_gap()
+        .then_the_later_edit_is_not_disclosed();
+}
+
+#[test]
+fn a_rolling_summary_receives_terminal_capture_text_only_at_capture() {
+    EvaluationScenario::given_an_opening_body_known_only_from_terminal_capture()
+        .when_five_methods_answer_two_paired_trials_at(1)
+        .then_the_early_summaries_do_not_receive_the_opening_body()
+        .when_five_methods_answer_two_paired_trials_at(4)
+        .then_the_opening_body_is_disclosed_after_the_history();
 }

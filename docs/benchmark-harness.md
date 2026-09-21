@@ -12,7 +12,7 @@ The current runner handles one question at one causal cutoff. Each paired trial 
 | Summary plus retrieval | Rolling summary | Search visible sources |
 | Merl | Accepted Issue view from a prepared authority | Expand an object or source reference |
 
-An edit replaces the version shown by the raw and recent readers at that cutoff. The summary reader sees edits in observation order. Neither receives a later correction early. A fixture with missing historical bodies, ambiguous ordering, or insufficient causal fidelity cannot enter a causal trial.
+An edit replaces the version shown by the raw and recent readers at that cutoff. Missing historical bodies appear as gaps, and the summary reader sees terminal-capture text only after the observation history. A timestamp tie that crosses the requested cutoff remains unsafe and stops the trial. The strict exact-replay path remains available for staged or fully observed fixtures.
 
 ## Running a development case
 
@@ -45,12 +45,14 @@ A development plan looks like this, with paths supplied by the evaluator:
     "effort": "medium",
     "system_prompt": "Use only the context and tools supplied for this trial.",
     "task_prompt": "Answer the project question and cite the evidence you used.",
-    "trials": 2,
+    "trials": [
+      { "id": "pair-a", "randomness": { "seed": 7 } },
+      { "id": "pair-b", "randomness": { "seed": 11 } }
+    ],
     "recent_window": 2,
     "max_tool_rounds": 3,
     "search_results": 2,
-    "temperature": 0,
-    "seed": 7
+    "temperature": 0
   },
   "model_program": "/path/to/model-adapter",
   "scorer_program": "/path/to/development-scorer",
@@ -91,7 +93,7 @@ Each usage record has this shape; token counts must come from the compiler adapt
 }
 ```
 
-The model program receives one JSON request on stdin and returns one JSON response on stdout. Both use `merl.eval-adapter/v1`. Requests have `kind: summarize` or `kind: answer`; answer requests include the method, question, disclosed context, and whether search or expansion is available. Responses have `kind: summary`, `final`, `search`, or `expand`, plus provider-reported `usage.input` and `usage.output`. An answer may request at most the plan's tool-round budget. Search results come from source bodies available at the causal cutoff; Merl expansions come from the prepared authority. The adapter never receives the answer key.
+The model program receives one JSON request on stdin and returns one JSON response on stdout. Both use `merl.eval-adapter/v1`. Requests have `kind: summarize` or `kind: answer`, the paired trial ID and randomness setting, and the shared model configuration. Answer requests include the question, disclosed context, and available search or expansion capabilities. They do not name the benchmark method. Responses have `kind: summary`, `final`, `search`, or `expand`, plus provider-reported `usage.input` and `usage.output`. An answer may request at most the plan's tool-round budget. Search results come from source bodies available at the cutoff; Merl expansions come from the prepared authority. The adapter never receives the answer key.
 
 The scorer is a separate evaluator-owned program. It receives `merl.eval-score-request/v1` with the question ID, answer, and citations, then returns `merl.eval-score/v1` with correctness, provenance, stale-state, and missed-blocker grades. The harness passes `MERL_EVAL_SCORING_SPEC` only to this scorer when a frozen scoring specification is supplied. A scorer can leave ambiguous grades unadjudicated rather than awarding an automatic success.
 
@@ -101,7 +103,7 @@ Reports use `merl.eval-report/v1`. They retain each answer and its reported usag
 
 The implementation team should run development and visible adversarial cases only. An independent evaluator keeps the approved held-out package and scorer outside this repository. Before a held-out run, the plan requires a freeze record naming the candidate commit and binding the evaluator binary, approved corpus manifest, fixture, question, model configuration, model program, scorer program, and scoring specification by SHA-256. The runner checks those artifact hashes before it invokes the model. The evaluator must also confirm that the fixture and question belong to the approved manifest and that the binary came from the named commit; the runner cannot prove either fact from an opaque manifest and a commit string.
 
-The handoff quoted in the #24 discussion names a different manifest digest from [the one recorded with the corpus](evaluation-corpus.md). The curator should identify which approved manifest is current before anyone creates a held-out freeze record. Do not resolve that by recapturing or opening the sealed cases in an implementation workspace.
+Held-out v3 remains evaluator-only archival material. The independent evaluator will build, review, and freeze v4 against the final corpus and harness contracts. No implementation agent should inspect v3 or v4 cases while finishing #24.
 
 ## Still needed for #24
 
