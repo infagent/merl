@@ -1,10 +1,22 @@
 //! Causal inputs for comparing Merl with ordinary Issue-reading methods.
 
-use std::{collections::HashMap, error::Error, fmt};
+use std::{collections::HashMap, error::Error, fmt, fmt::Write as _};
 
 use merl_corpus::fixture::{
     Fixture, HistoryFidelity, Observation, ObservationKind, ValidationError,
     require_exact_source_bodies_through, require_unambiguous_order_through, validate,
+};
+
+mod adapters;
+mod runner;
+
+pub use adapters::{CliMerlSurface, ProcessModelAdapter, ProcessScorer};
+
+pub use runner::{
+    AnswerAction, AnswerRequest, AnswerResponse, BenchmarkConfig, BenchmarkError, BenchmarkMethod,
+    BenchmarkReport, BenchmarkRunner, BreakEven, EvaluationQuestion, MerlPrepared, MerlSurface,
+    MethodStats, ModelAdapter, Score, Scorer, SummaryRequest, SummaryResponse, SummarySource,
+    TokenUsage, TrialReport,
 };
 
 /// One of the reading methods in the first-release comparison.
@@ -141,21 +153,23 @@ pub fn prepare_reader_input(
     let mut context = String::new();
     let mut searchable = Vec::new();
     for (index, observation) in visible.into_iter().enumerate() {
-        let body = observation.body.as_deref().expect("body checked above");
+        let body = observation.body.as_deref().ok_or(InputError::Fixture(
+            ValidationError::MissingHistoricalBody(observation.sequence),
+        ))?;
         if included.contains(&index) {
-            use fmt::Write as _;
-            writeln!(
+            let _ = write!(
                 context,
                 "[observation {} | source {} | authored {} | version {}]",
                 observation.sequence,
                 observation.provider_id,
                 observation.created_at,
                 observation.version_id
-            )
-            .expect("String write");
+            );
+            context.push('\n');
             context.push_str(body);
             context.push_str("\n\n");
-        } else {
+        }
+        if method == ReaderMethod::RawHistory || !included.contains(&index) {
             searchable.push(SearchableSource {
                 provider_id: observation.provider_id.clone(),
                 version_id: observation.version_id.clone(),
