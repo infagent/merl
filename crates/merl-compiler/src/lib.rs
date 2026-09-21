@@ -166,6 +166,12 @@ struct ObjectContext {
 }
 
 #[derive(Clone, Copy)]
+struct ContextPosition {
+    basis: ProjectRevision,
+    cutoff: u64,
+}
+
+#[derive(Clone, Copy)]
 enum SelectorVersion {
     ObjectIdPrefixV1,
     IssueContextV1,
@@ -321,8 +327,10 @@ fn build_context_with_basis(
         store,
         project,
         trigger,
-        basis,
-        source.sequence,
+        ContextPosition {
+            basis,
+            cutoff: source.sequence,
+        },
         selected,
         limits,
         selector,
@@ -333,8 +341,7 @@ fn build_context_from_sources(
     store: &Store,
     project: &ProjectId,
     trigger: &SourceVersionId,
-    basis: ProjectRevision,
-    cutoff: u64,
+    position: ContextPosition,
     selected: Vec<SourceVersionId>,
     limits: CompilerLimits,
     selector: SelectorVersion,
@@ -358,7 +365,7 @@ fn build_context_from_sources(
             .ok_or(CompileError::NonCausalHistory)?;
         if item.ambiguous_order_with_previous
             || item.payload.is_none()
-            || item.sequence > cutoff
+            || item.sequence > position.cutoff
             || item.sequence <= previous_sequence
             || item.context_scope_id != source.context_scope_id
         {
@@ -393,12 +400,12 @@ fn build_context_from_sources(
     }
     let selection = match selector {
         SelectorVersion::ObjectIdPrefixV1 => {
-            store.objects_at_revision(project, basis, limits.objects)?
+            store.objects_at_revision(project, position.basis, limits.objects)?
         }
         SelectorVersion::IssueContextV1 => select_objects(
             store,
             project,
-            basis,
+            position.basis,
             trigger,
             &source.context_scope_id,
             &sources,
@@ -409,8 +416,8 @@ fn build_context_from_sources(
     let rendered = serde_json::to_vec(&RenderedContext {
         schema: "merl.compilation-context/v1",
         context_scope_id: source.context_scope_id,
-        interpretation_basis_revision: basis.get(),
-        source_observation_cutoff: cutoff,
+        interpretation_basis_revision: position.basis.get(),
+        source_observation_cutoff: position.cutoff,
         trigger: trigger.to_string(),
         sources,
         objects: object_context.views,
@@ -422,8 +429,8 @@ fn build_context_from_sources(
     }
     Ok(CompilationContext {
         trigger: trigger.clone(),
-        interpretation_basis_revision: basis,
-        source_observation_cutoff: cutoff,
+        interpretation_basis_revision: position.basis,
+        source_observation_cutoff: position.cutoff,
         source_window,
         objects: object_context.references,
         rendered,
@@ -477,8 +484,10 @@ fn build_revalidation_context(
         store,
         project,
         trigger,
-        store.project_revision(project)?,
-        store.source_observation_head(project)?,
+        ContextPosition {
+            basis: store.project_revision(project)?,
+            cutoff: store.source_observation_head(project)?,
+        },
         selected,
         limits,
         SelectorVersion::IssueContextV1,

@@ -196,6 +196,7 @@ dependencies = [
  "merl-ingest",
  "merl-policy",
  "merl-store",
+ "rusqlite",
  "serde_json",
  "sha2",
 ]
