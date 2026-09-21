@@ -198,6 +198,8 @@ A purge preview follows derivation links and identifies assertions, events, proj
 
 Protected payloads do not share deletion fate across projects, principals, or retention scopes. Implementations may deduplicate hashes for comparison, but they must use separate stored copies or separately erasable encryption keys when one scope may delete content while another retains it. A purge guarantee covers the active Merl store and the Merl-managed local copies named by its retention policy. It does not claim erasure from unmanaged backups, filesystem snapshots, provider systems, or previously exported archives.
 
+The first local authority has no managed replicas. During purge, Merl records the intent and erases the selected payloads, scrubs the active SQLite file, then records completion. If the process stops partway through, Merl finishes the scrub on the next open before serving reads. Merl hashes the previewed payloads and derivations, so a changed set requires a new confirmation. The CLI records the actor supplied by the local user; it does not isolate processes running under that user's OS account.
+
 ### Compilation contexts
 
 Capture and compilation are separate decisions. Capturing a prose-bearing source stores immutable metadata and an erasable payload without placing its text in an agent context. The effective `CompilationPolicy` comes from the `ProjectSourceBinding`, source kind, actor class, and project override. It has two orthogonal fields: compilation mode and coverage requirement. Source capture records both effective values and the policy version that selected them. A sender cannot force an expensive compiler run through message metadata.
@@ -248,6 +250,8 @@ Some provider APIs expose only the latest body of an edited comment. If Merl lac
 If the input remains ambiguous, the compiler returns an unresolved assertion or a structured request for more context. It does not silently load the full history.
 
 Replay uses the recorded manifest and available source bytes. A purge can make exact replay impossible; the run remains auditable through its manifest and digests.
+
+The authority numbers compiler attempts within each project. Coverage selects the latest live attempt by that number and reports erased source or compiler-input bytes separately from a compiler failure. A replay run records a new interpretation without changing accepted project state.
 
 ### Compilation runs and observed assertions
 
@@ -305,6 +309,8 @@ Accepted-object lifecycle and evidence support are separate. An object may remai
 Source supersession records one impact for each accepted support that cited the old source or used it in its compiler context. The impact names the affected compiler run, so a restarted authority can reconstruct the work. For a context edit, Merl replaces the changed version in that run's recorded source window and records a new hindsight run. The assertion may still cite the original trigger; Merl resolves the impact only after policy accepts the revised interpretation.
 
 The impact itself is the queryable `evidence_changed` fact. Its pending action remains visible until resolution, and neither record rewrites the original assertion. A material correction may instead supersede or invalidate the old object through policy. If the source bytes disappear, the view marks that support unavailable. The later administrative purge workflow must audit the erasure and its retention scope; low-level payload erasure alone does not make that claim.
+
+After restart, the authority can list pending impacts across the project. Each entry names the affected object and support event, earlier run, trigger, changed source, replacement when present, and next action. Resolving the work removes it from that list but leaves the impact record in place.
 
 ### Policy evaluations
 

@@ -382,25 +382,46 @@ merl candidate reject C81 --reason 'Capture S1 does not measure this effect'
 
 Accepting a candidate runs a new policy evaluation against current project state. It does not rewrite the old evaluation or force its proposed events through a stale basis revision.
 
-### Purging retained source content
-
-An authorized administrator can remove source bytes that Merl must no longer retain:
+### Rebuilding and replaying
 
 ```bash
-merl source purge SE771 \
+merl project rebuild --project P17 --database project.sqlite
+merl source replay --project P17 --database project.sqlite --run CR42 --json
+```
+
+Use `project rebuild` to reconstruct accepted objects and relations from domain events. It never reads source prose or calls a compiler. The result includes the accepted revision and flags degraded provenance if payloads were erased. Use `source replay` to reconstruct one recorded compiler input at its historical cutoff and check its digest. It does not accept state. Missing bytes produce `MISSING_EVIDENCE`.
+
+An operator can run a configured process compiler against that causal input:
+
+```bash
+merl source replay --project P17 --database project.sqlite --run CR42 \
+  --program ./configured-compiler --new-run CR99 \
+  --compiler-version v2 --model chosen-model \
+  --prompt-digest sha256:...
+```
+
+`CR99` is a new `replay` run. Its assertions remain separate from accepted project state until a later policy evaluation explicitly promotes them. A rerun may infer something different; projection recovery never depends on that model result.
+
+### Purging retained source content
+
+The local administrator can remove source bytes that Merl must no longer retain:
+
+```bash
+merl source purge --version SE771 --project P17 --database project.sqlite \
   --reason 'Credential posted in comment' \
   --dry-run
 
-merl source purge SE771 \
+merl source purge --version SE771 --project P17 --database project.sqlite \
   --reason 'Credential posted in comment' \
+  --actor administrator \
   --confirm-digest sha256:...
 ```
 
-The preview lists the payload, compilation runs, assertions, events, projections, and accepted objects whose evidence will become unavailable. It also identifies protected derived payloads that copied the sensitive material. Purge removes the authorized bytes or encryption keys, then records tombstones with their digests, actor, time, and reason. It does not delete record identities, rewrite structural history, or claim that exact replay still works.
+The preview names affected payloads, compilation runs, assertions, events, and accepted objects. Merl hashes that list; if another derivation appears before confirmation, the operator must preview again. Merl records the intent and payload digests, erases the bytes, and scrubs the active SQLite store before marking the purge complete. It stores the reason behind a protected payload reference. Local same-user processes remain trusted. `--actor` records who performed the action but does not authenticate them at the OS level.
 
 After purge, `merl show D18 --source` returns `source_content_unavailable` with the tombstone reference. Derived state remains visible in redacted form unless a separate policy action invalidates it.
 
-The preview and result name the retention scopes covered by the operation. Merl promises removal only from the active store and those named Merl-managed copies. It lists provider systems, unmanaged backups, and prior exports as out of scope.
+The first release covers the active Merl store. No managed replica or backup scope is configured yet. Provider systems, unmanaged backups, and prior exports remain outside the erasure claim.
 
 ### Offline commands and synchronization
 
