@@ -715,10 +715,11 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                     )?,
                 };
                 let now = utc_now_millis()?;
-                if let Some(prepared) = merl_compiler::prepare_compilation(
+                if let Some(prepared) = merl_compiler::prepare_replay_compilation(
                     &mut store,
                     &project,
-                    &original.source,
+                    run_id,
+                    rebuilt.clone(),
                     &adapter,
                     merl_compiler::RunRequest {
                         id: new_id,

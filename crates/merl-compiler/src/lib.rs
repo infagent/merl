@@ -110,7 +110,7 @@ impl CompilerLimits {
 }
 
 /// A historically bounded compiler input and its manifest.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CompilationContext {
     /// The source whose meaning is being interpreted.
     pub trigger: SourceVersionId,
@@ -905,6 +905,12 @@ pub struct PreparedCompilation {
     prompt_digest: [u8; 32],
 }
 
+#[derive(Clone, Copy)]
+struct ContextVersions<'a> {
+    renderer: &'a str,
+    selector: &'a str,
+}
+
 impl PreparedCompilation {
     /// Stable identity used to reconcile a result after process restart.
     #[must_use]
@@ -931,7 +937,7 @@ pub fn prepare_compilation(
         id: run_id,
         limits,
         mode,
-        now_millis,
+        now_millis: _,
     } = request;
     if let Some(existing) = store.compilation_run_status(project, run_id)? {
         if existing.source != *source
@@ -971,6 +977,9 @@ pub fn prepare_compilation(
             prompt_digest: adapter.prompt_digest(),
         }));
     }
+    if mode == RunMode::Replay {
+        return Err(CompileError::InvalidResponse);
+    }
     let context = if mode == RunMode::Hindsight {
         if let Some(impact) = store.evidence_impact(project, run_id)? {
             build_revalidation_context(store, project, source, &impact, limits)?
@@ -988,6 +997,88 @@ pub fn prepare_compilation(
     } else {
         build_context(store, project, source, limits)?
     };
+    persist_compilation(
+        store,
+        project,
+        source,
+        adapter,
+        request,
+        context,
+        ContextVersions {
+            renderer: "json_v1",
+            selector: "issue_context_v1",
+        },
+    )
+}
+
+/// Persists a new replay attempt with the exact input verified for an earlier run.
+///
+/// # Errors
+/// Rejects changed or missing evidence, incompatible retry identities, and non-replay requests.
+pub fn prepare_replay_compilation(
+    store: &mut Store,
+    project: &ProjectId,
+    original_run_id: &str,
+    rebuilt: CompilationContext,
+    adapter: &impl CompilerAdapter,
+    request: RunRequest<'_>,
+) -> Result<Option<PreparedCompilation>, CompileError> {
+    if request.mode != RunMode::Replay || request.id == original_run_id {
+        return Err(CompileError::InvalidResponse);
+    }
+    let original = store
+        .compilation_run_status(project, original_run_id)?
+        .ok_or(CompileError::NonCausalHistory)?;
+    let verified = rebuild_recorded_context(store, project, original_run_id, request.limits)?;
+    if rebuilt.trigger != verified.trigger
+        || rebuilt.interpretation_basis_revision != verified.interpretation_basis_revision
+        || rebuilt.source_observation_cutoff != verified.source_observation_cutoff
+        || rebuilt.source_window != verified.source_window
+        || rebuilt.objects != verified.objects
+        || rebuilt.rendered != verified.rendered
+    {
+        return Err(CompileError::NonCausalHistory);
+    }
+    if let Some(existing) = store.compilation_run_status(project, request.id)? {
+        if existing.context_digest != original.context_digest
+            || existing.renderer_version != original.renderer_version
+            || existing.selector_version != original.selector_version
+            || existing.interpretation_basis_revision != original.interpretation_basis_revision
+            || existing.source_observation_cutoff != original.source_observation_cutoff
+        {
+            return Err(CompileError::InvalidResponse);
+        }
+        return prepare_compilation(store, project, &original.source, adapter, request);
+    }
+    persist_compilation(
+        store,
+        project,
+        &original.source,
+        adapter,
+        request,
+        rebuilt,
+        ContextVersions {
+            renderer: &original.renderer_version,
+            selector: &original.selector_version,
+        },
+    )
+}
+
+fn persist_compilation(
+    store: &mut Store,
+    project: &ProjectId,
+    source: &SourceVersionId,
+    adapter: &impl CompilerAdapter,
+    request: RunRequest<'_>,
+    context: CompilationContext,
+    versions: ContextVersions<'_>,
+) -> Result<Option<PreparedCompilation>, CompileError> {
+    let RunRequest {
+        id: run_id,
+        limits,
+        mode,
+        now_millis,
+    } = request;
     let intent = CompilationIntent {
         id: run_id,
         source,
@@ -996,8 +1087,8 @@ pub fn prepare_compilation(
         objects: &context.objects,
         interpretation_basis_revision: context.interpretation_basis_revision,
         source_observation_cutoff: context.source_observation_cutoff,
-        renderer_version: "json_v1",
-        selector_version: "issue_context_v1",
+        renderer_version: versions.renderer,
+        selector_version: versions.selector,
         compiler_id: adapter.id(),
         compiler_version: adapter.version(),
         model_id: adapter.model(),
