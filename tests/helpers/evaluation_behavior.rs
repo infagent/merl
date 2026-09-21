@@ -20,6 +20,7 @@ pub struct EvaluationScenario {
     observed_trials: Vec<String>,
     summary_calls: usize,
     summary_disclosures: Vec<(u64, bool, Option<String>)>,
+    summary_order_flags: Vec<(u64, bool)>,
     tool_result_methods: Vec<BenchmarkMethod>,
     reader_error: Option<InputError>,
     imported_terminal_payload: Option<bool>,
@@ -101,6 +102,15 @@ impl EvaluationScenario {
         self
     }
 
+    pub fn then_summary_preparation_preserves_the_order_warning(self) {
+        assert_eq!(self.summary_order_flags.len(), 4);
+        assert!(
+            self.summary_order_flags
+                .iter()
+                .all(|(_, uncertain)| *uncertain)
+        );
+    }
+
     fn from_fixture(json: &str) -> Self {
         Self {
             fixture: serde_json::from_str(json).expect("controlled fixture"),
@@ -111,6 +121,7 @@ impl EvaluationScenario {
             observed_trials: Vec::new(),
             summary_calls: 0,
             summary_disclosures: Vec::new(),
+            summary_order_flags: Vec::new(),
             tool_result_methods: Vec::new(),
             reader_error: None,
             imported_terminal_payload: None,
@@ -316,6 +327,7 @@ impl EvaluationScenario {
         self.observed_trials = model.trials;
         self.summary_calls = model.summaries;
         self.summary_disclosures = model.summary_disclosures;
+        self.summary_order_flags = model.summary_order_flags;
         self.tool_result_methods = model.tool_result_methods;
         self
     }
@@ -500,6 +512,7 @@ struct FakeModel {
     trials: Vec<String>,
     summaries: usize,
     summary_disclosures: Vec<(u64, bool, Option<String>)>,
+    summary_order_flags: Vec<(u64, bool)>,
     request_details: bool,
     tool_result_methods: Vec<BenchmarkMethod>,
 }
@@ -511,6 +524,10 @@ impl ModelAdapter for FakeModel {
             request.source.sequence,
             request.source.disclosed_at_capture,
             request.source.body.map(str::to_owned),
+        ));
+        self.summary_order_flags.push((
+            request.source.sequence,
+            request.source.upstream_order_unresolved,
         ));
         Ok(SummaryResponse {
             text: format!(

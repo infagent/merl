@@ -94,3 +94,10 @@ fn timestamp_ties_remain_visible_without_claiming_an_upstream_order() {
         .when_a_causal_reader_requests_the_history()
         .then_exact_replay_rejects_unresolved_order();
 }
+
+#[test]
+fn rolling_summaries_are_told_when_source_order_is_unresolved() {
+    EvaluationScenario::given_two_sources_with_unresolved_order()
+        .when_five_methods_answer_two_paired_trials_at(2)
+        .then_summary_preparation_preserves_the_order_warning();
+}
