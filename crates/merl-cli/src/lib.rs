@@ -1002,7 +1002,9 @@ fn render_purge_preview(
                 "id": item.id.as_str(), "digest": digest_text(&item.digest)
             })).collect::<Vec<_>>(),
             "runs": preview.runs.iter().map(merl_core::CompilationRunId::as_str).collect::<Vec<_>>(),
-            "assertions": preview.assertions,
+            "assertions": preview.assertions.iter().map(|item| json!({
+                "run": item.run.as_str(), "index": item.index
+            })).collect::<Vec<_>>(),
             "events": preview.events.iter().map(merl_core::EventId::as_str).collect::<Vec<_>>(),
             "objects": preview.objects.iter().map(ObjectId::as_str).collect::<Vec<_>>(),
             "relations": preview.relations.iter().map(merl_core::RelationId::as_str).collect::<Vec<_>>(),

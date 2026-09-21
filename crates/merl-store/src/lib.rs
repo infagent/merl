@@ -113,6 +113,15 @@ pub struct PurgePayload {
     pub digest: [u8; 32],
 }
 
+/// One assertion whose recorded compiler input will lose retained bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PurgeAssertion {
+    /// Compiler run that produced the assertion.
+    pub run: merl_core::CompilationRunId,
+    /// Assertion position within that run.
+    pub index: u32,
+}
+
 /// Exact dependency set an operator must confirm before source erasure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PurgePreview {
@@ -123,7 +132,7 @@ pub struct PurgePreview {
     /// Compiler inputs whose exact replay will become unavailable.
     pub runs: Vec<merl_core::CompilationRunId>,
     /// Assertions whose recorded input will lose retained bytes.
-    pub assertions: u64,
+    pub assertions: Vec<PurgeAssertion>,
     /// Accepted events whose supporting evidence will change.
     pub events: Vec<merl_core::EventId>,
     /// Accepted objects needing reconsideration.
@@ -963,7 +972,7 @@ impl Store {
                 ))
             })?;
         let mut runs = Vec::new();
-        let mut assertions = 0_u64;
+        let mut assertions = Vec::new();
         let mut event_ids = BTreeSet::new();
         let mut object_ids = BTreeSet::new();
         let mut relation_ids = BTreeSet::new();
@@ -973,7 +982,7 @@ impl Store {
             if let Some(response) = response {
                 payload_ids.insert(response);
             }
-            assertions += collect_purge_consequences(
+            let indexes = collect_purge_consequences(
                 connection,
                 project,
                 &run,
@@ -982,10 +991,13 @@ impl Store {
                 &mut object_ids,
                 &mut relation_ids,
             )?;
-            runs.push(
-                merl_core::CompilationRunId::try_from(run.as_str())
-                    .map_err(|_| StoreError::CorruptHistory)?,
-            );
+            let run_id = merl_core::CompilationRunId::try_from(run.as_str())
+                .map_err(|_| StoreError::CorruptHistory)?;
+            assertions.extend(indexes.into_iter().map(|index| PurgeAssertion {
+                run: run_id.clone(),
+                index,
+            }));
+            runs.push(run_id);
         }
         let mut payloads = Vec::new();
         for id in payload_ids {
@@ -3933,12 +3945,15 @@ fn collect_purge_consequences(
     events: &mut BTreeSet<String>,
     objects: &mut BTreeSet<String>,
     relations: &mut BTreeSet<String>,
-) -> Result<u64, StoreError> {
-    let count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM observed_assertions WHERE project_id=?1 AND run_id=?2",
-        params![project.as_str(), run],
-        |row| row.get(0),
+) -> Result<Vec<u32>, StoreError> {
+    let mut assertion_statement = connection.prepare(
+        "SELECT assertion_index FROM observed_assertions
+         WHERE project_id=?1 AND run_id=?2 ORDER BY assertion_index",
     )?;
+    let assertions = assertion_statement
+        .query_map(params![project.as_str(), run], |row| row.get::<_, i64>(0))?
+        .map(|row| u32::try_from(row?).map_err(|_| StoreError::CorruptHistory))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut object_statement = connection.prepare(
         "SELECT DISTINCT e.id,e.object_id,e.payload_id
          FROM policy_assertion_inputs a
@@ -3982,7 +3997,7 @@ fn collect_purge_consequences(
         events.insert(event);
         relations.insert(relation);
     }
-    u64::try_from(count).map_err(|_| StoreError::CorruptHistory)
+    Ok(assertions)
 }
 
 fn purge_preview_digest(project: &ProjectId, preview: &PurgePreview) -> [u8; 32] {
@@ -4011,7 +4026,11 @@ fn purge_preview_digest(project: &ProjectId, preview: &PurgePreview) -> [u8; 32]
         hash.update([4]);
         hash.update(relation.as_str().as_bytes());
     }
-    hash.update(preview.assertions.to_be_bytes());
+    for assertion in &preview.assertions {
+        hash.update([5]);
+        hash.update(assertion.run.as_str().as_bytes());
+        hash.update(assertion.index.to_be_bytes());
+    }
     hash.finalize().into()
 }
 
