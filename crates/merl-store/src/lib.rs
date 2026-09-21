@@ -966,23 +966,7 @@ impl Store {
         if let Some(diff) = diff {
             payload_ids.insert(diff);
         }
-        let mut run_statement = connection.prepare(
-            "SELECT DISTINCT r.id,r.context_payload_id,c.response_payload_id
-             FROM compilation_runs r
-             JOIN compilation_context_sources s ON s.project_id=r.project_id AND s.run_id=r.id
-             LEFT JOIN compilation_results c ON c.project_id=r.project_id AND c.run_id=r.id
-             WHERE r.project_id=?1 AND s.source_version_id=?2 ORDER BY r.id",
-        )?;
-        let run_rows =
-            run_statement.query_map(params![project.as_str(), source.as_str()], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                ))
-            })?;
-        let mut pending_runs = run_rows.collect::<Result<Vec<_>, _>>()?;
-        drop(run_statement);
+        let mut pending_runs = direct_purge_runs(connection, project, source)?;
         let mut seen_runs = BTreeSet::new();
         let mut runs = Vec::new();
         let mut assertions = Vec::new();
@@ -4099,6 +4083,26 @@ fn dependent_runs_for_object_payload(
     )?;
     statement
         .query_map(params![project.as_str(), payload], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
+}
+
+fn direct_purge_runs(
+    connection: &Connection,
+    project: &ProjectId,
+    source: &SourceVersionId,
+) -> Result<Vec<(String, String, Option<String>)>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT r.id,r.context_payload_id,c.response_payload_id
+         FROM compilation_runs r
+         JOIN compilation_context_sources s ON s.project_id=r.project_id AND s.run_id=r.id
+         LEFT JOIN compilation_results c ON c.project_id=r.project_id AND c.run_id=r.id
+         WHERE r.project_id=?1 AND s.source_version_id=?2 ORDER BY r.id",
+    )?;
+    statement
+        .query_map(params![project.as_str(), source.as_str()], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })?
         .collect::<Result<Vec<_>, _>>()
