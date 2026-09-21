@@ -317,6 +317,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
         ["help", "source"] => help("source", *json_output),
         ["help", "source", "show"] => help("source show", *json_output),
         ["help", "source", "purge"] => help("source purge", *json_output),
+        ["help", "source", "purge-audit"] => help("source purge-audit", *json_output),
         ["help", "source", "replay"] => help("source replay", *json_output),
         ["help", "issue", "view"] | ["issue", "view", "help"] => help("issue view", *json_output),
         ["help", "issue", "import-fixture"] | ["issue", "import-fixture", "help"] => {
@@ -621,6 +622,53 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                     digest,
                 )?;
                 render_purge_audit(&project, &audit, *json_output)
+            }
+        }
+        ["source", "purge-audit"] => {
+            let project =
+                parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
+            let database = database.ok_or_else(|| invalid_input("--database is required"))?;
+            let version = SourceVersionId::try_from(
+                version.ok_or_else(|| invalid_input("--version is required"))?,
+            )
+            .map_err(|error| CliError {
+                code: "INVALID_ID",
+                message: error.to_string(),
+            })?;
+            let store = Store::open(Path::new(database))?;
+            let audit = store
+                .purge_audit(&project, &version)?
+                .ok_or_else(|| CliError {
+                    code: "PURGE_AUDIT_NOT_FOUND",
+                    message: "source has no purge audit".into(),
+                })?;
+            let receipts = store.purge_receipt_payloads(&project, &version)?;
+            let reason = payload_json(&store, &project, &audit.reason)?;
+            if *json_output {
+                render_json(&json!({
+                    "schema": "merl.purge-audit/v1", "project": project.as_str(),
+                    "source": version.as_str(), "actor": audit.actor.as_str(),
+                    "requested_at_millis": audit.requested_at_millis,
+                    "reason": reason, "completed": audit.completed,
+                    "preview_digest": digest_text(&audit.preview_digest),
+                    "payloads": receipts.iter().map(|item| json!({
+                        "id": item.id.as_str(), "digest": digest_text(&item.digest)
+                    })).collect::<Vec<_>>(),
+                    "covered_scopes": ["active_store"],
+                    "outside_scope": ["provider_systems", "unmanaged_backups", "prior_exports"]
+                }))
+            } else {
+                Ok(format!(
+                    "{}: purge {} by {}; {} payload receipts\n",
+                    version,
+                    if audit.completed {
+                        "complete"
+                    } else {
+                        "pending"
+                    },
+                    audit.actor,
+                    receipts.len()
+                ))
             }
         }
         ["source", "replay"] => {
@@ -1531,8 +1579,13 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "source" => (
             "merl source <command>",
-            "Commands: show, replay, purge.",
-            vec!["source show", "source replay", "source purge"],
+            "Commands: show, replay, purge, purge-audit.",
+            vec![
+                "source show",
+                "source replay",
+                "source purge",
+                "source purge-audit",
+            ],
         ),
         "source show" => (
             "merl source show --project <id> --database <path> --version <id> [--format json]",
@@ -1543,6 +1596,11 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             "merl source purge --project <id> --database <path> --version <id> --reason <text> (--dry-run | --actor <id> --confirm-digest sha256:<hex>) [--format json]",
             "Preview affected bytes and provenance, then confirm the digest to erase them from active Merl storage.",
             vec!["source show"],
+        ),
+        "source purge-audit" => (
+            "merl source purge-audit --project <id> --database <path> --version <id> [--format json]",
+            "Read the completed purge receipt and retained payload digests without restoring erased bytes.",
+            vec!["source purge", "source show"],
         ),
         "source replay" => (
             "merl source replay --project <id> --database <path> --run <id> [--program <path> --new-run <id> --compiler-version <version> --model <id> --prompt-digest sha256:<hex>] [--format json]",
@@ -1600,6 +1658,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         "source purge" => Some(
             "merl source purge --project P1 --database project.sqlite --version SV1 --reason 'Sensitive text' --dry-run --json",
         ),
+        "source purge-audit" => Some(
+            "merl source purge-audit --project P1 --database project.sqlite --version SV1 --json",
+        ),
         "source replay" => {
             Some("merl source replay --project P1 --database project.sqlite --run CR42 --json")
         }
@@ -1632,6 +1693,13 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
                 "INVALID_ID",
                 "INVALID_SOURCE",
                 "INVALID_PURGE",
+                "STORAGE_ERROR",
+            ]
+        } else if command == "source purge-audit" {
+            vec![
+                "INVALID_INPUT",
+                "INVALID_ID",
+                "PURGE_AUDIT_NOT_FOUND",
                 "STORAGE_ERROR",
             ]
         } else if command == "source replay" {
