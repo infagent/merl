@@ -23,6 +23,14 @@ fn source_replay_rebuilds_the_recorded_input_without_changing_accepted_history()
 }
 
 #[test]
+fn an_older_selector_version_rebuilds_its_original_context() {
+    CompilationScenario::given_many_unrelated_objects_and_a_named_decision()
+        .when_an_older_selector_run_is_recorded()
+        .when_that_run_is_rebuilt()
+        .then_the_original_selection_and_bytes_match();
+}
+
+#[test]
 fn required_failures_are_visible_but_optional_cold_notes_do_not_block_coverage() {
     CompilationScenario::given_required_and_optional_notes()
         .when_the_required_note_fails_its_output_budget()

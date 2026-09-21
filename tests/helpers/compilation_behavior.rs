@@ -1,13 +1,14 @@
 use merl_compiler::{
     CompilerLimits, FakeCompiler, ProcessCompiler, RunMode, RunRequest, SequentialReplay,
-    build_context, execute_compilation, prepare_compilation, record_compilation_result,
+    build_context, execute_compilation, prepare_compilation, rebuild_recorded_context,
+    record_compilation_result,
 };
 use merl_core::{
     ActorId, BatchId, CapturePolicyVersion, CompilationMode, CoverageRequirement, DomainEvent,
     DomainEventBatch, EventId, ObjectId, ObjectKind, ProjectId, SourceBindingId, SourceId,
     SourceKind, SourceProvider, SourceVersionId,
 };
-use merl_store::{SemanticCoverage, SourceBinding, SourceCapture, Store};
+use merl_store::{CompilationIntent, SemanticCoverage, SourceBinding, SourceCapture, Store};
 use sha2::{Digest, Sha256};
 
 fn limits() -> CompilerLimits {
@@ -175,6 +176,8 @@ pub struct CompilationScenario {
     recovery_succeeded: bool,
     hindsight_context: Option<serde_json::Value>,
     replay_check: ReplayCheck,
+    legacy_context: Option<Vec<u8>>,
+    legacy_replay: Option<Result<Vec<u8>, merl_compiler::CompileError>>,
 }
 
 impl CompilationScenario {
@@ -192,6 +195,8 @@ impl CompilationScenario {
             recovery_succeeded: false,
             hindsight_context: None,
             replay_check: ReplayCheck::NotRun,
+            legacy_context: None,
+            legacy_replay: None,
         }
     }
 
@@ -372,6 +377,100 @@ impl CompilationScenario {
         );
         scenario.note = SourceVersionId::try_from("issue-comment-v1").expect("source");
         scenario
+    }
+
+    pub fn when_an_older_selector_run_is_recorded(&mut self) -> &mut Self {
+        let current = build_context(&self.store, &self.project, &self.note, limits())
+            .expect("current context");
+        let old_selection = self
+            .store
+            .objects_at_revision(
+                &self.project,
+                current.interpretation_basis_revision,
+                limits().objects,
+            )
+            .expect("old prefix selection");
+        let old_objects = old_selection
+            .items
+            .iter()
+            .map(|(id, revision, _)| {
+                format!(
+                    r#"{{"id":"{}","revision":{},"body":null}}"#,
+                    id.as_str(),
+                    revision.get()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let rendered = String::from_utf8(current.rendered).expect("context JSON");
+        let object_start = rendered.find("\"objects\":").expect("objects key");
+        let truncated_start = rendered
+            .find(",\"objects_truncated\":")
+            .expect("truncation key");
+        let old_rendered = format!(
+            "{}\"objects\":[{}]{}",
+            &rendered[..object_start],
+            old_objects,
+            &rendered[truncated_start..]
+        )
+        .into_bytes();
+        let references = old_selection
+            .items
+            .into_iter()
+            .map(|(id, revision, _)| (id, revision))
+            .collect::<Vec<_>>();
+        let budget = limits();
+        self.store
+            .prepare_compilation(
+                &self.project,
+                &CompilationIntent {
+                    id: "legacy-selector-run",
+                    source: &self.note,
+                    context: &old_rendered,
+                    source_window: &current.source_window,
+                    objects: &references,
+                    interpretation_basis_revision: current.interpretation_basis_revision,
+                    source_observation_cutoff: current.source_observation_cutoff,
+                    renderer_version: "json_v1",
+                    selector_version: "object_id_prefix_v1",
+                    compiler_id: "fake",
+                    compiler_version: "v1",
+                    model_id: "deterministic",
+                    prompt_digest: Sha256::digest(b"legacy").into(),
+                    mode: "replay",
+                    max_input_bytes: budget.input_bytes,
+                    max_output_bytes: budget.output_bytes,
+                    max_output_tokens: budget.output_tokens,
+                    max_assertions: budget.assertions,
+                    max_context_requests: budget.context_requests,
+                    max_expansion_rounds: budget.expansion_rounds,
+                    max_payload_bytes: budget.payload_bytes,
+                    max_source_window: budget.source_window,
+                    max_objects: budget.objects,
+                    started_at_millis: 30,
+                },
+            )
+            .expect("record legacy selector run");
+        self.legacy_context = Some(old_rendered);
+        self
+    }
+
+    pub fn when_that_run_is_rebuilt(&mut self) -> &mut Self {
+        self.legacy_replay = Some(
+            rebuild_recorded_context(&self.store, &self.project, "legacy-selector-run", limits())
+                .map(|context| context.rendered),
+        );
+        self
+    }
+
+    pub fn then_the_original_selection_and_bytes_match(&mut self) {
+        assert_eq!(
+            self.legacy_replay
+                .take()
+                .expect("replay result")
+                .expect("legacy replay"),
+            self.legacy_context.take().expect("recorded input")
+        );
     }
 
     pub fn given_many_other_issue_objects_and_one_local_decision() -> Self {

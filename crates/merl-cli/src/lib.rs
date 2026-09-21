@@ -106,6 +106,9 @@ impl From<merl_compiler::CompileError> for CliError {
             merl_compiler::CompileError::OutputBudget => "COMPILER_OUTPUT_BUDGET",
             merl_compiler::CompileError::InvalidResponse => "INVALID_COMPILER_RESPONSE",
             merl_compiler::CompileError::ContextRequired => "COMPILER_CONTEXT_REQUIRED",
+            merl_compiler::CompileError::UnsupportedReplayVersion(_) => {
+                "UNSUPPORTED_REPLAY_VERSION"
+            }
             merl_compiler::CompileError::Adapter(_) => "COMPILER_ADAPTER_ERROR",
             merl_compiler::CompileError::Store(_) => "STORAGE_ERROR",
         };
