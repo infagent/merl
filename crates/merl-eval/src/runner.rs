@@ -691,13 +691,11 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                         .then(|| available_body_at(fixture, source, source.sequence))
                         .flatten(),
                         disclosed_at_capture: false,
-                        upstream_order_unresolved: source.ambiguous_order_with_previous
-                            || fixture
-                                .observations
-                                .get(usize::try_from(source.sequence).unwrap_or(usize::MAX))
-                                .is_some_and(|next| {
-                                    next.sequence <= cutoff && next.ambiguous_order_with_previous
-                                }),
+                        upstream_order_unresolved: source_order_unresolved(
+                            fixture,
+                            source.sequence,
+                            cutoff,
+                        ),
                     },
                 })
                 .map_err(BenchmarkError::Model)?;
@@ -734,7 +732,11 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                             occurred_at: &source.occurred_at,
                             body: source.body.as_deref(),
                             disclosed_at_capture: true,
-                            upstream_order_unresolved: source.ambiguous_order_with_previous,
+                            upstream_order_unresolved: source_order_unresolved(
+                                fixture,
+                                source.sequence,
+                                cutoff,
+                            ),
                         },
                     })
                     .map_err(BenchmarkError::Model)?;
@@ -853,6 +855,17 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
         }
         Err(BenchmarkError::ToolBudget)
     }
+}
+
+fn source_order_unresolved(fixture: &Fixture, sequence: u64, cutoff: u64) -> bool {
+    usize::try_from(sequence.saturating_sub(1))
+        .ok()
+        .and_then(|index| fixture.observations.get(index))
+        .is_some_and(|source| source.ambiguous_order_with_previous)
+        || usize::try_from(sequence)
+            .ok()
+            .and_then(|index| fixture.observations.get(index))
+            .is_some_and(|next| next.sequence <= cutoff && next.ambiguous_order_with_previous)
 }
 
 fn method_stats(method: BenchmarkMethod, trials: &[TrialReport]) -> MethodStats {
