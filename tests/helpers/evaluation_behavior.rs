@@ -438,6 +438,27 @@ impl EvaluationScenario {
         }
     }
 
+    pub fn then_each_model_cost_can_be_reconciled_to_its_calls(self) {
+        let report = self.report.expect("report");
+        assert_eq!(report.summary_calls.len(), 8);
+        for trial in &report.trials {
+            assert_eq!(trial.answer_calls.len(), trial.tool_rounds + 1);
+            let input: u64 = trial.answer_calls.iter().map(|call| call.usage.input).sum();
+            let output: u64 = trial
+                .answer_calls
+                .iter()
+                .map(|call| call.usage.output)
+                .sum();
+            assert_eq!(trial.read_usage, TokenUsage { input, output });
+        }
+        let summary_tokens: u128 = report
+            .summary_calls
+            .iter()
+            .map(|call| call.usage.total())
+            .sum();
+        assert_eq!(summary_tokens, report.methods[1].total_preparation_tokens);
+    }
+
     pub fn when_a_causal_reader_requests_the_history(mut self) -> Self {
         self.reader_error =
             prepare_exact_reader_input(&self.fixture, 3, ReaderMethod::RawHistory, 2).err();

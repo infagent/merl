@@ -310,10 +310,52 @@ pub struct TrialReport {
     pub preparation_usage: TokenUsage,
     /// Provider-reported answer, search, and expansion token usage.
     pub read_usage: TokenUsage,
+    /// Usage of each answer call, including tool-request rounds.
+    pub answer_calls: Vec<AnswerCallRecord>,
     /// Number of explicit search or expansion rounds.
     pub tool_rounds: usize,
     /// Required semantic coverage for the Merl arm; other methods make no such claim.
     pub merl_required_coverage_complete: Option<bool>,
+}
+
+/// Provider-reported cost for one answer or tool-request round.
+#[derive(Clone, Debug, Serialize)]
+pub struct AnswerCallRecord {
+    /// Zero-based round within one reader visit.
+    pub round: usize,
+    /// Whether the model answered, searched, or expanded.
+    pub action: AnswerCallAction,
+    /// Provider-reported usage for this call.
+    pub usage: TokenUsage,
+}
+
+/// Action charged to one answer call.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerCallAction {
+    /// The reader returned an answer.
+    Final,
+    /// The reader requested source search.
+    Search,
+    /// The reader requested Merl expansion.
+    Expand,
+}
+
+/// One summary update; both summary-based methods reuse its result.
+#[derive(Clone, Debug, Serialize)]
+pub struct SummaryCallRecord {
+    /// Paired trial identity.
+    pub trial_id: String,
+    /// Observation cutoff of the prepared summary.
+    pub cutoff: u64,
+    /// Whether terminal capture was available.
+    pub capture_phase: bool,
+    /// Source observation whose evidence was summarized.
+    pub source_observation: u64,
+    /// The call disclosed terminal-capture text after the observations.
+    pub disclosed_at_capture: bool,
+    /// Provider-reported usage for this update.
+    pub usage: TokenUsage,
 }
 
 /// Summary statistics over independently prepared paired trials.
@@ -373,6 +415,8 @@ pub struct BenchmarkReport {
     pub config: BenchmarkConfig,
     /// Individual answers and costs.
     pub trials: Vec<TrialReport>,
+    /// Shared summary calls retained separately from per-arm attributable cost.
+    pub summary_calls: Vec<SummaryCallRecord>,
     /// Per-method preparation and trial statistics.
     pub methods: Vec<MethodStats>,
     /// Four comparisons against repeated raw-history reads.
@@ -566,6 +610,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
         }
         let mut trials =
             Vec::with_capacity(config.trials.len() * questions.len() * BenchmarkMethod::ALL.len());
+        let mut summary_calls = Vec::new();
         for (trial_index, trial) in config.trials.iter().enumerate() {
             for (cutoff, capture_phase, raw, recent) in &inputs {
                 let first_question = questions
@@ -579,8 +624,9 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                 if merl.source_cutoff != *cutoff || !merl.causal {
                     return Err(BenchmarkError::InvalidMerlSurface);
                 }
-                let (summary, summary_usage) =
+                let (summary, summary_usage, calls) =
                     self.prepare_summary(fixture, *cutoff, *capture_phase, &config, trial)?;
+                summary_calls.extend(calls);
                 for (question_index, question) in questions
                     .iter()
                     .filter(|question| question.cutoff == *cutoff)
@@ -669,6 +715,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
             questions,
             config,
             trials,
+            summary_calls,
             methods,
             break_even,
         })
@@ -681,9 +728,10 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
         capture_phase: bool,
         config: &BenchmarkConfig,
         trial: &TrialIdentity,
-    ) -> Result<(String, TokenUsage), BenchmarkError> {
+    ) -> Result<(String, TokenUsage, Vec<SummaryCallRecord>), BenchmarkError> {
         let mut summary = String::new();
         let mut usage = TokenUsage::default();
+        let mut calls = Vec::new();
         for source in fixture
             .observations
             .iter()
@@ -718,11 +766,17 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                     },
                 })
                 .map_err(BenchmarkError::Model)?;
-            if response.text.is_empty() {
-                return Err(BenchmarkError::Model("empty rolling summary".to_owned()));
-            }
-            usage.add(response.usage)?;
-            summary = response.text;
+            record_summary_call(
+                &mut summary,
+                &mut usage,
+                &mut calls,
+                response,
+                trial,
+                cutoff,
+                capture_phase,
+                source.sequence,
+                false,
+            )?;
         }
         if capture_phase && cutoff == fixture.observations.last().map_or(0, |last| last.sequence) {
             for source in fixture
@@ -759,14 +813,20 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                         },
                     })
                     .map_err(BenchmarkError::Model)?;
-                if response.text.is_empty() {
-                    return Err(BenchmarkError::Model("empty rolling summary".to_owned()));
-                }
-                usage.add(response.usage)?;
-                summary = response.text;
+                record_summary_call(
+                    &mut summary,
+                    &mut usage,
+                    &mut calls,
+                    response,
+                    trial,
+                    cutoff,
+                    capture_phase,
+                    source.sequence,
+                    true,
+                )?;
             }
         }
-        Ok((summary, usage))
+        Ok((summary, usage, calls))
     }
 
     #[expect(
@@ -785,6 +845,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
     ) -> Result<TrialReport, BenchmarkError> {
         let mut context = initial_context.to_owned();
         let mut usage = TokenUsage::default();
+        let mut answer_calls = Vec::new();
         for round in 0..=config.max_tool_rounds {
             let can_search = matches!(
                 method,
@@ -805,17 +866,22 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                 })
                 .map_err(BenchmarkError::Model)?;
             usage.add(response.usage)?;
+            answer_calls.push(AnswerCallRecord {
+                round,
+                action: match &response.action {
+                    AnswerAction::Final { .. } => AnswerCallAction::Final,
+                    AnswerAction::Search(_) => AnswerCallAction::Search,
+                    AnswerAction::Expand(_) => AnswerCallAction::Expand,
+                },
+                usage: response.usage,
+            });
             match response.action {
                 AnswerAction::Final { answer, citations } => {
                     let score = self
                         .scorer
                         .score(&question.id, &answer, &citations)
                         .map_err(BenchmarkError::Scoring)?;
-                    for grade in [score.correctness, score.provenance].into_iter().flatten() {
-                        if !(0.0..=1.0).contains(&grade) {
-                            return Err(BenchmarkError::InvalidScore);
-                        }
-                    }
+                    validate_score(&score)?;
                     return Ok(TrialReport {
                         method,
                         trial: trial_index,
@@ -826,6 +892,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                         score,
                         preparation_usage: TokenUsage::default(),
                         read_usage: usage,
+                        answer_calls,
                         tool_rounds: round,
                         merl_required_coverage_complete: None,
                     });
@@ -874,6 +941,46 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
         }
         Err(BenchmarkError::ToolBudget)
     }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the summary call identity must stay explicit in the audit ledger"
+)]
+fn record_summary_call(
+    summary: &mut String,
+    usage: &mut TokenUsage,
+    calls: &mut Vec<SummaryCallRecord>,
+    response: SummaryResponse,
+    trial: &TrialIdentity,
+    cutoff: u64,
+    capture_phase: bool,
+    source_observation: u64,
+    disclosed_at_capture: bool,
+) -> Result<(), BenchmarkError> {
+    if response.text.is_empty() {
+        return Err(BenchmarkError::Model("empty rolling summary".to_owned()));
+    }
+    usage.add(response.usage)?;
+    calls.push(SummaryCallRecord {
+        trial_id: trial.id.clone(),
+        cutoff,
+        capture_phase,
+        source_observation,
+        disclosed_at_capture,
+        usage: response.usage,
+    });
+    *summary = response.text;
+    Ok(())
+}
+
+fn validate_score(score: &Score) -> Result<(), BenchmarkError> {
+    for grade in [score.correctness, score.provenance].into_iter().flatten() {
+        if !(0.0..=1.0).contains(&grade) {
+            return Err(BenchmarkError::InvalidScore);
+        }
+    }
+    Ok(())
 }
 
 fn source_order_unresolved(fixture: &Fixture, sequence: u64, cutoff: u64) -> bool {

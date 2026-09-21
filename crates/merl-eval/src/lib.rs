@@ -19,10 +19,11 @@ pub use preparation::{
 };
 
 pub use runner::{
-    AnswerAction, AnswerRequest, AnswerResponse, BenchmarkConfig, BenchmarkError, BenchmarkMethod,
-    BenchmarkReport, BenchmarkRunner, BreakEven, CutoffFidelity, EvaluationQuestion, MerlPrepared,
-    MerlSurface, MethodStats, ModelAdapter, RandomnessControl, Score, Scorer, SummaryRequest,
-    SummaryResponse, SummarySource, TokenUsage, TrialIdentity, TrialReport,
+    AnswerAction, AnswerCallAction, AnswerCallRecord, AnswerRequest, AnswerResponse,
+    BenchmarkConfig, BenchmarkError, BenchmarkMethod, BenchmarkReport, BenchmarkRunner, BreakEven,
+    CutoffFidelity, EvaluationQuestion, MerlPrepared, MerlSurface, MethodStats, ModelAdapter,
+    RandomnessControl, Score, Scorer, SummaryCallRecord, SummaryRequest, SummaryResponse,
+    SummarySource, TokenUsage, TrialIdentity, TrialReport,
 };
 
 /// One of the reading methods in the first-release comparison.

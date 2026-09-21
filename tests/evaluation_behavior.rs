@@ -103,3 +103,10 @@ fn rolling_summaries_are_told_when_source_order_is_unresolved() {
         .when_five_methods_answer_two_paired_trials_at(2)
         .then_summary_preparation_preserves_the_order_warning();
 }
+
+#[test]
+fn every_preparation_and_tool_round_has_a_measured_call_record() {
+    EvaluationScenario::given_the_gain_discussion()
+        .when_retrieval_and_merl_expansion_are_requested_at(4)
+        .then_each_model_cost_can_be_reconciled_to_its_calls();
+}
