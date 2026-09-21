@@ -214,6 +214,44 @@ impl CliIssueHistory {
         self
     }
 
+    pub fn when_the_purge_audit_is_read(&mut self) -> &mut Self {
+        let database = self.database();
+        let version = Self::first_version();
+        let output = merl(&[
+            "source",
+            "purge-audit",
+            "--project",
+            "P1",
+            "--database",
+            path(&database),
+            "--version",
+            &version,
+            "--json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        self.latest = Some(serde_json::from_slice(&output.stdout).expect("audit result"));
+        self
+    }
+
+    pub fn then_the_audit_names_the_actor_reason_and_tombstoned_payload(&mut self) -> &mut Self {
+        let audit = self.latest.as_ref().expect("audit result");
+        assert_eq!(audit["actor"], "admin");
+        assert_eq!(audit["reason"]["text"], "Sensitive text");
+        assert_eq!(audit["completed"], true);
+        assert!(
+            audit["payloads"]
+                .as_array()
+                .expect("payload receipts")
+                .iter()
+                .any(|item| item["id"].as_str().is_some_and(|id| id.starts_with("src_")))
+        );
+        self
+    }
+
     pub fn then_active_store_no_longer_contains_the_source_body(&mut self) {
         let active_file = std::fs::read(self.database()).expect("active store bytes");
         let removed = b"For report A, export CSV with a sample_id column.";
@@ -279,6 +317,14 @@ impl CliIssueHistory {
                 .expect("compiler runs"),
             0
         );
+    }
+
+    pub fn then_rebuild_reports_degraded_provenance_at_the_same_revision(&mut self) {
+        let result = self.latest.as_ref().expect("rebuild result");
+        assert_eq!(result["action"], "project.rebuild");
+        assert_eq!(result["revision"], 1);
+        assert_eq!(result["provenance"], "degraded");
+        assert!(result["erased_payloads"].as_u64().expect("erased count") > 0);
     }
 
     pub fn given_an_issue_with_a_recorded_compiler_run(&mut self) -> &mut Self {

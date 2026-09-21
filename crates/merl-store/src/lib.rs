@@ -1141,6 +1141,32 @@ impl Store {
         .transpose()
     }
 
+    /// Reads the immutable payload digests named by a purge receipt.
+    ///
+    /// # Errors
+    /// Rejects corrupt digests or an unreadable audit table.
+    pub fn purge_receipt_payloads(
+        &self,
+        project: &ProjectId,
+        source: &SourceVersionId,
+    ) -> Result<Vec<PurgePayload>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT payload_id,digest FROM purge_intent_payloads
+             WHERE project_id=?1 AND source_version_id=?2 ORDER BY payload_id",
+        )?;
+        let rows = statement.query_map(params![project.as_str(), source.as_str()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        })?;
+        rows.map(|row| {
+            let (id, digest) = row?;
+            Ok(PurgePayload {
+                id: PayloadId::try_from(id.as_str()).map_err(|_| StoreError::CorruptHistory)?,
+                digest: digest.try_into().map_err(|_| StoreError::CorruptHistory)?,
+            })
+        })
+        .collect()
+    }
+
     fn finish_pending_purges(&mut self) -> Result<(), StoreError> {
         let pending = {
             let mut statement = self.connection.prepare(

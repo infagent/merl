@@ -21,6 +21,8 @@ fn an_operator_can_preview_and_confirm_a_source_purge() {
         .then_the_preview_names_protected_bytes()
         .when_the_preview_is_confirmed()
         .then_source_content_is_unavailable_and_the_audit_is_complete()
+        .when_the_purge_audit_is_read()
+        .then_the_audit_names_the_actor_reason_and_tombstoned_payload()
         .then_the_other_projects_copy_remains_available();
 }
 
@@ -69,4 +71,15 @@ fn a_purged_source_cannot_be_claimed_as_an_exact_replay() {
         .when_the_preview_is_confirmed()
         .when_the_purged_source_is_replayed()
         .then_replay_reports_missing_evidence();
+}
+
+#[test]
+fn projection_rebuild_keeps_accepted_state_but_reports_purged_evidence() {
+    CliIssueHistory::new()
+        .given_a_new_project()
+        .when_importing_an_issue()
+        .when_a_source_purge_is_previewed()
+        .when_the_preview_is_confirmed()
+        .when_the_project_projection_is_rebuilt()
+        .then_rebuild_reports_degraded_provenance_at_the_same_revision();
 }

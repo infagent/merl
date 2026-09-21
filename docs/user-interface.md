@@ -415,9 +415,12 @@ merl source purge --version SE771 --project P17 --database project.sqlite \
   --reason 'Credential posted in comment' \
   --actor administrator \
   --confirm-digest sha256:...
+
+merl source purge-audit --version SE771 --project P17 \
+  --database project.sqlite --json
 ```
 
-The preview names affected payloads, compilation runs, assertions, events, and accepted objects. Merl hashes that list; if another derivation appears before confirmation, the operator must preview again. Merl records the intent and payload digests, erases the bytes, and scrubs the active SQLite store before marking the purge complete. It stores the reason behind a protected payload reference. Local same-user processes remain trusted. `--actor` records who performed the action but does not authenticate them at the OS level.
+The preview names affected payloads, compilation runs, assertions, events, and accepted objects. Merl hashes that list; if another derivation appears before confirmation, the operator must preview again. Merl records the intent and payload digests, erases the bytes, and scrubs the active SQLite store before marking the purge complete. `purge-audit` shows the actor, reason, payload digests, and completion status later. Merl stores the reason behind a protected payload reference. Local same-user processes remain trusted. `--actor` records who performed the action but does not authenticate them at the OS level.
 
 After purge, `merl show D18 --source` returns `source_content_unavailable` with the tombstone reference. Derived state remains visible in redacted form unless a separate policy action invalidates it.
 
