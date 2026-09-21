@@ -1,3 +1,4 @@
+use merl_core::ProjectId;
 use merl_corpus::fixture::{
     BodyAvailability, Fixture, HistoryFidelity, MissingBodyReason, source_digest,
 };
@@ -7,7 +8,6 @@ use merl_eval::{
     RandomnessControl, ReaderInput, ReaderMethod, Score, Scorer, SummaryRequest, SummaryResponse,
     TokenUsage, TrialIdentity, prepare_exact_reader_input, prepare_reader_input,
 };
-use merl_core::ProjectId;
 use merl_ingest::import_fixture_for_causal_replay_through;
 use merl_store::Store;
 
@@ -166,6 +166,62 @@ impl EvaluationScenario {
 
     pub fn when_retrieval_and_merl_expansion_are_requested_at(self, cutoff: u64) -> Self {
         self.run_five_methods(cutoff, true)
+    }
+
+    pub fn when_two_questions_use_the_same_issue_cutoff(mut self) -> Self {
+        let mut model = FakeModel::default();
+        let mut merl = FakeMerl;
+        let mut scorer = FakeScorer;
+        self.report = Some(
+            BenchmarkRunner {
+                model: &mut model,
+                merl: &mut merl,
+                scorer: &mut scorer,
+            }
+            .run_suite(
+                &self.fixture,
+                vec![
+                    EvaluationQuestion {
+                        id: "current-gain".to_owned(),
+                        cutoff: 4,
+                        text: "What gain is current?".to_owned(),
+                    },
+                    EvaluationQuestion {
+                        id: "gain-rationale".to_owned(),
+                        cutoff: 4,
+                        text: "Why did the gain change?".to_owned(),
+                    },
+                ],
+                BenchmarkConfig {
+                    model: "test-model".to_owned(),
+                    model_version: "test-v1".to_owned(),
+                    effort: "fixed".to_owned(),
+                    system_prompt: "Answer from available evidence.".to_owned(),
+                    task_prompt: "Identify current project state.".to_owned(),
+                    trials: vec![TrialIdentity {
+                        id: "pair-a".to_owned(),
+                        randomness: RandomnessControl::Seed(7),
+                    }],
+                    recent_window: 2,
+                    max_tool_rounds: 2,
+                    search_results: 2,
+                    temperature: Some(0.0),
+                },
+            )
+            .expect("two-question benchmark"),
+        );
+        self.summary_calls = model.summaries;
+        self
+    }
+
+    pub fn then_preparation_is_charged_once_per_trial_and_method(self) {
+        let report = self.report.expect("report");
+        assert_eq!(report.trials.len(), 10);
+        assert_eq!(self.summary_calls, 4);
+        assert_eq!(report.methods[1].total_preparation_tokens, 8);
+        assert_eq!(report.methods[4].total_preparation_tokens, 30);
+        assert_eq!(report.trials[0].question_id, "current-gain");
+        assert_eq!(report.trials[5].question_id, "gain-rationale");
     }
 
     fn run_five_methods(mut self, cutoff: u64, request_details: bool) -> Self {

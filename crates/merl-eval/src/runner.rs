@@ -293,6 +293,8 @@ pub struct TrialReport {
     pub trial: usize,
     /// Stable paired-trial identity.
     pub trial_id: String,
+    /// Question answered in this paired trial.
+    pub question_id: String,
     /// Reader answer.
     pub answer: String,
     /// Reader-supplied citations.
@@ -355,9 +357,9 @@ pub struct BenchmarkReport {
     /// Corpus fixture ID.
     pub fixture_id: String,
     /// History class and bodies unavailable at the question cutoff.
-    pub source_fidelity: ReaderFidelity,
-    /// Evaluator question ID and cutoff.
-    pub question: EvaluationQuestion,
+    pub source_fidelity: Vec<CutoffFidelity>,
+    /// Evaluator questions, each paired across all five methods.
+    pub questions: Vec<EvaluationQuestion>,
     /// Exact model and prompt configuration used for every reader.
     pub config: BenchmarkConfig,
     /// Individual answers and costs.
@@ -366,6 +368,15 @@ pub struct BenchmarkReport {
     pub methods: Vec<MethodStats>,
     /// Four comparisons against repeated raw-history reads.
     pub break_even: Vec<BreakEven>,
+}
+
+/// Source evidence available at one question cutoff.
+#[derive(Clone, Debug, Serialize)]
+pub struct CutoffFidelity {
+    /// Observation cutoff.
+    pub cutoff: u64,
+    /// History class and unavailable bodies at that cutoff.
+    pub fidelity: ReaderFidelity,
 }
 
 /// A benchmark cannot be run or audited under its declared contract.
@@ -439,16 +450,45 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
     /// # Errors
     /// Rejects noncausal inputs, mismatched Merl views, invalid adapter replies,
     /// unavailable tools, or invalid scorer output.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "paired-trial validation and five-method execution share one public boundary"
-    )]
     pub fn run(
         &mut self,
         fixture: &Fixture,
         question: EvaluationQuestion,
         config: BenchmarkConfig,
     ) -> Result<BenchmarkReport, BenchmarkError> {
+        self.run_suite(fixture, vec![question], config)
+    }
+
+    /// Runs every question with shared per-Issue preparation charged only once
+    /// per paired trial and source cutoff.
+    ///
+    /// # Errors
+    /// Rejects invalid questions, noncausal sources, or adapter failures.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "paired-trial validation and five-method execution share one public boundary"
+    )]
+    pub fn run_suite(
+        &mut self,
+        fixture: &Fixture,
+        questions: Vec<EvaluationQuestion>,
+        config: BenchmarkConfig,
+    ) -> Result<BenchmarkReport, BenchmarkError> {
+        if questions.is_empty() {
+            return Err(BenchmarkError::InvalidConfig("questions must be nonempty"));
+        }
+        let mut question_ids = std::collections::HashSet::new();
+        let mut cutoffs = Vec::new();
+        for question in &questions {
+            if question.id.is_empty() || !question_ids.insert(question.id.as_str()) {
+                return Err(BenchmarkError::InvalidConfig(
+                    "question IDs must be nonempty and unique",
+                ));
+            }
+            if !cutoffs.contains(&question.cutoff) {
+                cutoffs.push(question.cutoff);
+            }
+        }
         if config.trials.is_empty() {
             return Err(BenchmarkError::InvalidConfig("trials must be positive"));
         }
@@ -483,57 +523,96 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
             ));
         }
 
-        let raw = prepare_reader_input(
-            fixture,
-            question.cutoff,
-            ReaderMethod::RawHistory,
-            config.recent_window,
-        )?;
-        let recent = prepare_reader_input(
-            fixture,
-            question.cutoff,
-            ReaderMethod::RecentRetrieval,
-            config.recent_window,
-        )?;
-        let mut trials = Vec::with_capacity(config.trials.len() * BenchmarkMethod::ALL.len());
+        let mut inputs = Vec::new();
+        for cutoff in cutoffs {
+            inputs.push((
+                cutoff,
+                prepare_reader_input(
+                    fixture,
+                    cutoff,
+                    ReaderMethod::RawHistory,
+                    config.recent_window,
+                )?,
+                prepare_reader_input(
+                    fixture,
+                    cutoff,
+                    ReaderMethod::RecentRetrieval,
+                    config.recent_window,
+                )?,
+            ));
+        }
+        let mut trials =
+            Vec::with_capacity(config.trials.len() * questions.len() * BenchmarkMethod::ALL.len());
         for (trial_index, trial) in config.trials.iter().enumerate() {
-            let merl = self.merl.prepare(&question).map_err(BenchmarkError::Merl)?;
-            if merl.source_cutoff != question.cutoff || !merl.causal {
-                return Err(BenchmarkError::InvalidMerlSurface);
-            }
-            let (summary, summary_usage) =
-                self.prepare_summary(fixture, question.cutoff, &config, trial)?;
-            for method in BenchmarkMethod::ALL {
-                let (context, searchable, preparation_usage) = match method {
-                    BenchmarkMethod::RawHistory => (
-                        raw.context.as_str(),
-                        raw.searchable.as_slice(),
-                        TokenUsage::default(),
-                    ),
-                    BenchmarkMethod::RollingSummary | BenchmarkMethod::SummaryRetrieval => {
-                        (summary.as_str(), raw.searchable.as_slice(), summary_usage)
-                    }
-                    BenchmarkMethod::RecentRetrieval => (
-                        recent.context.as_str(),
-                        recent.searchable.as_slice(),
-                        TokenUsage::default(),
-                    ),
-                    BenchmarkMethod::Merl => (merl.view.as_str(), &[][..], merl.preparation_usage),
-                };
-                let mut result = self.read_once(
-                    method,
-                    trial_index,
-                    trial,
-                    &question,
-                    &config,
-                    context,
-                    searchable,
-                )?;
-                result.preparation_usage = preparation_usage;
-                if method == BenchmarkMethod::Merl {
-                    result.merl_required_coverage_complete = Some(merl.required_coverage_complete);
+            for (cutoff, raw, recent) in &inputs {
+                let first_question = questions
+                    .iter()
+                    .find(|question| question.cutoff == *cutoff)
+                    .ok_or(BenchmarkError::InvalidConfig("cutoff has no question"))?;
+                let merl = self
+                    .merl
+                    .prepare(first_question)
+                    .map_err(BenchmarkError::Merl)?;
+                if merl.source_cutoff != *cutoff || !merl.causal {
+                    return Err(BenchmarkError::InvalidMerlSurface);
                 }
-                trials.push(result);
+                let (summary, summary_usage) =
+                    self.prepare_summary(fixture, *cutoff, &config, trial)?;
+                for (question_index, question) in questions
+                    .iter()
+                    .filter(|question| question.cutoff == *cutoff)
+                    .enumerate()
+                {
+                    for method in BenchmarkMethod::ALL {
+                        let (context, searchable, preparation_usage) = match method {
+                            BenchmarkMethod::RawHistory => (
+                                raw.context.as_str(),
+                                raw.searchable.as_slice(),
+                                TokenUsage::default(),
+                            ),
+                            BenchmarkMethod::RollingSummary | BenchmarkMethod::SummaryRetrieval => {
+                                (
+                                    summary.as_str(),
+                                    raw.searchable.as_slice(),
+                                    if question_index == 0 {
+                                        summary_usage
+                                    } else {
+                                        TokenUsage::default()
+                                    },
+                                )
+                            }
+                            BenchmarkMethod::RecentRetrieval => (
+                                recent.context.as_str(),
+                                recent.searchable.as_slice(),
+                                TokenUsage::default(),
+                            ),
+                            BenchmarkMethod::Merl => (
+                                merl.view.as_str(),
+                                &[][..],
+                                if question_index == 0 {
+                                    merl.preparation_usage
+                                } else {
+                                    TokenUsage::default()
+                                },
+                            ),
+                        };
+                        let mut result = self.read_once(
+                            method,
+                            trial_index,
+                            trial,
+                            question,
+                            &config,
+                            context,
+                            searchable,
+                        )?;
+                        result.preparation_usage = preparation_usage;
+                        if method == BenchmarkMethod::Merl {
+                            result.merl_required_coverage_complete =
+                                Some(merl.required_coverage_complete);
+                        }
+                        trials.push(result);
+                    }
+                }
             }
         }
 
@@ -556,8 +635,14 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
 
         Ok(BenchmarkReport {
             fixture_id: fixture.id.clone(),
-            source_fidelity: raw.fidelity,
-            question,
+            source_fidelity: inputs
+                .into_iter()
+                .map(|(cutoff, raw, _)| CutoffFidelity {
+                    cutoff,
+                    fidelity: raw.fidelity,
+                })
+                .collect(),
+            questions,
             config,
             trials,
             methods,
@@ -700,6 +785,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                         method,
                         trial: trial_index,
                         trial_id: trial.id.clone(),
+                        question_id: question.id.clone(),
                         answer,
                         citations,
                         score,

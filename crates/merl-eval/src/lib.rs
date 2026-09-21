@@ -14,14 +14,15 @@ mod runner;
 
 pub use adapters::{CliMerlSurface, MerlTrialArtifact, ProcessModelAdapter, ProcessScorer};
 pub use preparation::{
-    CompilerArtifacts, MerlPreparationRecord, PreparationExpectation, verify_preparation,
+    CompilerArtifacts, MerlPreparationRecord, PreparationExpectation, compiler_contract_sha256,
+    verify_preparation,
 };
 
 pub use runner::{
     AnswerAction, AnswerRequest, AnswerResponse, BenchmarkConfig, BenchmarkError, BenchmarkMethod,
-    BenchmarkReport, BenchmarkRunner, BreakEven, EvaluationQuestion, MerlPrepared, MerlSurface,
-    MethodStats, ModelAdapter, RandomnessControl, Score, Scorer, SummaryRequest, SummaryResponse,
-    SummarySource, TokenUsage, TrialIdentity, TrialReport,
+    BenchmarkReport, BenchmarkRunner, BreakEven, CutoffFidelity, EvaluationQuestion, MerlPrepared,
+    MerlSurface, MethodStats, ModelAdapter, RandomnessControl, Score, Scorer, SummaryRequest,
+    SummaryResponse, SummarySource, TokenUsage, TrialIdentity, TrialReport,
 };
 
 /// One of the reading methods in the first-release comparison.

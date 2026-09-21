@@ -206,6 +206,21 @@ pub fn verify_preparation(
     verify_usage(record, &run_ids)
 }
 
+/// Digest supplied as the compiler prompt/configuration identity when preparing
+/// a candidate authority. It binds executable, prompt, rules, and configuration.
+///
+/// # Errors
+/// Returns an error when any frozen compiler artifact cannot be read.
+pub fn compiler_contract_sha256(artifacts: &CompilerArtifacts) -> Result<String, String> {
+    let hashes = [
+        file_digest(&artifacts.program)?,
+        file_digest(&artifacts.prompt)?,
+        file_digest(&artifacts.rules)?,
+        file_digest(&artifacts.config)?,
+    ];
+    Ok(digest_text(&contract_digest(&hashes)))
+}
+
 fn verify_usage(record: &MerlPreparationRecord, run_ids: &[String]) -> Result<TokenUsage, String> {
     let mut call_ids = HashSet::new();
     let mut calls_by_run = HashSet::new();

@@ -10,7 +10,7 @@ use merl_corpus::fixture::{Fixture, Partition, validate};
 use merl_eval::{
     BenchmarkConfig, BenchmarkRunner, CliMerlSurface, CompilerArtifacts, EvaluationQuestion,
     MerlPreparationRecord, MerlTrialArtifact, PreparationExpectation, ProcessModelAdapter,
-    ProcessScorer, verify_preparation,
+    ProcessScorer, compiler_contract_sha256, verify_preparation,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -23,7 +23,7 @@ const PLAN_SCHEMA: &str = "merl.eval-plan/v1";
 struct Plan {
     schema: String,
     fixture: PathBuf,
-    question: EvaluationQuestion,
+    questions: Vec<EvaluationQuestion>,
     config: BenchmarkConfig,
     model_program: PathBuf,
     scorer_program: PathBuf,
@@ -47,6 +47,8 @@ struct MerlPlan {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MerlTrialPlan {
+    trial_id: String,
+    source_cutoff: u64,
     database: PathBuf,
     preparation_record: PathBuf,
 }
@@ -125,7 +127,7 @@ fn inspect(path: &PathBuf) -> Result<String, String> {
         "schema": "merl.eval-freeze-inputs/v1",
         "evaluator_binary_sha256": digest(&fs::read(binary).map_err(|error| error.to_string())?),
         "fixture_sha256": digest(&fs::read(&plan.fixture).map_err(|error| error.to_string())?),
-        "question_sha256": digest(&serde_json::to_vec(&plan.question).map_err(|error| error.to_string())?),
+        "question_sha256": digest(&serde_json::to_vec(&plan.questions).map_err(|error| error.to_string())?),
         "config_sha256": digest(&serde_json::to_vec(&plan.config).map_err(|error| error.to_string())?),
         "model_program_sha256": digest(&fs::read(&plan.model_program).map_err(|error| error.to_string())?),
         "scorer_program_sha256": digest(&fs::read(&plan.scorer_program).map_err(|error| error.to_string())?),
@@ -133,6 +135,7 @@ fn inspect(path: &PathBuf) -> Result<String, String> {
         "compiler_prompt_sha256": digest(&fs::read(&plan.compiler_artifacts.prompt).map_err(|error| error.to_string())?),
         "compiler_rules_sha256": digest(&fs::read(&plan.compiler_artifacts.rules).map_err(|error| error.to_string())?),
         "compiler_config_sha256": digest(&fs::read(&plan.compiler_artifacts.config).map_err(|error| error.to_string())?),
+        "compiler_contract_sha256": compiler_contract_sha256(&plan.compiler_artifacts)?,
         "merl_preparation_record_sha256": plan.merl.trials.iter().map(|trial| fs::read(&trial.preparation_record).map(|bytes| digest(&bytes))).collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?,
         "merl_database_sha256": plan.merl.trials.iter().map(|trial| fs::read(&trial.database).map(|bytes| digest(&bytes))).collect::<Result<Vec<_>,_>>().map_err(|error| error.to_string())?,
         "approved_manifest_sha256": plan.freeze.as_ref().map(|record| fs::read(&record.approved_manifest).map(|bytes| digest(&bytes))).transpose().map_err(|error| error.to_string())?,
@@ -179,7 +182,7 @@ fn run(path: &PathBuf) -> Result<String, String> {
         merl: &mut merl,
         scorer: &mut scorer,
     }
-    .run(&fixture, plan.question, plan.config)
+    .run_suite(&fixture, plan.questions, plan.config)
     .map_err(|error| error.to_string())?;
     for (database, expected_digest) in prepared.databases.iter().zip(&prepared.database_digests) {
         require_closed_database(database)?;
@@ -213,10 +216,14 @@ fn run(path: &PathBuf) -> Result<String, String> {
 }
 
 fn verify_trial_artifacts(plan: &Plan, fixture: &Fixture) -> Result<VerifiedTrials, String> {
-    if plan.merl.trials.len() != plan.config.trials.len() {
-        return Err(
-            "one independently prepared Merl authority is required per paired trial".to_owned(),
-        );
+    let mut cutoffs = Vec::new();
+    for question in &plan.questions {
+        if !cutoffs.contains(&question.cutoff) {
+            cutoffs.push(question.cutoff);
+        }
+    }
+    if cutoffs.is_empty() || plan.merl.trials.len() != plan.config.trials.len() * cutoffs.len() {
+        return Err("one prepared Merl authority is required per trial and cutoff".to_owned());
     }
     let candidate_binary_sha256 = digest(
         &fs::read(env::current_exe().map_err(|error| error.to_string())?)
@@ -228,7 +235,18 @@ fn verify_trial_artifacts(plan: &Plan, fixture: &Fixture) -> Result<VerifiedTria
         database_digests: Vec::new(),
         databases: Vec::new(),
     };
-    for (identity, trial) in plan.config.trials.iter().zip(&plan.merl.trials) {
+    for ((identity, cutoff), trial) in plan
+        .config
+        .trials
+        .iter()
+        .flat_map(|identity| cutoffs.iter().map(move |cutoff| (identity, cutoff)))
+        .zip(&plan.merl.trials)
+    {
+        if trial.trial_id != identity.id || trial.source_cutoff != *cutoff {
+            return Err(
+                "Merl preparation order or identity differs from the paired trial".to_owned(),
+            );
+        }
         require_closed_database(&trial.database)?;
         let bytes = fs::read(&trial.preparation_record)
             .map_err(|error| format!("could not read Merl preparation record: {error}"))?;
@@ -242,7 +260,7 @@ fn verify_trial_artifacts(plan: &Plan, fixture: &Fixture) -> Result<VerifiedTria
             &PreparationExpectation {
                 trial_id: &identity.id,
                 project: &plan.merl.project,
-                source_cutoff: plan.question.cutoff,
+                source_cutoff: *cutoff,
                 candidate_commit: &plan.candidate_commit,
                 candidate_binary_sha256: &candidate_binary_sha256,
             },
@@ -324,7 +342,7 @@ fn verify_freeze(plan: &Plan, fixture_bytes: &[u8]) -> Result<(), String> {
     if digest(fixture_bytes) != freeze.fixture_sha256 {
         return Err("fixture changed after freeze".to_owned());
     }
-    let question = serde_json::to_vec(&plan.question).map_err(|error| error.to_string())?;
+    let question = serde_json::to_vec(&plan.questions).map_err(|error| error.to_string())?;
     if digest(&question) != freeze.question_sha256 {
         return Err("question changed after freeze".to_owned());
     }
@@ -417,7 +435,7 @@ mod tests {
         let mut plan = Plan {
             schema: "merl.eval-plan/v1".to_owned(),
             fixture: PathBuf::new(),
-            question,
+            questions: vec![question],
             config,
             model_program: model.clone(),
             scorer_program: scorer.clone(),
@@ -434,6 +452,8 @@ mod tests {
                 scope: "issue-1".to_owned(),
                 role: "engineer".to_owned(),
                 trials: vec![MerlTrialPlan {
+                    trial_id: "pair-a".to_owned(),
+                    source_cutoff: 3,
                     database: PathBuf::new(),
                     preparation_record: PathBuf::new(),
                 }],
@@ -454,7 +474,7 @@ mod tests {
             approved_manifest: manifest.clone(),
             approved_manifest_sha256: digest(b"approved manifest"),
             fixture_sha256: digest(fixture),
-            question_sha256: digest(&serde_json::to_vec(&plan.question).expect("question JSON")),
+            question_sha256: digest(&serde_json::to_vec(&plan.questions).expect("question JSON")),
             config_sha256: digest(&serde_json::to_vec(&plan.config).expect("config JSON")),
             model_program_sha256: digest(b"model program"),
             scorer_program_sha256: digest(b"scorer program"),
