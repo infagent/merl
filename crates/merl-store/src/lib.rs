@@ -1074,7 +1074,8 @@ impl Store {
     /// remains outside Merl's first-release security boundary.
     ///
     /// # Errors
-    /// Rejects a stale preview, missing reason, prior purge, or failed SQLite scrub.
+    /// Rejects a stale preview, missing reason, or prior purge. After commit,
+    /// a failed scrub leaves the receipt pending for recovery on the next open.
     pub fn purge_source(
         &mut self,
         project: &ProjectId,
@@ -1134,7 +1135,9 @@ impl Store {
             now_millis,
         )?;
         transaction.commit()?;
-        self.finish_pending_purges()?;
+        // A checkpoint can be blocked by another reader after logical erasure commits.
+        // Return the durable receipt so callers do not mistake that state for a rejected purge.
+        let _scrub_result = self.finish_pending_purges();
         self.purge_audit(project, source)?
             .ok_or(StoreError::CorruptHistory)
     }

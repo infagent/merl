@@ -134,6 +134,7 @@ pub struct PolicyScenario {
     stale_purge_rejected: bool,
     expected_provider: Option<merl_store::AcceptedProviderObservation>,
     expected_issue: Option<merl_store::IssueState>,
+    pending_purge: Option<merl_store::PurgeAudit>,
 }
 
 impl PolicyScenario {
@@ -699,6 +700,59 @@ impl PolicyScenario {
         self
     }
 
+    pub fn when_the_purge_is_confirmed_while_another_reader_is_active(&mut self) -> &mut Self {
+        let file = self.persisted_file.as_ref().expect("file-backed authority");
+        let reader = rusqlite::Connection::open(&file.0).expect("second reader");
+        reader
+            .pragma_update(None, "journal_mode", "WAL")
+            .expect("enable WAL for concurrent reader");
+        reader
+            .execute_batch("BEGIN")
+            .expect("open read transaction");
+        let _: i64 = reader
+            .query_row("SELECT COUNT(*) FROM payloads", [], |row| row.get(0))
+            .expect("hold WAL snapshot");
+        let preview = self.purge_preview.as_ref().expect("preview");
+        self.pending_purge = Some(
+            self.store
+                .purge_source(
+                    &self.project,
+                    &id("direct-v1"),
+                    &id("admin"),
+                    b"Credential posted in comment",
+                    NOW + 8,
+                    preview.confirm_digest,
+                )
+                .expect("committed purge receipt"),
+        );
+        reader
+            .execute_batch("ROLLBACK")
+            .expect("release read transaction");
+        self
+    }
+
+    pub fn then_the_purge_is_accepted_with_scrubbing_pending(&mut self) -> &mut Self {
+        let receipt = self.pending_purge.as_ref().expect("purge receipt");
+        assert!(!receipt.completed);
+        assert!(
+            self.store
+                .purge_audit(&self.project, &id("direct-v1"))
+                .expect("durable receipt")
+                .is_some()
+        );
+        self
+    }
+
+    pub fn then_the_pending_scrub_completes(&mut self) {
+        assert!(
+            self.store
+                .purge_audit(&self.project, &id("direct-v1"))
+                .expect("durable receipt")
+                .expect("purge")
+                .completed
+        );
+    }
+
     pub fn then_source_and_compiler_bytes_are_unavailable_with_an_audit_record(&mut self) {
         assert!(matches!(
             self.store
@@ -1014,6 +1068,7 @@ impl PolicyScenario {
             stale_purge_rejected: false,
             expected_provider: None,
             expected_issue: None,
+            pending_purge: None,
         }
     }
 

@@ -129,6 +129,16 @@ fn purge_follows_accepted_object_bytes_into_later_compiler_contexts() {
 }
 
 #[test]
+fn a_committed_purge_reports_pending_scrub_when_a_reader_blocks_checkpoint() {
+    PolicyScenario::given_a_later_compiler_context_containing_an_accepted_decision()
+        .when_the_source_purge_is_previewed()
+        .when_the_purge_is_confirmed_while_another_reader_is_active()
+        .then_the_purge_is_accepted_with_scrubbing_pending()
+        .when_the_authority_restarts()
+        .then_the_pending_scrub_completes();
+}
+
+#[test]
 fn purge_confirmation_rejects_a_preview_made_before_new_derivation() {
     PolicyScenario::given_a_decision_supported_by_an_issue_comment()
         .when_the_source_purge_is_previewed()
