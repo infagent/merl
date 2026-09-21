@@ -1,8 +1,9 @@
-use merl_corpus::fixture::Fixture;
+use merl_corpus::fixture::{Fixture, HistoryFidelity};
 use merl_eval::{
     AnswerAction, AnswerRequest, AnswerResponse, BenchmarkConfig, BenchmarkMethod, BenchmarkReport,
-    BenchmarkRunner, EvaluationQuestion, MerlPrepared, MerlSurface, ModelAdapter, ReaderInput,
-    ReaderMethod, Score, Scorer, SummaryRequest, SummaryResponse, TokenUsage, prepare_reader_input,
+    BenchmarkRunner, EvaluationQuestion, InputError, MerlPrepared, MerlSurface, ModelAdapter,
+    ReaderInput, ReaderMethod, Score, Scorer, SummaryRequest, SummaryResponse, TokenUsage,
+    prepare_reader_input,
 };
 
 pub struct EvaluationScenario {
@@ -12,6 +13,8 @@ pub struct EvaluationScenario {
     report: Option<BenchmarkReport>,
     observed_questions: Vec<String>,
     summary_calls: usize,
+    tool_result_methods: Vec<BenchmarkMethod>,
+    reader_error: Option<InputError>,
 }
 
 impl EvaluationScenario {
@@ -23,6 +26,12 @@ impl EvaluationScenario {
         Self::from_fixture(include_str!("../../corpus/development/DEV-C3.json"))
     }
 
+    pub fn given_the_gain_discussion_with_inexact_earlier_bodies() -> Self {
+        let mut scenario = Self::given_the_gain_discussion();
+        scenario.fixture.capture.history_fidelity = HistoryFidelity::DiffOnly;
+        scenario
+    }
+
     fn from_fixture(json: &str) -> Self {
         Self {
             fixture: serde_json::from_str(json).expect("controlled fixture"),
@@ -31,6 +40,8 @@ impl EvaluationScenario {
             report: None,
             observed_questions: Vec::new(),
             summary_calls: 0,
+            tool_result_methods: Vec::new(),
+            reader_error: None,
         }
     }
 
@@ -91,8 +102,19 @@ impl EvaluationScenario {
         }
     }
 
-    pub fn when_five_methods_answer_two_paired_trials_at(mut self, cutoff: u64) -> Self {
-        let mut model = FakeModel::default();
+    pub fn when_five_methods_answer_two_paired_trials_at(self, cutoff: u64) -> Self {
+        self.run_five_methods(cutoff, false)
+    }
+
+    pub fn when_retrieval_and_merl_expansion_are_requested_at(self, cutoff: u64) -> Self {
+        self.run_five_methods(cutoff, true)
+    }
+
+    fn run_five_methods(mut self, cutoff: u64, request_details: bool) -> Self {
+        let mut model = FakeModel {
+            request_details,
+            ..FakeModel::default()
+        };
         let mut merl = FakeMerl;
         let mut scorer = FakeScorer;
         let mut runner = BenchmarkRunner {
@@ -127,6 +149,7 @@ impl EvaluationScenario {
         );
         self.observed_questions = model.questions;
         self.summary_calls = model.summaries;
+        self.tool_result_methods = model.tool_result_methods;
         self
     }
 
@@ -171,6 +194,16 @@ impl EvaluationScenario {
         self
     }
 
+    pub fn then_correctness_and_provenance_are_reported_with_variance(self) -> Self {
+        for method in &self.report.as_ref().expect("report").methods {
+            assert!(method.mean_correctness.is_some());
+            assert!(method.correctness_variance.is_some());
+            assert!(method.mean_provenance.is_some());
+            assert!(method.provenance_variance.is_some());
+        }
+        self
+    }
+
     pub fn then_each_method_has_a_break_even_result(self) {
         let report = self.report.expect("report");
         assert_eq!(report.break_even.len(), 4);
@@ -180,6 +213,48 @@ impl EvaluationScenario {
                 .iter()
                 .all(|result| result.first_cheaper_read.is_some())
         );
+    }
+
+    pub fn then_only_tool_enabled_readers_expand_details(self) -> Self {
+        assert_eq!(self.tool_result_methods.len(), 6);
+        for method in &self.tool_result_methods {
+            assert!(matches!(
+                method,
+                BenchmarkMethod::RecentRetrieval
+                    | BenchmarkMethod::SummaryRetrieval
+                    | BenchmarkMethod::Merl
+            ));
+        }
+        self
+    }
+
+    pub fn then_expansion_calls_are_included_in_token_cost(self) {
+        let report = self.report.expect("report");
+        for trial in report.trials {
+            let expected = usize::from(matches!(
+                trial.method,
+                BenchmarkMethod::RecentRetrieval
+                    | BenchmarkMethod::SummaryRetrieval
+                    | BenchmarkMethod::Merl
+            ));
+            assert_eq!(trial.tool_rounds, expected);
+            if expected == 1 {
+                assert!(trial.read_usage.total() > 2);
+            }
+        }
+    }
+
+    pub fn when_a_causal_reader_requests_the_history(mut self) -> Self {
+        self.reader_error =
+            prepare_reader_input(&self.fixture, 3, ReaderMethod::RawHistory, 2).err();
+        self
+    }
+
+    pub fn then_a_causal_reader_refuses_it(self) {
+        assert!(matches!(
+            self.reader_error,
+            Some(InputError::NonCausalHistory)
+        ));
     }
 
     fn inputs(&self) -> [&ReaderInput; 2] {
@@ -194,6 +269,8 @@ impl EvaluationScenario {
 struct FakeModel {
     questions: Vec<String>,
     summaries: usize,
+    request_details: bool,
+    tool_result_methods: Vec<BenchmarkMethod>,
 }
 
 impl ModelAdapter for FakeModel {
@@ -210,6 +287,30 @@ impl ModelAdapter for FakeModel {
 
     fn answer(&mut self, request: AnswerRequest<'_>) -> Result<AnswerResponse, String> {
         self.questions.push(request.question.to_owned());
+        if self.request_details
+            && request.can_search
+            && !request.context.contains("[search results]")
+        {
+            return Ok(AnswerResponse {
+                action: AnswerAction::Search("fixed".to_owned()),
+                usage: TokenUsage {
+                    input: 5,
+                    output: 1,
+                },
+            });
+        }
+        if self.request_details && request.can_expand && !request.context.contains("[expanded") {
+            return Ok(AnswerResponse {
+                action: AnswerAction::Expand("D2".to_owned()),
+                usage: TokenUsage {
+                    input: 5,
+                    output: 1,
+                },
+            });
+        }
+        if request.context.contains("[search results]") || request.context.contains("[expanded") {
+            self.tool_result_methods.push(request.method);
+        }
         let input = match request.method {
             BenchmarkMethod::RawHistory => 100,
             BenchmarkMethod::RollingSummary => 40,

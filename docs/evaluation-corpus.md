@@ -4,6 +4,8 @@ Merl needs issue histories where the current answer differs from an earlier answ
 
 The corpus is split by complete issue, never by comment. Development material is visible to implementers. Adversarial cases remain separate. Five held-out cases were selected independently; their identities and answers stay outside this repository and implementation-agent access until the release candidate freezes. The sealed manifest commitment is `sha256:86a37c47cb0164dd99e9ff53c036d621569a3f2d2da9c500d420a736b699f8c0`. This digest identifies a manifest supplied by the curator; we cannot verify the unseen contents here. If a held-out identity leaks, move it to development, replace the case, and publish a new commitment before further tuning.
 
+The [benchmark harness](benchmark-harness.md) now has a causal five-reader contract and a separate evaluator-side scoring boundary. It has not run a held-out case. A curator handoff quoted in the #24 discussion gives a different manifest digest; the curator must reconcile that identity before the release freeze.
+
 ## Visible first slice
 
 | ID | Source | Why it was selected | Status |
@@ -17,6 +19,10 @@ The corpus is split by complete issue, never by comment. Development material is
 The two natural captures remain untracked while a maintainer checks their full text, authorship and privacy. Their source URLs, license observations, capture metadata, and SHA-256 digests are recorded in the local fixtures. Their GitHub repositories reported Apache-2.0 licenses at capture; that alone does not establish permission to redistribute every comment. Do not commit the captures merely because they were public. A contributor with access to the issues can recapture them using the commands below, but a new capture is a new corpus version and needs its own review.
 
 DEV-C2 separates the researcher's acts. The observation that the frame length was read once disputes the active double-read hypothesis. The researcher's conclusion that the hypothesis is weakened remains a candidate claim. The parser task exists after the request, but its commitment is pending. After the PM replies, the task is accepted, deferred, and not started. Its start condition is the PR merge; no agent session is waiting on it.
+
+## Remaining visible cases
+
+The original #24 curation list still has work to do. DEV-N3 through DEV-N6 are natural candidates, not reviewed captures. DEV-C4 (provider state versus prose) has behavioral coverage in the Issue and policy tests, but no scored corpus fixture. ADV-C1 (quoted authority) has a policy regression; ADV-C2 (ambiguous referent) has a compiler context-request regression; ADV-C4 (purged evidence) has purge and replay regressions. None is yet a versioned adversarial benchmark case with an independent answer key. ADV-C3 (relative time and an event condition) and ADV-C5 (optional evidence promoted to required coverage) still need both a scored fixture and an end-to-end behavior scenario. Keep those cases visible to implementers; do not substitute held-out material for them.
 
 The captures retain stable IDs for Issues, comments, actors, and edits. When GitHub includes a creation edit, that edit is the first version; the capture does not invent another one. Later edits supersede the previous version. GitHub exposes edit metadata and a diff, but not necessarily the full earlier body. Such versions carry an explicit missing-body reason; the final body is never moved back to the Issue's creation time. Timestamp ties between source streams are marked ambiguous rather than resolved by sorting IDs. Exact causal replay stops at either kind of gap. The provider snapshot describes capture time, not historical Issue state. The controlled histories are `staged_exact` and support exact replay.
 

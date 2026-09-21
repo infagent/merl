@@ -1,0 +1,420 @@
+//! Evaluator-side runner for a frozen five-method Issue comparison.
+
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process,
+};
+
+use merl_corpus::fixture::{Fixture, Partition, validate};
+use merl_eval::{
+    BenchmarkConfig, BenchmarkRunner, CliMerlSurface, EvaluationQuestion, MerlTrialArtifact,
+    ProcessModelAdapter, ProcessScorer, TokenUsage,
+};
+use serde::Deserialize;
+use serde_json::json;
+use sha2::{Digest, Sha256};
+
+const PLAN_SCHEMA: &str = "merl.eval-plan/v1";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Plan {
+    schema: String,
+    fixture: PathBuf,
+    question: EvaluationQuestion,
+    config: BenchmarkConfig,
+    model_program: PathBuf,
+    scorer_program: PathBuf,
+    merl: MerlPlan,
+    limits: ProcessLimits,
+    freeze: Option<FreezeRecord>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MerlPlan {
+    project: String,
+    issue: String,
+    scope: String,
+    role: String,
+    trials: Vec<MerlTrialPlan>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MerlTrialPlan {
+    database: PathBuf,
+    preparation_usage: TokenUsage,
+    usage_record: PathBuf,
+    causal: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MerlUsageRecord {
+    schema: String,
+    project: String,
+    source_cutoff: u64,
+    compiler_runs: Vec<String>,
+    usage: TokenUsage,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProcessLimits {
+    max_request_bytes: usize,
+    max_response_bytes: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FreezeRecord {
+    candidate_commit: String,
+    candidate_binary_sha256: String,
+    approved_manifest: PathBuf,
+    approved_manifest_sha256: String,
+    fixture_sha256: String,
+    question_sha256: String,
+    config_sha256: String,
+    model_program_sha256: String,
+    scorer_program_sha256: String,
+    scoring_spec: PathBuf,
+    scoring_spec_sha256: String,
+}
+
+fn main() {
+    let arguments = env::args().collect::<Vec<_>>();
+    if arguments.len() == 2 && arguments[1] == "--help" {
+        println!(
+            "merl-eval <inspect|run> --plan <path>\nInspect freeze digests or run five paired Issue readers. Held-out runs require a freeze record."
+        );
+        return;
+    }
+    if arguments.len() != 4
+        || arguments[2] != "--plan"
+        || !matches!(arguments[1].as_str(), "inspect" | "run")
+    {
+        eprintln!("usage: merl-eval <inspect|run> --plan <path>");
+        process::exit(2);
+    }
+    let path = PathBuf::from(&arguments[3]);
+    let result = if arguments[1] == "inspect" {
+        inspect(&path)
+    } else {
+        run(&path)
+    };
+    match result {
+        Ok(report) => println!("{report}"),
+        Err(error) => {
+            eprintln!("{error}");
+            process::exit(1);
+        }
+    }
+}
+
+fn inspect(path: &PathBuf) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|error| format!("could not read plan: {error}"))?;
+    let plan: Plan =
+        serde_json::from_slice(&bytes).map_err(|error| format!("invalid plan: {error}"))?;
+    if plan.schema != PLAN_SCHEMA {
+        return Err("unsupported evaluation plan schema".to_owned());
+    }
+    let binary = env::current_exe().map_err(|error| error.to_string())?;
+    let output = json!({
+        "schema": "merl.eval-freeze-inputs/v1",
+        "evaluator_binary_sha256": digest(&fs::read(binary).map_err(|error| error.to_string())?),
+        "fixture_sha256": digest(&fs::read(&plan.fixture).map_err(|error| error.to_string())?),
+        "question_sha256": digest(&serde_json::to_vec(&plan.question).map_err(|error| error.to_string())?),
+        "config_sha256": digest(&serde_json::to_vec(&plan.config).map_err(|error| error.to_string())?),
+        "model_program_sha256": digest(&fs::read(&plan.model_program).map_err(|error| error.to_string())?),
+        "scorer_program_sha256": digest(&fs::read(&plan.scorer_program).map_err(|error| error.to_string())?),
+        "approved_manifest_sha256": plan.freeze.as_ref().map(|record| fs::read(&record.approved_manifest).map(|bytes| digest(&bytes))).transpose().map_err(|error| error.to_string())?,
+        "scoring_spec_sha256": plan.freeze.as_ref().map(|record| fs::read(&record.scoring_spec).map(|bytes| digest(&bytes))).transpose().map_err(|error| error.to_string())?
+    });
+    serde_json::to_string_pretty(&output).map_err(|error| error.to_string())
+}
+
+fn run(path: &PathBuf) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|error| format!("could not read plan: {error}"))?;
+    let plan: Plan =
+        serde_json::from_slice(&bytes).map_err(|error| format!("invalid plan: {error}"))?;
+    if plan.schema != PLAN_SCHEMA {
+        return Err("unsupported evaluation plan schema".to_owned());
+    }
+    let fixture_bytes =
+        fs::read(&plan.fixture).map_err(|error| format!("could not read fixture: {error}"))?;
+    let fixture: Fixture = serde_json::from_slice(&fixture_bytes)
+        .map_err(|error| format!("invalid fixture JSON: {error}"))?;
+    validate(&fixture).map_err(|error| format!("invalid fixture: {error}"))?;
+    if matches!(fixture.partition, Partition::HeldOut) {
+        verify_freeze(&plan, &fixture_bytes)?;
+    }
+
+    let mut model = ProcessModelAdapter::new(
+        plan.model_program,
+        plan.limits.max_request_bytes,
+        plan.limits.max_response_bytes,
+    );
+    let mut scorer = ProcessScorer::new(plan.scorer_program, plan.limits.max_response_bytes);
+    if let Some(freeze) = &plan.freeze {
+        scorer.scoring_spec = Some(freeze.scoring_spec.clone());
+    }
+    if plan.merl.trials.len() != plan.config.trials {
+        return Err(
+            "one independently prepared Merl authority is required per paired trial".to_owned(),
+        );
+    }
+    let mut merl_usage_digests = Vec::new();
+    let mut merl_database_digests = Vec::new();
+    let mut merl_databases = Vec::new();
+    for trial in &plan.merl.trials {
+        let bytes = fs::read(&trial.usage_record)
+            .map_err(|error| format!("could not read Merl usage record: {error}"))?;
+        let record: MerlUsageRecord = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("invalid Merl usage record: {error}"))?;
+        if record.schema != "merl.eval-merl-usage/v1"
+            || record.project != plan.merl.project
+            || record.source_cutoff != plan.question.cutoff
+            || record.compiler_runs.is_empty()
+            || record.usage != trial.preparation_usage
+        {
+            return Err("Merl usage record does not match its prepared trial".to_owned());
+        }
+        merl_usage_digests.push(digest(&bytes));
+        require_closed_database(&trial.database)?;
+        let database = fs::read(&trial.database)
+            .map_err(|error| format!("could not read prepared Merl authority: {error}"))?;
+        merl_database_digests.push(digest(&database));
+        merl_databases.push(trial.database.clone());
+    }
+    let mut merl = CliMerlSurface::new(
+        plan.merl.project,
+        plan.merl.issue,
+        plan.merl.scope,
+        plan.merl.role,
+        plan.merl
+            .trials
+            .into_iter()
+            .map(|trial| MerlTrialArtifact {
+                database: trial.database,
+                preparation_usage: trial.preparation_usage,
+                causal: trial.causal,
+            })
+            .collect(),
+    );
+    let report = BenchmarkRunner {
+        model: &mut model,
+        merl: &mut merl,
+        scorer: &mut scorer,
+    }
+    .run(&fixture, plan.question, plan.config)
+    .map_err(|error| error.to_string())?;
+    for (database, expected_digest) in merl_databases.iter().zip(&merl_database_digests) {
+        require_closed_database(database)?;
+        let current = fs::read(database)
+            .map_err(|error| format!("could not reread prepared Merl authority: {error}"))?;
+        if &digest(&current) != expected_digest {
+            return Err("a prepared Merl authority changed during the benchmark".to_owned());
+        }
+    }
+    serde_json::to_string_pretty(&json!({
+        "schema": "merl.eval-report/v1",
+        "fixture_sha256": digest(&fixture_bytes),
+        "merl_usage_record_sha256": merl_usage_digests,
+        "merl_database_sha256": merl_database_digests,
+        "freeze": plan.freeze.as_ref().map(|freeze| json!({
+            "candidate_commit": freeze.candidate_commit,
+            "candidate_binary_sha256": freeze.candidate_binary_sha256,
+            "approved_manifest_sha256": freeze.approved_manifest_sha256,
+            "fixture_sha256": freeze.fixture_sha256,
+            "question_sha256": freeze.question_sha256,
+            "config_sha256": freeze.config_sha256,
+            "model_program_sha256": freeze.model_program_sha256,
+            "scorer_program_sha256": freeze.scorer_program_sha256,
+            "scoring_spec_sha256": freeze.scoring_spec_sha256
+        })),
+        "report": report
+    }))
+    .map_err(|error| error.to_string())
+}
+
+fn require_closed_database(path: &Path) -> Result<(), String> {
+    let mut wal_name = path.as_os_str().to_os_string();
+    wal_name.push("-wal");
+    let wal = PathBuf::from(wal_name);
+    if wal.metadata().is_ok_and(|metadata| metadata.len() > 0) {
+        return Err("prepared Merl authority has an uncheckpointed WAL".to_owned());
+    }
+    Ok(())
+}
+
+fn verify_freeze(plan: &Plan, fixture_bytes: &[u8]) -> Result<(), String> {
+    let freeze = plan
+        .freeze
+        .as_ref()
+        .ok_or("held-out evaluation needs a freeze record")?;
+    if freeze.candidate_commit.len() != 40
+        || !freeze
+            .candidate_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || !valid_digest(&freeze.approved_manifest_sha256)
+        || !valid_digest(&freeze.candidate_binary_sha256)
+        || !valid_digest(&freeze.fixture_sha256)
+        || !valid_digest(&freeze.question_sha256)
+        || !valid_digest(&freeze.config_sha256)
+        || !valid_digest(&freeze.model_program_sha256)
+        || !valid_digest(&freeze.scorer_program_sha256)
+        || !valid_digest(&freeze.scoring_spec_sha256)
+    {
+        return Err("held-out freeze record has invalid identities".to_owned());
+    }
+    let manifest = fs::read(&freeze.approved_manifest)
+        .map_err(|error| format!("could not read approved corpus manifest: {error}"))?;
+    if digest(&manifest) != freeze.approved_manifest_sha256 {
+        return Err("approved corpus manifest digest does not match the freeze record".to_owned());
+    }
+    let executable = env::current_exe()
+        .map_err(|error| format!("could not locate evaluator binary: {error}"))?;
+    let executable_bytes = fs::read(executable)
+        .map_err(|error| format!("could not read evaluator binary: {error}"))?;
+    if digest(&executable_bytes) != freeze.candidate_binary_sha256 {
+        return Err("evaluator binary changed after freeze".to_owned());
+    }
+    if digest(fixture_bytes) != freeze.fixture_sha256 {
+        return Err("fixture changed after freeze".to_owned());
+    }
+    let question = serde_json::to_vec(&plan.question).map_err(|error| error.to_string())?;
+    if digest(&question) != freeze.question_sha256 {
+        return Err("question changed after freeze".to_owned());
+    }
+    let config = serde_json::to_vec(&plan.config).map_err(|error| error.to_string())?;
+    if digest(&config) != freeze.config_sha256 {
+        return Err("model configuration changed after freeze".to_owned());
+    }
+    let model = fs::read(&plan.model_program)
+        .map_err(|error| format!("could not read model program: {error}"))?;
+    if digest(&model) != freeze.model_program_sha256 {
+        return Err("model program changed after freeze".to_owned());
+    }
+    let scorer = fs::read(&plan.scorer_program)
+        .map_err(|error| format!("could not read scorer program: {error}"))?;
+    if digest(&scorer) != freeze.scorer_program_sha256 {
+        return Err("scorer program changed after freeze".to_owned());
+    }
+    let scoring_spec = fs::read(&freeze.scoring_spec)
+        .map_err(|error| format!("could not read scoring specification: {error}"))?;
+    if digest(&scoring_spec) != freeze.scoring_spec_sha256 {
+        return Err("scoring specification changed after freeze".to_owned());
+    }
+    Ok(())
+}
+
+fn valid_digest(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
+fn digest(bytes: &[u8]) -> String {
+    let hash = Sha256::digest(bytes);
+    let mut digest = String::from("sha256:");
+    for byte in hash {
+        use std::fmt::Write as _;
+        let _ = write!(digest, "{byte:02x}");
+    }
+    digest
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BenchmarkConfig, EvaluationQuestion, FreezeRecord, MerlPlan, MerlTrialPlan, PathBuf, Plan,
+        ProcessLimits, TokenUsage, digest, verify_freeze,
+    };
+
+    #[test]
+    fn held_out_execution_requires_unchanged_frozen_artifacts() {
+        let location =
+            std::env::temp_dir().join(format!("merl-eval-freeze-{}", std::process::id()));
+        std::fs::create_dir_all(&location).expect("temporary location");
+        let manifest = location.join("approved.json");
+        let scorer = location.join("scorer");
+        let model = location.join("model");
+        let scoring_spec = location.join("scoring.json");
+        std::fs::write(&manifest, b"approved manifest").expect("manifest");
+        std::fs::write(&scorer, b"scorer program").expect("scorer");
+        std::fs::write(&model, b"model program").expect("model");
+        std::fs::write(&scoring_spec, b"frozen scoring rubric").expect("scoring rubric");
+        let fixture = b"frozen fixture";
+        let question = EvaluationQuestion {
+            id: "Q1".to_owned(),
+            cutoff: 3,
+            text: "What changed?".to_owned(),
+        };
+        let config = BenchmarkConfig {
+            model: "model".to_owned(),
+            model_version: "v1".to_owned(),
+            effort: "medium".to_owned(),
+            system_prompt: "Read the evidence.".to_owned(),
+            task_prompt: "Answer the question.".to_owned(),
+            trials: 2,
+            recent_window: 2,
+            max_tool_rounds: 2,
+            search_results: 2,
+            temperature: Some(0.0),
+            seed: Some(1),
+        };
+        let mut plan = Plan {
+            schema: "merl.eval-plan/v1".to_owned(),
+            fixture: PathBuf::new(),
+            question,
+            config,
+            model_program: model.clone(),
+            scorer_program: scorer.clone(),
+            merl: MerlPlan {
+                project: "P1".to_owned(),
+                issue: "I1".to_owned(),
+                scope: "issue-1".to_owned(),
+                role: "engineer".to_owned(),
+                trials: vec![MerlTrialPlan {
+                    database: PathBuf::new(),
+                    preparation_usage: TokenUsage::default(),
+                    usage_record: PathBuf::new(),
+                    causal: true,
+                }],
+            },
+            limits: ProcessLimits {
+                max_request_bytes: 4096,
+                max_response_bytes: 4096,
+            },
+            freeze: None,
+        };
+        assert!(verify_freeze(&plan, fixture).is_err());
+        plan.freeze = Some(FreezeRecord {
+            candidate_commit: "a".repeat(40),
+            candidate_binary_sha256: digest(
+                &std::fs::read(std::env::current_exe().expect("test binary path"))
+                    .expect("test binary"),
+            ),
+            approved_manifest: manifest.clone(),
+            approved_manifest_sha256: digest(b"approved manifest"),
+            fixture_sha256: digest(fixture),
+            question_sha256: digest(&serde_json::to_vec(&plan.question).expect("question JSON")),
+            config_sha256: digest(&serde_json::to_vec(&plan.config).expect("config JSON")),
+            model_program_sha256: digest(b"model program"),
+            scorer_program_sha256: digest(b"scorer program"),
+            scoring_spec: scoring_spec.clone(),
+            scoring_spec_sha256: digest(b"frozen scoring rubric"),
+        });
+        assert!(verify_freeze(&plan, fixture).is_ok());
+        std::fs::write(&scoring_spec, b"changed scoring rubric").expect("change rubric");
+        assert!(verify_freeze(&plan, fixture).is_err());
+        std::fs::remove_file(&manifest).expect("remove manifest");
+        std::fs::remove_file(&scorer).expect("remove scorer");
+        std::fs::remove_file(&model).expect("remove model");
+        std::fs::remove_file(&scoring_spec).expect("remove rubric");
+        std::fs::remove_dir(&location).expect("remove temporary location");
+    }
+}

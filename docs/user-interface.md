@@ -1023,19 +1023,13 @@ merl projection restore github:acme/project-a#204/merl-status
 
 ## Evaluation
 
-The benchmark runner compares Merl with practical alternatives under one recorded model configuration:
+The evaluator-side `merl-eval` tool compares Merl with practical alternatives under one recorded model configuration. Its plan names the five methods, paired trials, external model and scorer adapters, and independently prepared Merl authorities:
 
 ```bash
-merl eval run held-out \
-  --baseline raw \
-  --baseline rolling-summary \
-  --baseline recent-retrieval \
-  --baseline summary-retrieval \
-  --baseline merl \
-  --trials 5
+merl-eval run --plan /path/to/frozen-evaluation-plan.json
 ```
 
-The report records model and version, reasoning effort, prompts, available tools, sampling controls, per-trial answers, correctness, total token cost, and variance. It identifies the read count where each approach becomes cheaper than repeated raw-history consumption. A hindsight compilation is labeled and excluded from causal replay results.
+The report records model and version, reasoning effort, prompts, available tools, sampling controls, per-trial answers, correctness, total token cost, and variance. It identifies the read count where each approach becomes cheaper than repeated raw-history consumption. A hindsight compilation cannot enter a causal Merl trial. See the [benchmark harness](benchmark-harness.md) for the process protocol and held-out gate.
 
 ## Errors and non-interactive use
 

@@ -10,7 +10,7 @@ use merl_corpus::fixture::{
 mod adapters;
 mod runner;
 
-pub use adapters::{CliMerlSurface, ProcessModelAdapter, ProcessScorer};
+pub use adapters::{CliMerlSurface, MerlTrialArtifact, ProcessModelAdapter, ProcessScorer};
 
 pub use runner::{
     AnswerAction, AnswerRequest, AnswerResponse, BenchmarkConfig, BenchmarkError, BenchmarkMethod,
@@ -159,9 +159,14 @@ pub fn prepare_reader_input(
         if included.contains(&index) {
             let _ = write!(
                 context,
-                "[observation {} | source {} | authored {} | version {}]",
+                "[observation {} | source {} | author {} | authored {} | version {}]",
                 observation.sequence,
                 observation.provider_id,
+                observation
+                    .author
+                    .as_ref()
+                    .and_then(|actor| actor.provider_id.as_deref())
+                    .unwrap_or("unknown"),
                 observation.created_at,
                 observation.version_id
             );
