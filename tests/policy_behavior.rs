@@ -110,6 +110,15 @@ fn purging_context_evidence_makes_the_later_compilation_incomplete() {
 }
 
 #[test]
+fn purge_confirmation_rejects_a_preview_made_before_new_derivation() {
+    PolicyScenario::given_a_decision_supported_by_an_issue_comment()
+        .when_the_source_purge_is_previewed()
+        .when_the_source_is_compiled_again()
+        .when_the_old_preview_is_confirmed()
+        .then_the_purge_is_rejected_and_source_bytes_remain();
+}
+
+#[test]
 fn editing_context_evidence_reconsiders_an_assertion_citing_another_comment() {
     PolicyScenario::given_a_decision_compiled_with_an_earlier_comment()
         .when_the_earlier_comment_is_edited()
