@@ -129,6 +129,7 @@ pub struct PolicyScenario {
     provider_collision_rejected: bool,
     pending_impacts: Vec<EvidenceImpact>,
     purge_preview: Option<PurgePreview>,
+    stale_purge_rejected: bool,
 }
 
 impl PolicyScenario {
@@ -579,6 +580,43 @@ impl PolicyScenario {
         self
     }
 
+    pub fn when_the_source_is_compiled_again(&mut self) -> &mut Self {
+        self.compile("direct-v1", "Use fixed gain".len(), None, "later-run");
+        self
+    }
+
+    pub fn when_the_old_preview_is_confirmed(&mut self) -> &mut Self {
+        let digest = self.purge_preview.as_ref().expect("preview").confirm_digest;
+        self.stale_purge_rejected = matches!(
+            self.store.purge_source(
+                &self.project,
+                &id("direct-v1"),
+                &id("admin"),
+                b"Sensitive text",
+                NOW + 8,
+                digest,
+            ),
+            Err(StoreError::InvalidPurge)
+        );
+        self
+    }
+
+    pub fn then_the_purge_is_rejected_and_source_bytes_remain(&mut self) {
+        assert!(self.stale_purge_rejected);
+        assert!(matches!(
+            self.store
+                .read_payload(&self.project, &id("src_direct-v1"))
+                .expect("source"),
+            merl_store::PayloadRead::Available(_)
+        ));
+        assert!(
+            self.store
+                .purge_audit(&self.project, &id("direct-v1"))
+                .expect("audit")
+                .is_none()
+        );
+    }
+
     pub fn when_the_preview_is_confirmed(&mut self) -> &mut Self {
         let preview = self.purge_preview.as_ref().expect("preview");
         self.store
@@ -906,6 +944,7 @@ impl PolicyScenario {
             provider_collision_rejected: false,
             pending_impacts: Vec::new(),
             purge_preview: None,
+            stale_purge_rejected: false,
         }
     }
 
