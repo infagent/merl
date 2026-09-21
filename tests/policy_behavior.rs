@@ -110,6 +110,15 @@ fn purging_context_evidence_makes_the_later_compilation_incomplete() {
 }
 
 #[test]
+fn purge_follows_accepted_object_bytes_into_later_compiler_contexts() {
+    PolicyScenario::given_a_later_compiler_context_containing_an_accepted_decision()
+        .when_the_source_purge_is_previewed()
+        .then_the_preview_includes_the_later_context()
+        .when_the_preview_is_confirmed()
+        .then_the_later_context_and_protected_bytes_are_gone();
+}
+
+#[test]
 fn purge_confirmation_rejects_a_preview_made_before_new_derivation() {
     PolicyScenario::given_a_decision_supported_by_an_issue_comment()
         .when_the_source_purge_is_previewed()

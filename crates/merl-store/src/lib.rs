@@ -971,13 +971,18 @@ impl Store {
                     row.get::<_, Option<String>>(2)?,
                 ))
             })?;
+        let mut pending_runs = run_rows.collect::<Result<Vec<_>, _>>()?;
+        drop(run_statement);
+        let mut seen_runs = BTreeSet::new();
         let mut runs = Vec::new();
         let mut assertions = Vec::new();
         let mut event_ids = BTreeSet::new();
         let mut object_ids = BTreeSet::new();
         let mut relation_ids = BTreeSet::new();
-        for row in run_rows {
-            let (run, context, response) = row?;
+        while let Some((run, context, response)) = pending_runs.pop() {
+            if !seen_runs.insert(run.clone()) {
+                continue;
+            }
             payload_ids.insert(context);
             if let Some(response) = response {
                 payload_ids.insert(response);
@@ -998,7 +1003,21 @@ impl Store {
                 index,
             }));
             runs.push(run_id);
+            for payload in &payload_ids {
+                for dependent in dependent_runs_for_object_payload(connection, project, payload)? {
+                    if !seen_runs.contains(&dependent.0) {
+                        pending_runs.push(dependent);
+                    }
+                }
+            }
         }
+        runs.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        assertions.sort_by(|left, right| {
+            left.run
+                .as_str()
+                .cmp(right.run.as_str())
+                .then(left.index.cmp(&right.index))
+        });
         let mut payloads = Vec::new();
         for id in payload_ids {
             let digest: Vec<u8> = connection.query_row(
@@ -3998,6 +4017,33 @@ fn collect_purge_consequences(
         relations.insert(relation);
     }
     Ok(assertions)
+}
+
+fn dependent_runs_for_object_payload(
+    connection: &Connection,
+    project: &ProjectId,
+    payload: &str,
+) -> Result<Vec<(String, String, Option<String>)>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT r.id,r.context_payload_id,result.response_payload_id
+         FROM compilation_context_objects c
+         JOIN (
+           SELECT e.object_id,e.payload_id,
+             ROW_NUMBER() OVER (PARTITION BY e.object_id ORDER BY b.revision,e.event_index) AS object_revision
+           FROM domain_events e JOIN domain_event_batches b
+             ON b.project_id=e.project_id AND b.id=e.batch_id
+           WHERE e.project_id=?1
+         ) version ON version.object_id=c.object_id AND version.object_revision=c.object_revision
+         JOIN compilation_runs r ON r.project_id=c.project_id AND r.id=c.run_id
+         LEFT JOIN compilation_results result ON result.project_id=r.project_id AND result.run_id=r.id
+         WHERE c.project_id=?1 AND version.payload_id=?2 ORDER BY r.id",
+    )?;
+    statement
+        .query_map(params![project.as_str(), payload], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(StoreError::from)
 }
 
 fn purge_preview_digest(project: &ProjectId, preview: &PurgePreview) -> [u8; 32] {
