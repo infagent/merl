@@ -12,11 +12,11 @@ The runner handles several questions per Issue, including questions at different
 | Summary plus retrieval | Rolling summary | Search visible sources |
 | Merl | Accepted Issue view from a prepared authority | Expand an object or source reference |
 
-An edit replaces the version shown by the raw and recent readers at that cutoff. Missing historical bodies appear as gaps, and the summary reader sees terminal-capture text only after the observation history. A timestamp tie that crosses the requested cutoff remains unsafe and stops the trial. The strict exact-replay path remains available for staged or fully observed fixtures.
+An edit replaces the version shown by the raw and recent readers at that cutoff when its order is known. Missing historical bodies appear as gaps, and the summary reader sees terminal-capture text only after the observation history. For timestamp-tied observations with unresolved upstream order, the reader sees the retained versions and an explicit uncertainty marker. The report records when a cutoff splits such a group; the model does not see later observations. Exact replay still refuses ambiguous order or missing historical bytes.
 
 ## Running a development case
 
-Prepare one Merl authority database per paired trial and source cutoff. Import only observations through that cutoff. A body known only from terminal capture must not be imported into an earlier authority. Compile and evaluate policy against that evidence, then close and checkpoint the database. The harness rejects a nonempty WAL and checks that the database bytes do not change while readers use it. Keep the provider-reported input and output tokens for every compiler call, including retries and corrections. The harness cannot infer that cost from the size of a stored context.
+Prepare one Merl authority database per paired trial and source cutoff. Import only observations through that cutoff. Historical compilation withholds bodies known only from terminal capture, even at the final observation; it must not retroactively interpret old prose with newly captured bytes. The terminal reader can see those bytes at capture time, while Merl reports the resulting semantic gap. Compile and evaluate policy against admissible evidence, then close and checkpoint the database. The harness rejects a nonempty WAL and checks that the database bytes do not change while readers use it. Keep the provider-reported input and output tokens for every compiler call, including retries and corrections. The harness cannot infer that cost from the size of a stored context.
 
 Run:
 
@@ -141,4 +141,4 @@ Held-out v3 remains evaluator-only archival material. The independent evaluator 
 
 ## Still needed for #24
 
-This runner is an executable comparison contract, not a release result. Visible adversarial fixtures, independent labels for approved natural captures, real model/scorer adapter trials, and development/adversarial reports remain #24 work. None calls for opening the held-out set. Once the contract and visible results are final, an independent evaluator can build and review held-out v4. Only then should #24 close; #32 runs after the exact RC and evaluation configuration freeze.
+This runner is an executable comparison contract, not a release result. Three controlled adversarial histories now cover relayed authority, ambiguous replies, and relative time with a PR prerequisite. The purge and coverage-promotion cases still need executable benchmark cases; approved natural captures need independent labels. Real model/scorer trials and development/adversarial reports also remain #24 work. None calls for opening the held-out set. Once the contract and visible results are final, an independent evaluator can build and review held-out v4. Only then should #24 close; #32 runs after the exact RC and evaluation configuration freeze.

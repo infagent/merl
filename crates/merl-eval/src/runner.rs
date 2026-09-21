@@ -141,6 +141,8 @@ pub struct SummarySource<'a> {
     pub body: Option<&'a str>,
     /// True when the body was first available in the terminal capture.
     pub disclosed_at_capture: bool,
+    /// This visible source belongs to a timestamp-tied group with no proven upstream order.
+    pub upstream_order_unresolved: bool,
 }
 
 /// One model call to update the rolling summary after a source observation.
@@ -340,6 +342,10 @@ pub struct MethodStats {
     pub stale_state_errors: usize,
     /// Trials that missed a required blocker.
     pub missed_blockers: usize,
+    /// Answers whose correctness still needs human adjudication.
+    pub unadjudicated_correctness: usize,
+    /// Answers whose citations still need human adjudication.
+    pub unadjudicated_provenance: usize,
 }
 
 /// First read count where a method costs fewer total tokens than repeated raw reads.
@@ -685,6 +691,13 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                         .then(|| available_body_at(fixture, source, source.sequence))
                         .flatten(),
                         disclosed_at_capture: false,
+                        upstream_order_unresolved: source.ambiguous_order_with_previous
+                            || fixture
+                                .observations
+                                .get(usize::try_from(source.sequence).unwrap_or(usize::MAX))
+                                .is_some_and(|next| {
+                                    next.sequence <= cutoff && next.ambiguous_order_with_previous
+                                }),
                     },
                 })
                 .map_err(BenchmarkError::Model)?;
@@ -721,6 +734,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                             occurred_at: &source.occurred_at,
                             body: source.body.as_deref(),
                             disclosed_at_capture: true,
+                            upstream_order_unresolved: source.ambiguous_order_with_previous,
                         },
                     })
                     .map_err(BenchmarkError::Model)?;
@@ -849,23 +863,24 @@ fn method_stats(method: BenchmarkMethod, trials: &[TrialReport]) -> MethodStats 
     // Provider usage is exact in the report; floating point is only for display statistics.
     #[expect(clippy::cast_precision_loss, reason = "display-only mean and variance")]
     let count = reads.len() as f64;
-    let total_preparation_tokens = reads
-        .iter()
-        .map(|trial| trial.preparation_usage.total())
-        .sum();
+    let mut preparation_by_trial = std::collections::BTreeMap::<&str, u128>::new();
+    for read in &reads {
+        *preparation_by_trial
+            .entry(read.trial_id.as_str())
+            .or_default() += read.preparation_usage.total();
+    }
+    let total_preparation_tokens = preparation_by_trial.values().sum();
     #[expect(clippy::cast_precision_loss, reason = "display-only mean and variance")]
-    let mean_preparation_tokens = reads
-        .iter()
-        .map(|trial| trial.preparation_usage.total() as f64)
-        .sum::<f64>()
-        / count;
+    let preparation_count = preparation_by_trial.len() as f64;
     #[expect(clippy::cast_precision_loss, reason = "display-only mean and variance")]
-    let preparation_token_variance = if reads.len() > 1 {
-        reads
-            .iter()
-            .map(|trial| (trial.preparation_usage.total() as f64 - mean_preparation_tokens).powi(2))
+    let mean_preparation_tokens = total_preparation_tokens as f64 / preparation_count;
+    #[expect(clippy::cast_precision_loss, reason = "display-only mean and variance")]
+    let preparation_token_variance = if preparation_by_trial.len() > 1 {
+        preparation_by_trial
+            .values()
+            .map(|cost| (*cost as f64 - mean_preparation_tokens).powi(2))
             .sum::<f64>()
-            / (count - 1.0)
+            / (preparation_count - 1.0)
     } else {
         0.0
     };
@@ -915,6 +930,14 @@ fn method_stats(method: BenchmarkMethod, trials: &[TrialReport]) -> MethodStats 
         missed_blockers: reads
             .iter()
             .filter(|trial| trial.score.missed_blocker)
+            .count(),
+        unadjudicated_correctness: reads
+            .iter()
+            .filter(|trial| trial.score.correctness.is_none())
+            .count(),
+        unadjudicated_provenance: reads
+            .iter()
+            .filter(|trial| trial.score.provenance.is_none())
             .count(),
     }
 }

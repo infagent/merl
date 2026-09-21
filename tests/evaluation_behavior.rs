@@ -73,8 +73,24 @@ fn causal_import_withholds_terminal_only_text_at_an_earlier_cutoff() {
 }
 
 #[test]
+fn terminal_capture_does_not_retroactively_become_historical_compiler_input() {
+    EvaluationScenario::given_an_opening_body_known_only_from_terminal_capture()
+        .when_imported_for_the_terminal_cutoff()
+        .then_terminal_only_bytes_are_not_in_the_authority();
+}
+
+#[test]
 fn two_questions_share_issue_preparation_within_each_paired_trial() {
     EvaluationScenario::given_the_gain_discussion()
         .when_two_questions_use_the_same_issue_cutoff()
         .then_preparation_is_charged_once_per_trial_and_method();
+}
+
+#[test]
+fn timestamp_ties_remain_visible_without_claiming_an_upstream_order() {
+    EvaluationScenario::given_two_sources_with_unresolved_order()
+        .when_a_reader_revisits_the_tied_cutoff()
+        .then_both_sources_are_labeled_unordered()
+        .when_a_causal_reader_requests_the_history()
+        .then_exact_replay_rejects_unresolved_order();
 }

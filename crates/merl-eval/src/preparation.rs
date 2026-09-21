@@ -171,13 +171,12 @@ pub fn verify_preparation(
     let run_ids = store
         .compilation_run_ids(&project_id)
         .map_err(|error| error.to_string())?;
-    if run_ids.is_empty()
-        || run_ids
-            != record
-                .runs
-                .iter()
-                .map(|run| run.id.clone())
-                .collect::<Vec<_>>()
+    if run_ids
+        != record
+            .runs
+            .iter()
+            .map(|run| run.id.clone())
+            .collect::<Vec<_>>()
     {
         return Err("preparation record omits or adds compiler runs".to_owned());
     }
@@ -187,19 +186,18 @@ pub fn verify_preparation(
             .map_err(|error| error.to_string())?
             .ok_or("preparation run is missing")?;
         validate_run(record, run, &status, &contract)?;
-        if run.source_cutoff < fixture.observations.len() as u64 {
-            let selected = store
-                .compilation_context_sources(&project_id, &run.id)
-                .map_err(|error| error.to_string())?;
-            for source in &fixture.observations {
-                if body_availability(fixture, source) == Some(BodyAvailability::AtCapture)
-                    && selected.contains(
-                        &fixture_version_id(&source.version_id)
-                            .map_err(|error| error.to_string())?,
-                    )
-                {
-                    return Err("early compiler context selected terminal-only body".to_owned());
-                }
+        let selected = store
+            .compilation_context_sources(&project_id, &run.id)
+            .map_err(|error| error.to_string())?;
+        for source in &fixture.observations {
+            if body_availability(fixture, source) == Some(BodyAvailability::AtCapture)
+                && selected.contains(
+                    &fixture_version_id(&source.version_id).map_err(|error| error.to_string())?,
+                )
+            {
+                return Err(
+                    "causal compiler run selected text known only from terminal capture".to_owned(),
+                );
             }
         }
     }
