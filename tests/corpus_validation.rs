@@ -77,3 +77,39 @@ fn an_edit_can_change_support_without_immediately_replacing_a_decision() {
         .then_supersedes("parquet-export", "csv-export", 4)
         .then_source_supersedes(4, 2);
 }
+
+#[test]
+fn a_relayed_instruction_does_not_borrow_the_named_persons_authority() {
+    CorpusFixture::from_json(include_str!("../corpus/adversarial/ADV-C1.json"))
+        .given_valid_fixture()
+        .when_viewed_at_cutoff(1)
+        .then_is_candidate("remove-retention-claim")
+        .then_has_no_active_decision()
+        .when_viewed_at_cutoff(2)
+        .then_is_active("keep-retention-checks")
+        .then_is_disputed_by("remove-retention-claim", 2);
+}
+
+#[test]
+fn an_ambiguous_reply_does_not_resolve_either_question() {
+    CorpusFixture::from_json(include_str!("../corpus/adversarial/ADV-C2.json"))
+        .given_valid_fixture()
+        .when_viewed_at_cutoff(2)
+        .then_is_open("retry-incomplete-frame")
+        .then_is_open("missing-checksum-error")
+        .then_has_no_active_decision();
+}
+
+#[test]
+fn tomorrow_is_a_review_date_while_pr_merge_remains_a_condition() {
+    CorpusFixture::from_json(include_str!("../corpus/adversarial/ADV-C3.json"))
+        .given_valid_fixture()
+        .when_viewed_at_cutoff(1)
+        .then_task_awaits_acceptance("parser-trace")
+        .when_viewed_at_cutoff(2)
+        .then_task_is_accepted_but_deferred_until_pr_merge(
+            "parser-trace",
+            "github:example/parser/pull/229",
+        )
+        .then_task_is_reviewed_at("parser-trace", "2026-01-03T09:00:00Z");
+}

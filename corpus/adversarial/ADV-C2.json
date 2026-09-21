@@ -1,0 +1,90 @@
+{
+  "schema": "merl.corpus-fixture/v3",
+  "id": "ADV-C2",
+  "partition": "adversarial",
+  "origin": "controlled",
+  "source": {"provider": "controlled", "issue_provider_id": "controlled:ADV-C2"},
+  "capture": {
+    "captured_at": "2026-09-18T00:00:00Z",
+    "capture_tool_version": "manual/v1",
+    "source_sha256": "sha256:7e03d98baabce8203ad63225d38becc5884712d0e67a91019c22c50e63e431e8",
+    "history_fidelity": "staged_exact",
+    "provider_observation_count": 2
+  },
+  "provenance": {
+    "repository_license_at_capture": "not_applicable",
+    "redistribution_review": "approved"
+  },
+  "provider_snapshot": {
+    "title": "Parser follow-up",
+    "state": "OPEN",
+    "labels": [],
+    "assignees": []
+  },
+  "observations": [
+    {
+      "sequence": 1,
+      "kind": "controlled",
+      "provider_id": "controlled:ADV-C2:O1",
+      "version_id": "controlled:ADV-C2:O1:v1",
+      "author": {"provider_id": "controlled:engineer", "login": "engineer"},
+      "created_at": "2026-01-02T09:00:00Z",
+      "occurred_at": "2026-01-02T09:00:00Z",
+      "body_availability": "at_observation",
+      "body": "Can the parser retry an incomplete frame? Should a missing checksum be treated as an error?",
+      "body_sha256": "sha256:c4f54c5bae741b46a765971f3acb908fc9cfeb17bccff5090133667c363abba4"
+    },
+    {
+      "sequence": 2,
+      "kind": "controlled",
+      "provider_id": "controlled:ADV-C2:O2",
+      "version_id": "controlled:ADV-C2:O2:v1",
+      "author": {"provider_id": "controlled:reviewer", "login": "reviewer"},
+      "created_at": "2026-01-02T10:00:00Z",
+      "occurred_at": "2026-01-02T10:00:00Z",
+      "body_availability": "at_observation",
+      "body": "Both points are compatible. Do that after the first run.",
+      "body_sha256": "sha256:99936da3bb51492900e5be06b9e5d1154872b090c4aa9517f413e76d48ca7cdd"
+    }
+  ],
+  "gold_states": [
+    {
+      "source_observation_cutoff": 1,
+      "objects": [
+        {
+          "key": "retry-incomplete-frame",
+          "kind": "question",
+          "lifecycle": "open",
+          "support_status": "current",
+          "evidence": [{"observation": 1, "role": "supports"}]
+        },
+        {
+          "key": "missing-checksum-error",
+          "kind": "question",
+          "lifecycle": "open",
+          "support_status": "current",
+          "evidence": [{"observation": 1, "role": "supports"}]
+        }
+      ]
+    },
+    {
+      "source_observation_cutoff": 2,
+      "objects": [
+        {
+          "key": "retry-incomplete-frame",
+          "kind": "question",
+          "lifecycle": "open",
+          "support_status": "current",
+          "evidence": [{"observation": 1, "role": "supports"}]
+        },
+        {
+          "key": "missing-checksum-error",
+          "kind": "question",
+          "lifecycle": "open",
+          "support_status": "current",
+          "evidence": [{"observation": 1, "role": "supports"}]
+        }
+      ]
+    }
+  ]
+}
