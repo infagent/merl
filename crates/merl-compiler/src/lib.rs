@@ -34,6 +34,8 @@ pub enum CompileError {
     InvalidResponse,
     /// The bounded run needs another context round before coverage is complete.
     ContextRequired,
+    /// This binary cannot reconstruct an older selector or renderer contract.
+    UnsupportedReplayVersion(String),
     /// The external compiler process failed to start or complete.
     Adapter(String),
 }
@@ -52,6 +54,9 @@ impl fmt::Display for CompileError {
                 f.write_str("compiler returned an invalid structured response")
             }
             Self::ContextRequired => f.write_str("compiler requested more context"),
+            Self::UnsupportedReplayVersion(version) => {
+                write!(f, "unsupported compiler replay version: {version}")
+            }
             Self::Adapter(message) => write!(f, "compiler adapter failed: {message}"),
         }
     }
@@ -160,6 +165,22 @@ struct ObjectContext {
     truncated: bool,
 }
 
+#[derive(Clone, Copy)]
+enum SelectorVersion {
+    ObjectIdPrefixV1,
+    IssueContextV1,
+}
+
+impl SelectorVersion {
+    fn for_replay(version: &str) -> Result<Self, CompileError> {
+        match version {
+            "object_id_prefix_v1" => Ok(Self::ObjectIdPrefixV1),
+            "issue_context_v1" => Ok(Self::IssueContextV1),
+            other => Err(CompileError::UnsupportedReplayVersion(other.to_owned())),
+        }
+    }
+}
+
 /// Selects only observations and accepted state available at the trigger's position.
 ///
 /// # Errors
@@ -180,7 +201,15 @@ pub fn build_context(
             .replay_basis(project, trigger)?
             .ok_or(CompileError::NonCausalHistory)?
     };
-    build_context_with_basis(store, project, trigger, basis, limits, false)
+    build_context_with_basis(
+        store,
+        project,
+        trigger,
+        basis,
+        limits,
+        false,
+        SelectorVersion::IssueContextV1,
+    )
 }
 
 /// Rebuilds an earlier compiler input from causal evidence and checks its saved manifest.
@@ -202,6 +231,12 @@ pub fn rebuild_recorded_context(
     if status.mode == "hindsight" || status.limits != limits.recorded() {
         return Err(CompileError::NonCausalHistory);
     }
+    if status.renderer_version != "json_v1" {
+        return Err(CompileError::UnsupportedReplayVersion(
+            status.renderer_version,
+        ));
+    }
+    let selector = SelectorVersion::for_replay(&status.selector_version)?;
     let saved = store
         .load_compilation_context(project, run_id)
         .map_err(|error| {
@@ -211,7 +246,15 @@ pub fn rebuild_recorded_context(
                 CompileError::Store(error)
             }
         })?;
-    let rebuilt = build_context(store, project, &status.source, limits)?;
+    let rebuilt = build_context_with_basis(
+        store,
+        project,
+        &status.source,
+        status.interpretation_basis_revision,
+        limits,
+        false,
+        selector,
+    )?;
     let mut rebuilt_objects = rebuilt.objects.clone();
     let mut saved_objects = saved.objects;
     rebuilt_objects.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
@@ -259,6 +302,7 @@ fn build_context_with_basis(
     basis: ProjectRevision,
     limits: CompilerLimits,
     hindsight: bool,
+    selector: SelectorVersion,
 ) -> Result<CompilationContext, CompileError> {
     let source = store
         .source_version(project, trigger)?
@@ -281,6 +325,7 @@ fn build_context_with_basis(
         source.sequence,
         selected,
         limits,
+        selector,
     )
 }
 
@@ -292,6 +337,7 @@ fn build_context_from_sources(
     cutoff: u64,
     selected: Vec<SourceVersionId>,
     limits: CompilerLimits,
+    selector: SelectorVersion,
 ) -> Result<CompilationContext, CompileError> {
     if selected.is_empty() || selected.len() > limits.source_window || limits.objects == 0 {
         return Err(CompileError::InputBudget);
@@ -345,15 +391,20 @@ fn build_context_from_sources(
             body: String::from_utf8(body).map_err(|_| CompileError::InvalidResponse)?,
         });
     }
-    let selection = select_objects(
-        store,
-        project,
-        basis,
-        trigger,
-        &source.context_scope_id,
-        &sources,
-        limits.objects,
-    )?;
+    let selection = match selector {
+        SelectorVersion::ObjectIdPrefixV1 => {
+            store.objects_at_revision(project, basis, limits.objects)?
+        }
+        SelectorVersion::IssueContextV1 => select_objects(
+            store,
+            project,
+            basis,
+            trigger,
+            &source.context_scope_id,
+            &sources,
+            limits.objects,
+        )?,
+    };
     let object_context = render_objects(store, project, selection, &mut payload_bytes, limits)?;
     let rendered = serde_json::to_vec(&RenderedContext {
         schema: "merl.compilation-context/v1",
@@ -430,6 +481,7 @@ fn build_revalidation_context(
         store.source_observation_head(project)?,
         selected,
         limits,
+        SelectorVersion::IssueContextV1,
     )
 }
 
@@ -921,6 +973,7 @@ pub fn prepare_compilation(
                 store.project_revision(project)?,
                 limits,
                 true,
+                SelectorVersion::IssueContextV1,
             )?
         }
     } else {
@@ -1044,6 +1097,7 @@ fn error_code(error: &CompileError) -> &'static str {
         CompileError::NonCausalHistory => "noncausal_history",
         CompileError::MissingEvidence => "missing_evidence",
         CompileError::ContextRequired => "context_required",
+        CompileError::UnsupportedReplayVersion(_) => "unsupported_replay_version",
         CompileError::Store(_) | CompileError::InvalidResponse => "invalid_response",
     }
 }

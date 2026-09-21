@@ -673,6 +673,10 @@ pub struct CompilationRunStatus {
     pub source_observation_cutoff: u64,
     /// Digest of exact rendered input bytes.
     pub context_digest: [u8; 32],
+    /// Renderer used to create the retained input bytes.
+    pub renderer_version: String,
+    /// Selector used to choose historical object revisions.
+    pub selector_version: String,
     /// Versioned compiler implementation identity.
     pub compiler_id: String,
     /// Compiler implementation version.
@@ -2147,13 +2151,16 @@ impl Store {
             [i64; 9],
             i64,
             i64,
+            String,
+            String,
         );
         let raw: Option<RawStatus> = self.connection.query_row(
             "SELECT source_version_id,mode,compilation_results.outcome,compilation_results.failure_code,interpretation_basis_revision,
                     source_observation_cutoff,context_digest,compiler_id,compiler_version,model_id,prompt_digest,
                     max_input_bytes,max_output_bytes,max_output_tokens,max_assertions,
                     max_context_requests,max_expansion_rounds,max_payload_bytes,
-                    max_source_window,max_objects,started_at_millis,attempt_order
+                    max_source_window,max_objects,started_at_millis,attempt_order,
+                    renderer_version,selector_version
              FROM compilation_runs LEFT JOIN compilation_results
                ON compilation_results.project_id=compilation_runs.project_id
               AND compilation_results.run_id=compilation_runs.id
@@ -2162,7 +2169,7 @@ impl Store {
                 row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,
                 row.get(8)?, row.get(9)?, row.get(10)?,
                 [row.get(11)?, row.get(12)?, row.get(13)?, row.get(14)?,
-                 row.get(15)?, row.get(16)?, row.get(17)?, row.get(18)?, row.get(19)?], row.get(20)?,row.get(21)?)),
+                 row.get(15)?, row.get(16)?, row.get(17)?, row.get(18)?, row.get(19)?], row.get(20)?,row.get(21)?,row.get(22)?,row.get(23)?)),
         ).optional()?;
         raw.map(
             |(
@@ -2180,6 +2187,8 @@ impl Store {
                 limits,
                 started_at_millis,
                 attempt_order,
+                renderer_version,
+                selector_version,
             )| {
                 Ok(CompilationRunStatus {
                     attempt_order: u64::try_from(attempt_order)
@@ -2198,6 +2207,8 @@ impl Store {
                     source_observation_cutoff: u64::try_from(cutoff)
                         .map_err(|_| StoreError::CorruptHistory)?,
                     context_digest: digest.try_into().map_err(|_| StoreError::CorruptHistory)?,
+                    renderer_version,
+                    selector_version,
                     compiler_id,
                     compiler_version,
                     model_id,
