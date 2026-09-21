@@ -24,7 +24,7 @@ This order makes the build and release contract visible from the first Rust chan
 
 ## Evaluation corpus
 
-The [benchmark harness](benchmark-harness.md) owns the executable five-method comparison and its evaluator-only freeze gate. The visible corpus and sealed held-out boundary are described in [evaluation corpus](evaluation-corpus.md).
+The [benchmark harness](benchmark-harness.md) owns the executable five-method comparison and its evaluator-only freeze gate. The visible corpus and sealed held-out boundary are described in [evaluation corpus](evaluation-corpus.md). Held-out v3 is archival review lineage, not an execution package. After #24's visible work and final corpus/harness contracts freeze, an independent evaluator will prepare and review v4 from the selected sources. V4 is the only held-out set used for the release claim.
 
 Before compiler work begins, maintainers freeze 10 to 30 complete Issue histories and divide them into three sets:
 
@@ -71,7 +71,7 @@ The slice performs these actions:
 7. Render compact researcher, engineer, and PM views with optional object focus, expansion to available evidence, and scoped semantic-coverage metadata.
 8. Ingest one new comment and expose only its accepted delta through a pollable inbox.
 9. Rebuild the same state from an empty database.
-10. Run the held-out benchmark against all four simpler baselines and publish correctness, break-even, and variance.
+10. Finish visible development and adversarial trials, then freeze the corpus and harness contracts. Have an independent evaluator build and review held-out v4 before closing #24. Freeze the exact release candidate and evaluation configuration; #32 then runs v4 against all four simpler baselines and reports correctness, provenance, failures, break-even, and variance.
 
 The compiler may ask for more context when a phrase such as "the issue above" remains ambiguous. It must not guess or silently fall back to the whole thread.
 

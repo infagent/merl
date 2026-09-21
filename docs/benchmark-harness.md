@@ -2,7 +2,7 @@
 
 `merl-eval` runs the five Issue-reading methods in [the first-release plan](first-release.md#evaluation-corpus). It is evaluator-side tooling. Keep natural captures that await redistribution review, scoring keys, and held-out files outside implementation-agent workspaces.
 
-The current runner handles one question at one causal cutoff. Each paired trial gives the same question, system prompt, task prompt, model identity, effort, and sampling settings to all five readers. The methods differ in the context they receive:
+The runner handles several questions per Issue, including questions at different cutoffs. Within a paired trial, all five readers get the same question, system prompt, task prompt, model identity, effort, and sampling settings. Only their context and available tools differ:
 
 | Reader | Initial context | Optional detail |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ An edit replaces the version shown by the raw and recent readers at that cutoff.
 
 ## Running a development case
 
-Prepare one Merl authority database per paired trial. Import and compile only the fixture observations through the question's cutoff, then evaluate policy and check required semantic coverage. Close and checkpoint each database before the run; the harness rejects a nonempty WAL and checks that the database bytes do not change while readers use it. Record the compiler adapter's actual provider-reported input and output tokens, including corrections and retries. The harness cannot infer that cost from the size of a stored context.
+Prepare one Merl authority database per paired trial and source cutoff. Import only observations through that cutoff. A body known only from terminal capture must not be imported into an earlier authority. Compile and evaluate policy against that evidence, then close and checkpoint the database. The harness rejects a nonempty WAL and checks that the database bytes do not change while readers use it. Keep the provider-reported input and output tokens for every compiler call, including retries and corrections. The harness cannot infer that cost from the size of a stored context.
 
 Run:
 
@@ -26,7 +26,9 @@ cargo run --locked -p merl-eval -- run --plan /path/to/development-plan.json
 
 `merl-eval inspect --plan /path/to/plan.json` prints the exact artifact digests the freeze record needs. It does not invoke the model or scorer. Run it only in the evaluator environment when the plan names sealed material.
 
-The plan uses `merl.eval-plan/v1`. It names the fixture, question, shared model configuration, model and scorer programs, process byte limits, and the prepared Merl trials. Each Merl trial names a database and a `merl.eval-merl-usage/v1` record. That record includes the project, source cutoff, compiler-run IDs, and measured token usage. The runner checks that the record agrees with the plan and records SHA-256 digests of the record and database in its report. It reads Merl views through the same public CLI used by agents.
+The plan uses `merl.eval-plan/v1`. It names the fixture, questions, shared model configuration, model and scorer programs, compiler artifacts, process byte limits, and prepared Merl trials. Each preparation record must match the candidate commit and evaluator binary, the exact compiler program/prompt/rules/configuration hashes, and every recorded compiler run. The run modes must be causal (`live` or `replay`), never `hindsight` or `eval`. Its measured call ledger includes retries and corrections. The harness records SHA-256 digests of the receipt and database and reads the Issue through Merl's public CLI.
+
+Questions at the same cutoff share one rolling summary and Merl preparation within a paired trial. Their answer calls remain separate. The report charges each shared preparation once, not once per question. A different cutoff needs a different prepared authority and summary.
 
 A development plan looks like this, with paths supplied by the evaluator:
 
@@ -34,11 +36,11 @@ A development plan looks like this, with paths supplied by the evaluator:
 {
   "schema": "merl.eval-plan/v1",
   "fixture": "corpus/development/DEV-C1.json",
-  "question": {
+  "questions": [{
     "id": "DEV-C1-Q1",
     "cutoff": 4,
     "text": "What receive-gain strategy is current for the baseline?"
-  },
+  }],
   "config": {
     "model": "configured-model",
     "model_version": "exact-version",
@@ -56,6 +58,13 @@ A development plan looks like this, with paths supplied by the evaluator:
   },
   "model_program": "/path/to/model-adapter",
   "scorer_program": "/path/to/development-scorer",
+  "candidate_commit": "40-character-candidate-git-sha",
+  "compiler_artifacts": {
+    "program": "/path/to/compiler-adapter",
+    "prompt": "/path/to/compiler-prompt",
+    "rules": "/path/to/compiler-rules",
+    "config": "/path/to/compiler-model-config"
+  },
   "merl": {
     "project": "P1",
     "issue": "I1",
@@ -63,16 +72,16 @@ A development plan looks like this, with paths supplied by the evaluator:
     "role": "researcher",
     "trials": [
       {
+        "trial_id": "pair-a",
+        "source_cutoff": 4,
         "database": "/path/to/trial-1.sqlite",
-        "usage_record": "/path/to/trial-1-usage.json",
-        "preparation_usage": { "input": 1300, "output": 160 },
-        "causal": true
+        "preparation_record": "/path/to/trial-1-preparation.json"
       },
       {
+        "trial_id": "pair-b",
+        "source_cutoff": 4,
         "database": "/path/to/trial-2.sqlite",
-        "usage_record": "/path/to/trial-2-usage.json",
-        "preparation_usage": { "input": 1320, "output": 155 },
-        "causal": true
+        "preparation_record": "/path/to/trial-2-preparation.json"
       }
     ]
   },
@@ -81,15 +90,40 @@ A development plan looks like this, with paths supplied by the evaluator:
 }
 ```
 
-Each usage record has this shape; token counts must come from the compiler adapter's provider response, not a character-count estimate:
+The evaluator writes one `merl.eval-preparation/v1` record for each prepared authority. It names the paired trial, project, cutoff, candidate commit and evaluator binary digest. Its `compiler` section gives the compiler ID/version/model, SHA-256 of each of the four artifacts, and a domain-separated contract digest. `merl-eval inspect` prints that digest; it must be the `prompt_digest` recorded on every contributing compiler run. The `runs` array lists every run in durable attempt order with its mode, cutoff, selector, and renderer. The `calls` array lists each provider call with a stable call ID, run ID, phase (`compile`, `retry`, `correction`, or `revalidation`), and reported input/output tokens. `total_usage` is their sum. Do not estimate usage from text length.
 
 ```json
 {
-  "schema": "merl.eval-merl-usage/v1",
+  "schema": "merl.eval-preparation/v1",
+  "trial_id": "pair-a",
   "project": "P1",
   "source_cutoff": 4,
-  "compiler_runs": ["CR1", "CR2", "CR3", "CR4"],
-  "usage": { "input": 1300, "output": 160 }
+  "candidate_commit": "40-character-candidate-git-sha",
+  "candidate_binary_sha256": "sha256:...",
+  "compiler": {
+    "id": "configured-compiler",
+    "version": "v1",
+    "model": "configured-model",
+    "program_sha256": "sha256:...",
+    "prompt_sha256": "sha256:...",
+    "rules_sha256": "sha256:...",
+    "config_sha256": "sha256:...",
+    "contract_sha256": "sha256:..."
+  },
+  "runs": [{
+    "id": "CR1",
+    "mode": "replay",
+    "source_cutoff": 1,
+    "selector_version": "issue_context_v1",
+    "renderer_version": "json_v1"
+  }],
+  "calls": [{
+    "id": "compiler-call-1",
+    "run_id": "CR1",
+    "phase": "compile",
+    "usage": { "input": 1300, "output": 160 }
+  }],
+  "total_usage": { "input": 1300, "output": 160 }
 }
 ```
 
@@ -97,14 +131,14 @@ The model program receives one JSON request on stdin and returns one JSON respon
 
 The scorer is a separate evaluator-owned program. It receives `merl.eval-score-request/v1` with the question ID, answer, and citations, then returns `merl.eval-score/v1` with correctness, provenance, stale-state, and missed-blocker grades. The harness passes `MERL_EVAL_SCORING_SPEC` only to this scorer when a frozen scoring specification is supplied. A scorer can leave ambiguous grades unadjudicated rather than awarding an automatic success.
 
-Reports use `merl.eval-report/v1`. They retain each answer and its reported usage, mean and sample variance by method, and the first downstream read count at which each method's average preparation plus reading cost becomes lower than repeated raw-history reads. An absent break-even count means the measured per-read saving cannot recover preparation cost. The calculation uses exact integer token totals; floating-point values appear only in descriptive statistics.
+Reports use `merl.eval-report/v1`. They retain each answer and its reported usage, each question's source fidelity, mean and sample variance by method, failure categories, and the first downstream suite read count at which a method's preparation plus reading cost falls below repeated raw-history reads. An absent break-even count means the measured per-read saving cannot recover preparation cost. The calculation uses exact integer token totals; floating-point values appear only in descriptive statistics.
 
 ## Held-out gate
 
-The implementation team should run development and visible adversarial cases only. An independent evaluator keeps the approved held-out package and scorer outside this repository. Before a held-out run, the plan requires a freeze record naming the candidate commit and binding the evaluator binary, approved corpus manifest, fixture, question, model configuration, model program, scorer program, and scoring specification by SHA-256. The runner checks those artifact hashes before it invokes the model. The evaluator must also confirm that the fixture and question belong to the approved manifest and that the binary came from the named commit; the runner cannot prove either fact from an opaque manifest and a commit string.
+The implementation team should run development and visible adversarial cases only. An independent evaluator keeps the held-out package and scorer outside this repository. Before a held-out run, the plan requires a freeze record naming the candidate commit and binding the evaluator binary, approved corpus manifest, fixture, questions, model configuration, model program, scorer program, scoring specification, preparation records, and prepared databases by SHA-256. The runner checks those artifact hashes before it invokes the model. The evaluator must also confirm that the fixture and questions belong to the approved manifest and that the binary came from the named commit; the runner cannot prove either fact from an opaque manifest and a commit string.
 
 Held-out v3 remains evaluator-only archival material. The independent evaluator will build, review, and freeze v4 against the final corpus and harness contracts. No implementation agent should inspect v3 or v4 cases while finishing #24.
 
 ## Still needed for #24
 
-This runner is an executable comparison contract, not a release result. The visible repository has three controlled development histories. Two natural captures remain local pending privacy and redistribution review. The staged adversarial cases are not yet versioned fixtures. The natural histories need independent labels and disagreements; the benchmark needs real model and scorer adapters, measured Merl preparation logs, and development/adversarial trial reports. A multi-question aggregate report must avoid charging one Issue's shared compilation separately for every question. None of this calls for opening the held-out set yet.
+This runner is an executable comparison contract, not a release result. Visible adversarial fixtures, independent labels for approved natural captures, real model/scorer adapter trials, and development/adversarial reports remain #24 work. None calls for opening the held-out set. Once the contract and visible results are final, an independent evaluator can build and review held-out v4. Only then should #24 close; #32 runs after the exact RC and evaluation configuration freeze.

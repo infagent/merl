@@ -71,3 +71,10 @@ fn causal_import_withholds_terminal_only_text_at_an_earlier_cutoff() {
         .when_imported_for_an_earlier_cutoff()
         .then_terminal_only_bytes_are_not_in_the_authority();
 }
+
+#[test]
+fn two_questions_share_issue_preparation_within_each_paired_trial() {
+    EvaluationScenario::given_the_gain_discussion()
+        .when_two_questions_use_the_same_issue_cutoff()
+        .then_preparation_is_charged_once_per_trial_and_method();
+}
