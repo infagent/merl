@@ -8,7 +8,8 @@ use merl_core::{AgentId, ObjectId, PolicyInput, ProjectId, ProjectRevision, Sour
 use merl_corpus::fixture::Fixture;
 use merl_ingest::{ImportError, import_fixture};
 use merl_store::{
-    IssueState, ObjectHistoryEntry, PayloadRead, ProjectDelta, Store, StoreError, SupportStatus,
+    IssueState, ObjectHistoryEntry, PayloadRead, ProjectDelta, PurgeAudit, PurgePreview, Store,
+    StoreError, SupportStatus,
 };
 use serde_json::{Value, json};
 
@@ -60,6 +61,7 @@ impl From<StoreError> for CliError {
             StoreError::PolicyInputConflict => "POLICY_INPUT_CONFLICT",
             StoreError::InvalidPolicyEvaluation => "INVALID_POLICY_EVALUATION",
             StoreError::InvalidInboxAcknowledgement => "INVALID_INBOX_ACKNOWLEDGEMENT",
+            StoreError::InvalidPurge => "INVALID_PURGE",
             StoreError::Storage(_) => "STORAGE_ERROR",
         };
         Self {
@@ -139,6 +141,10 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
     let mut offset = None;
     let mut focus = None;
     let mut version = None;
+    let mut reason = None;
+    let mut actor = None;
+    let mut confirm_digest = None;
+    let mut dry_run = false;
     let mut history = false;
     let mut expand_source = false;
     let mut role = "general";
@@ -207,6 +213,19 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 index += 1;
                 version = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
             }
+            "--reason" => {
+                index += 1;
+                reason = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--actor" => {
+                index += 1;
+                actor = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--confirm-digest" => {
+                index += 1;
+                confirm_digest = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--dry-run" => dry_run = true,
             "--history" => history = true,
             "--source" => expand_source = true,
             "--role" => {
@@ -242,6 +261,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
         ["help", "show"] => help("show", *json_output),
         ["help", "source"] => help("source", *json_output),
         ["help", "source", "show"] => help("source show", *json_output),
+        ["help", "source", "purge"] => help("source purge", *json_output),
         ["help", "issue", "view"] | ["issue", "view", "help"] => help("issue view", *json_output),
         ["help", "issue", "import-fixture"] | ["issue", "import-fixture", "help"] => {
             help("issue import-fixture", *json_output)
@@ -481,6 +501,55 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
             let store = Store::open(Path::new(database))?;
             render_source(&store, &project, &version, *json_output)
         }
+        ["source", "purge"] => {
+            let project =
+                parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
+            let database = database.ok_or_else(|| invalid_input("--database is required"))?;
+            let version = SourceVersionId::try_from(
+                version.ok_or_else(|| invalid_input("--version is required"))?,
+            )
+            .map_err(|error| CliError {
+                code: "INVALID_ID",
+                message: error.to_string(),
+            })?;
+            let reason = reason.ok_or_else(|| invalid_input("--reason is required"))?;
+            let mut store = Store::open(Path::new(database))?;
+            if dry_run {
+                if confirm_digest.is_some() {
+                    return Err(invalid_input(
+                        "--dry-run cannot be combined with --confirm-digest",
+                    ));
+                }
+                let preview = store.preview_source_purge(&project, &version)?;
+                render_purge_preview(&project, &preview, *json_output)
+            } else {
+                let actor = merl_core::ActorId::try_from(
+                    actor.ok_or_else(|| invalid_input("--actor is required"))?,
+                )
+                .map_err(|error| CliError {
+                    code: "INVALID_ID",
+                    message: error.to_string(),
+                })?;
+                let digest = parse_sha256(
+                    confirm_digest.ok_or_else(|| invalid_input("--confirm-digest is required"))?,
+                )?;
+                let now_millis = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|_| invalid_input("system clock is before Unix epoch"))?
+                    .as_millis();
+                let now_millis = i64::try_from(now_millis)
+                    .map_err(|_| invalid_input("system clock is outside supported range"))?;
+                let audit = store.purge_source(
+                    &project,
+                    &version,
+                    &actor,
+                    reason.as_bytes(),
+                    now_millis,
+                    digest,
+                )?;
+                render_purge_audit(&project, &audit, *json_output)
+            }
+        }
         _ => Err(invalid_input("unknown command; run `merl help`")),
     }
 }
@@ -622,6 +691,21 @@ fn payload_json(
     }
 }
 
+fn unavailable_source_json(
+    store: &Store,
+    project: &ProjectId,
+    version: &SourceVersionId,
+) -> Result<Value, CliError> {
+    Ok(match store.purge_audit(project, version)? {
+        Some(audit) => json!({
+            "status": "unavailable", "reason": "source_content_unavailable",
+            "tombstone": { "source": version.as_str(), "actor": audit.actor.as_str(),
+                "requested_at_millis": audit.requested_at_millis, "completed": audit.completed }
+        }),
+        None => json!({"status": "unavailable"}),
+    })
+}
+
 fn render_source(
     store: &Store,
     project: &ProjectId,
@@ -634,10 +718,13 @@ fn render_source(
             code: "SOURCE_NOT_FOUND",
             message: "source version does not exist".to_owned(),
         })?;
-    let body = match &source.payload {
+    let mut body = match &source.payload {
         Some(payload) => payload_json(store, project, payload)?,
         None => json!({"status": "unavailable"}),
     };
+    if body["status"] == "unavailable" {
+        body = unavailable_source_json(store, project, version)?;
+    }
     if json_output {
         render_json(&json!({
             "schema": "merl.source/v1", "project": project.as_str(), "version": version.as_str(),
@@ -656,6 +743,85 @@ fn render_source(
         ))
     } else {
         Ok(format!("{version}: source bytes unavailable\n"))
+    }
+}
+
+fn digest_text(digest: &[u8; 32]) -> String {
+    let mut value = String::from("sha256:");
+    for byte in digest {
+        write!(value, "{byte:02x}").expect("writing a digest is infallible");
+    }
+    value
+}
+
+fn parse_sha256(value: &str) -> Result<[u8; 32], CliError> {
+    let hex = value
+        .strip_prefix("sha256:")
+        .ok_or_else(|| invalid_input("digest must begin with sha256:"))?;
+    if hex.len() != 64 {
+        return Err(invalid_input("SHA-256 digest must have 64 hex digits"));
+    }
+    let mut digest = [0; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16)
+            .map_err(|_| invalid_input("SHA-256 digest contains invalid hex"))?;
+    }
+    Ok(digest)
+}
+
+fn render_purge_preview(
+    project: &ProjectId,
+    preview: &PurgePreview,
+    json_output: bool,
+) -> Result<String, CliError> {
+    let digest = digest_text(&preview.confirm_digest);
+    if json_output {
+        render_json(&json!({
+            "schema": "merl.purge-preview/v1", "action": "source.purge.preview",
+            "project": project.as_str(), "source": preview.source.as_str(),
+            "confirm_digest": digest,
+            "payloads": preview.payloads.iter().map(|item| json!({
+                "id": item.id.as_str(), "digest": digest_text(&item.digest)
+            })).collect::<Vec<_>>(),
+            "runs": preview.runs.iter().map(merl_core::CompilationRunId::as_str).collect::<Vec<_>>(),
+            "assertions": preview.assertions,
+            "events": preview.events.iter().map(merl_core::EventId::as_str).collect::<Vec<_>>(),
+            "objects": preview.objects.iter().map(ObjectId::as_str).collect::<Vec<_>>(),
+            "relations": preview.relations.iter().map(merl_core::RelationId::as_str).collect::<Vec<_>>(),
+            "covered_scopes": ["active_store"],
+            "outside_scope": ["provider_systems", "unmanaged_backups", "prior_exports"]
+        }))
+    } else {
+        Ok(format!(
+            "Purge {}: {} payloads, {} compiler runs, {} accepted objects\nConfirm with --confirm-digest {digest}\n",
+            preview.source,
+            preview.payloads.len(),
+            preview.runs.len(),
+            preview.objects.len()
+        ))
+    }
+}
+
+fn render_purge_audit(
+    project: &ProjectId,
+    audit: &PurgeAudit,
+    json_output: bool,
+) -> Result<String, CliError> {
+    if json_output {
+        render_json(&json!({
+            "schema": "merl.purge-audit/v1", "action": "source.purge",
+            "project": project.as_str(), "source": audit.source.as_str(),
+            "actor": audit.actor.as_str(), "requested_at_millis": audit.requested_at_millis,
+            "reason_payload": audit.reason.as_str(),
+            "confirm_digest": digest_text(&audit.preview_digest), "completed": audit.completed,
+            "covered_scopes": ["active_store"],
+            "outside_scope": ["provider_systems", "unmanaged_backups", "prior_exports"]
+        }))
+    } else {
+        Ok(format!(
+            "{}: protected bytes removed from active Merl store; provider systems, unmanaged backups, and prior exports are outside scope\n",
+            audit.source
+        ))
     }
 }
 
@@ -811,9 +977,11 @@ fn assertion_json(
                         .ok_or(StoreError::CorruptHistory)?;
                     json!({"status": "available", "text": String::from_utf8_lossy(span)})
                 }
-                PayloadRead::Unavailable => json!({"status": "unavailable"}),
+                PayloadRead::Unavailable => {
+                    unavailable_source_json(store, project, &assertion.source)?
+                }
             },
-            None => json!({"status": "unavailable"}),
+            None => unavailable_source_json(store, project, &assertion.source)?,
         };
     }
     Ok(detail)
@@ -875,6 +1043,7 @@ fn coverage_json(coverage: merl_store::SemanticCoverage) -> Value {
         "required_gaps": coverage.required_gaps,
         "required_pending": coverage.required_pending,
         "required_failed": coverage.required_failed,
+        "required_purged": coverage.required_purged,
         "optional_cold": coverage.optional_cold
     })
 }
@@ -985,6 +1154,7 @@ fn render_issue_view(
                 "required_gaps": coverage.required_gaps,
                 "required_pending": coverage.required_pending,
                 "required_failed": coverage.required_failed,
+                "required_purged": coverage.required_purged,
                 "optional_cold": coverage.optional_cold
             },
             "provider": state.provider.as_ref().map(|provider| json!({
@@ -1185,13 +1355,18 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "source" => (
             "merl source <command>",
-            "Commands: show.",
-            vec!["source show"],
+            "Commands: show, purge.",
+            vec!["source show", "source purge"],
         ),
         "source show" => (
             "merl source show --project <id> --database <path> --version <id> [--format json]",
             "Read one captured source version. Erased bytes report unavailable.",
             vec!["show"],
+        ),
+        "source purge" => (
+            "merl source purge --project <id> --database <path> --version <id> --reason <text> (--dry-run | --actor <id> --confirm-digest sha256:<hex>) [--format json]",
+            "Preview affected bytes and provenance, then confirm the digest to erase them from active Merl storage.",
+            vec!["source show"],
         ),
         "issue import-fixture" => (
             "merl issue import-fixture --project <id> --database <path> --fixture <path> [--format json]",
@@ -1238,6 +1413,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         "source show" => {
             Some("merl source show --project P1 --database project.sqlite --version SV1 --json")
         }
+        "source purge" => Some(
+            "merl source purge --project P1 --database project.sqlite --version SV1 --reason 'Sensitive text' --dry-run --json",
+        ),
         _ => None,
     };
     if json_output {
@@ -1259,6 +1437,14 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
                 "PROJECT_NOT_FOUND",
                 "OBJECT_NOT_FOUND",
                 "CORRUPT_HISTORY",
+                "STORAGE_ERROR",
+            ]
+        } else if command == "source purge" {
+            vec![
+                "INVALID_INPUT",
+                "INVALID_ID",
+                "INVALID_SOURCE",
+                "INVALID_PURGE",
                 "STORAGE_ERROR",
             ]
         } else if command == "source show" {

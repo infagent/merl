@@ -94,6 +94,22 @@ fn erasing_the_only_source_marks_decision_support_unavailable() {
 }
 
 #[test]
+fn purge_previews_the_derivation_before_erasing_source_and_derived_bytes() {
+    PolicyScenario::given_a_decision_supported_by_an_issue_comment()
+        .when_the_source_purge_is_previewed()
+        .then_the_preview_names_the_affected_run_and_decision()
+        .when_the_preview_is_confirmed()
+        .then_source_and_compiler_bytes_are_unavailable_with_an_audit_record();
+}
+
+#[test]
+fn purging_context_evidence_makes_the_later_compilation_incomplete() {
+    PolicyScenario::given_a_decision_compiled_with_an_earlier_comment()
+        .when_the_earlier_comment_is_purged()
+        .then_both_required_sources_report_unavailable_evidence();
+}
+
+#[test]
 fn editing_context_evidence_reconsiders_an_assertion_citing_another_comment() {
     PolicyScenario::given_a_decision_compiled_with_an_earlier_comment()
         .when_the_earlier_comment_is_edited()

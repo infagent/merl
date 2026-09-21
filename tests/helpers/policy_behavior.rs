@@ -8,7 +8,9 @@ use merl_core::{
     SourceVersionId,
 };
 use merl_policy::{PolicyRules, PreparedPolicy, Proposal, evaluate};
-use merl_store::{EvidenceImpact, SourceBinding, SourceCapture, Store, StoreError, SupportStatus};
+use merl_store::{
+    EvidenceImpact, PurgePreview, SourceBinding, SourceCapture, Store, StoreError, SupportStatus,
+};
 use sha2::{Digest, Sha256};
 use std::{
     fs::OpenOptions,
@@ -126,6 +128,7 @@ pub struct PolicyScenario {
     invalid_result: Option<Result<Option<merl_core::ProjectRevision>, StoreError>>,
     provider_collision_rejected: bool,
     pending_impacts: Vec<EvidenceImpact>,
+    purge_preview: Option<PurgePreview>,
 }
 
 impl PolicyScenario {
@@ -526,6 +529,97 @@ impl PolicyScenario {
         self
     }
 
+    pub fn when_the_source_purge_is_previewed(&mut self) -> &mut Self {
+        self.purge_preview = Some(
+            self.store
+                .preview_source_purge(&self.project, &id("direct-v1"))
+                .expect("purge preview"),
+        );
+        self
+    }
+
+    pub fn when_the_earlier_comment_is_purged(&mut self) -> &mut Self {
+        let source = id("context-v1");
+        let preview = self
+            .store
+            .preview_source_purge(&self.project, &source)
+            .expect("context purge preview");
+        self.store
+            .purge_source(
+                &self.project,
+                &source,
+                &id("admin"),
+                b"Sensitive text",
+                NOW + 8,
+                preview.confirm_digest,
+            )
+            .expect("purge context source");
+        self
+    }
+
+    pub fn then_both_required_sources_report_unavailable_evidence(&mut self) {
+        let coverage = self
+            .store
+            .semantic_coverage(&self.project)
+            .expect("coverage");
+        assert_eq!(coverage.required_purged, 2);
+        assert_eq!(coverage.required_gaps, 2);
+    }
+
+    pub fn then_the_preview_names_the_affected_run_and_decision(&mut self) -> &mut Self {
+        let preview = self.purge_preview.as_ref().expect("preview");
+        assert!(
+            preview
+                .payloads
+                .iter()
+                .any(|payload| payload.id.as_str() == "src_direct-v1")
+        );
+        assert!(preview.runs.iter().any(|run| run.as_str() == "direct-run"));
+        assert!(preview.objects.iter().any(|object| object.as_str() == "D1"));
+        self
+    }
+
+    pub fn when_the_preview_is_confirmed(&mut self) -> &mut Self {
+        let preview = self.purge_preview.as_ref().expect("preview");
+        self.store
+            .purge_source(
+                &self.project,
+                &id("direct-v1"),
+                &id("admin"),
+                b"Credential posted in comment",
+                NOW + 8,
+                preview.confirm_digest,
+            )
+            .expect("audited purge");
+        self
+    }
+
+    pub fn then_source_and_compiler_bytes_are_unavailable_with_an_audit_record(&mut self) {
+        assert!(matches!(
+            self.store
+                .read_payload(&self.project, &id("src_direct-v1"))
+                .expect("source payload"),
+            merl_store::PayloadRead::Unavailable
+        ));
+        assert!(
+            self.store
+                .load_compilation_context(&self.project, "direct-run")
+                .is_err()
+        );
+        assert!(
+            self.store
+                .purge_audit(&self.project, &id("direct-v1"))
+                .expect("audit lookup")
+                .is_some()
+        );
+        assert_eq!(
+            self.store
+                .object_support_status(&self.project, &id("D1"))
+                .expect("support"),
+            SupportStatus::Unsupported
+        );
+    }
+
     pub fn then_the_decision_remains_but_support_is_unsupported(&mut self) {
         assert!(
             self.store
@@ -539,6 +633,12 @@ impl PolicyScenario {
                 .expect("support"),
             SupportStatus::Unsupported,
         );
+        let coverage = self
+            .store
+            .semantic_coverage(&self.project)
+            .expect("coverage");
+        assert_eq!(coverage.required_purged, 1);
+        assert_eq!(coverage.required_gaps, 1);
         assert_eq!(
             self.store
                 .pending_revalidation_count(&self.project)
@@ -805,6 +905,7 @@ impl PolicyScenario {
             invalid_result: None,
             provider_collision_rejected: false,
             pending_impacts: Vec::new(),
+            purge_preview: None,
         }
     }
 

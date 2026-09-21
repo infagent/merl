@@ -159,6 +159,12 @@ impl HistoricalIssue {
     }
 }
 
+enum ReplayCheck {
+    NotRun,
+    Matching,
+    MissingEvidence,
+}
+
 pub struct CompilationScenario {
     store: Store,
     project: ProjectId,
@@ -168,8 +174,7 @@ pub struct CompilationScenario {
     compile_failed: bool,
     recovery_succeeded: bool,
     hindsight_context: Option<serde_json::Value>,
-    replay_matches: bool,
-    replay_missing: bool,
+    replay_check: ReplayCheck,
 }
 
 impl CompilationScenario {
@@ -186,8 +191,7 @@ impl CompilationScenario {
             compile_failed: false,
             recovery_succeeded: false,
             hindsight_context: None,
-            replay_matches: false,
-            replay_missing: false,
+            replay_check: ReplayCheck::NotRun,
         }
     }
 
@@ -974,7 +978,11 @@ impl CompilationScenario {
             .store
             .load_compilation_context(&self.project, "run-one")
             .expect("original input");
-        self.replay_matches = rebuilt.rendered == original.rendered;
+        self.replay_check = if rebuilt.rendered == original.rendered {
+            ReplayCheck::Matching
+        } else {
+            ReplayCheck::NotRun
+        };
         run_compiler(
             &mut self.store,
             &self.project,
@@ -994,7 +1002,7 @@ impl CompilationScenario {
     pub fn then_replay_matches_the_recorded_input_and_leaves_the_decision_alone(
         &mut self,
     ) -> &mut Self {
-        assert!(self.replay_matches);
+        assert!(matches!(self.replay_check, ReplayCheck::Matching));
         assert_eq!(
             self.store
                 .project_revision(&self.project)
@@ -1022,7 +1030,7 @@ impl CompilationScenario {
     }
 
     pub fn when_the_recorded_input_is_rebuilt_again(&mut self) -> &mut Self {
-        self.replay_missing = matches!(
+        self.replay_check = if matches!(
             merl_compiler::rebuild_recorded_context(
                 &self.store,
                 &self.project,
@@ -1030,12 +1038,16 @@ impl CompilationScenario {
                 limits(),
             ),
             Err(merl_compiler::CompileError::NonCausalHistory)
-        );
+        ) {
+            ReplayCheck::MissingEvidence
+        } else {
+            ReplayCheck::NotRun
+        };
         self
     }
 
     pub fn then_replay_reports_missing_evidence(&mut self) {
-        assert!(self.replay_missing);
+        assert!(matches!(self.replay_check, ReplayCheck::MissingEvidence));
     }
 
     pub fn when_the_required_note_fails_its_output_budget(&mut self) -> &mut Self {
