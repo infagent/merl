@@ -1,9 +1,11 @@
-use merl_corpus::fixture::{Fixture, HistoryFidelity};
+use merl_corpus::fixture::{
+    BodyAvailability, Fixture, HistoryFidelity, MissingBodyReason, source_digest,
+};
 use merl_eval::{
     AnswerAction, AnswerRequest, AnswerResponse, BenchmarkConfig, BenchmarkMethod, BenchmarkReport,
     BenchmarkRunner, EvaluationQuestion, InputError, MerlPrepared, MerlSurface, ModelAdapter,
-    ReaderInput, ReaderMethod, Score, Scorer, SummaryRequest, SummaryResponse, TokenUsage,
-    prepare_reader_input,
+    RandomnessControl, ReaderInput, ReaderMethod, Score, Scorer, SummaryRequest, SummaryResponse,
+    TokenUsage, TrialIdentity, prepare_exact_reader_input, prepare_reader_input,
 };
 
 pub struct EvaluationScenario {
@@ -12,7 +14,9 @@ pub struct EvaluationScenario {
     recent: Option<ReaderInput>,
     report: Option<BenchmarkReport>,
     observed_questions: Vec<String>,
+    observed_trials: Vec<String>,
     summary_calls: usize,
+    summary_disclosures: Vec<(u64, bool, Option<String>)>,
     tool_result_methods: Vec<BenchmarkMethod>,
     reader_error: Option<InputError>,
 }
@@ -32,6 +36,35 @@ impl EvaluationScenario {
         scenario
     }
 
+    pub fn given_an_edit_with_an_unavailable_first_body() -> Self {
+        let mut scenario = Self::given_the_edited_export_discussion();
+        let first = &mut scenario.fixture.observations[0];
+        first.body = None;
+        first.body_sha256 = None;
+        first.missing_body_reason = Some(MissingBodyReason::PriorVersionUnavailable);
+        scenario.fixture.capture.history_fidelity = HistoryFidelity::DiffOnly;
+        scenario.fixture.capture.source_sha256 = source_digest(
+            &scenario.fixture.provider_snapshot,
+            &scenario.fixture.observations,
+        );
+        scenario
+    }
+
+    pub fn given_an_opening_body_known_only_from_terminal_capture() -> Self {
+        let mut scenario = Self::given_the_gain_discussion();
+        "merl.corpus-fixture/v3".clone_into(&mut scenario.fixture.schema);
+        scenario.fixture.capture.history_fidelity = HistoryFidelity::TerminalSnapshotOnly;
+        for observation in &mut scenario.fixture.observations {
+            observation.body_availability = Some(BodyAvailability::AtObservation);
+        }
+        scenario.fixture.observations[0].body_availability = Some(BodyAvailability::AtCapture);
+        scenario.fixture.capture.source_sha256 = source_digest(
+            &scenario.fixture.provider_snapshot,
+            &scenario.fixture.observations,
+        );
+        scenario
+    }
+
     fn from_fixture(json: &str) -> Self {
         Self {
             fixture: serde_json::from_str(json).expect("controlled fixture"),
@@ -39,7 +72,9 @@ impl EvaluationScenario {
             recent: None,
             report: None,
             observed_questions: Vec::new(),
+            observed_trials: Vec::new(),
             summary_calls: 0,
+            summary_disclosures: Vec::new(),
             tool_result_methods: Vec::new(),
             reader_error: None,
         }
@@ -137,18 +172,28 @@ impl EvaluationScenario {
                         effort: "fixed".to_owned(),
                         system_prompt: "Answer from available evidence.".to_owned(),
                         task_prompt: "Identify current project state.".to_owned(),
-                        trials: 2,
+                        trials: vec![
+                            TrialIdentity {
+                                id: "pair-a".to_owned(),
+                                randomness: RandomnessControl::Seed(7),
+                            },
+                            TrialIdentity {
+                                id: "pair-b".to_owned(),
+                                randomness: RandomnessControl::Seed(11),
+                            },
+                        ],
                         recent_window: 2,
                         max_tool_rounds: 2,
                         search_results: 2,
                         temperature: Some(0.0),
-                        seed: Some(7),
                     },
                 )
                 .expect("benchmark runs"),
         );
         self.observed_questions = model.questions;
+        self.observed_trials = model.trials;
         self.summary_calls = model.summaries;
+        self.summary_disclosures = model.summary_disclosures;
         self.tool_result_methods = model.tool_result_methods;
         self
     }
@@ -160,6 +205,13 @@ impl EvaluationScenario {
                 .iter()
                 .all(|question| question == "What gain strategy is current?")
         );
+        self
+    }
+
+    pub fn then_each_pair_shares_one_randomness_setting_and_repeats_differ(self) -> Self {
+        assert_eq!(self.observed_trials.len(), 10);
+        assert_eq!(&self.observed_trials[..5], &["pair-a:7"; 5]);
+        assert_eq!(&self.observed_trials[5..], &["pair-b:11"; 5]);
         self
     }
 
@@ -246,8 +298,32 @@ impl EvaluationScenario {
 
     pub fn when_a_causal_reader_requests_the_history(mut self) -> Self {
         self.reader_error =
-            prepare_reader_input(&self.fixture, 3, ReaderMethod::RawHistory, 2).err();
+            prepare_exact_reader_input(&self.fixture, 3, ReaderMethod::RawHistory, 2).err();
         self
+    }
+
+    pub fn when_a_reader_revisits_the_first_observation(mut self) -> Self {
+        self.raw = Some(
+            prepare_reader_input(&self.fixture, 1, ReaderMethod::RawHistory, 2)
+                .expect("available evidence context"),
+        );
+        self
+    }
+
+    pub fn then_the_missing_body_is_visible_as_a_gap(self) -> Self {
+        let input = self.raw.as_ref().expect("reader input");
+        assert!(input.context.contains("body unavailable"));
+        assert_eq!(input.fidelity.missing_bodies, vec![1]);
+        self
+    }
+
+    pub fn then_the_later_edit_is_not_disclosed(self) {
+        let input = self.raw.expect("reader input");
+        assert!(
+            !input
+                .context
+                .contains("unless the consumer moves to Parquet")
+        );
     }
 
     pub fn then_a_causal_reader_refuses_it(self) {
@@ -255,6 +331,28 @@ impl EvaluationScenario {
             self.reader_error,
             Some(InputError::NonCausalHistory)
         ));
+    }
+
+    pub fn then_the_early_summaries_do_not_receive_the_opening_body(self) -> Self {
+        assert!(self.summary_disclosures.iter().all(|(_, _, body)| {
+            body.as_deref()
+                .is_none_or(|text| !text.contains("Baseline capture procedure is not final"))
+        }));
+        self
+    }
+
+    pub fn then_the_opening_body_is_disclosed_after_the_history(self) {
+        assert!(
+            self.summary_disclosures
+                .iter()
+                .any(|(sequence, capture, body)| {
+                    *sequence == 1
+                        && *capture
+                        && body.as_deref().is_some_and(|text| {
+                            text.contains("Baseline capture procedure is not final")
+                        })
+                })
+        );
     }
 
     fn inputs(&self) -> [&ReaderInput; 2] {
@@ -268,7 +366,9 @@ impl EvaluationScenario {
 #[derive(Default)]
 struct FakeModel {
     questions: Vec<String>,
+    trials: Vec<String>,
     summaries: usize,
+    summary_disclosures: Vec<(u64, bool, Option<String>)>,
     request_details: bool,
     tool_result_methods: Vec<BenchmarkMethod>,
 }
@@ -276,8 +376,17 @@ struct FakeModel {
 impl ModelAdapter for FakeModel {
     fn summarize(&mut self, request: SummaryRequest<'_>) -> Result<SummaryResponse, String> {
         self.summaries += 1;
+        self.summary_disclosures.push((
+            request.source.sequence,
+            request.source.disclosed_at_capture,
+            request.source.body.map(str::to_owned),
+        ));
         Ok(SummaryResponse {
-            text: format!("{}\n{}", request.previous, request.source.body),
+            text: format!(
+                "{}\n{}",
+                request.previous,
+                request.source.body.unwrap_or("[body unavailable]")
+            ),
             usage: TokenUsage {
                 input: 1,
                 output: 1,
@@ -287,6 +396,14 @@ impl ModelAdapter for FakeModel {
 
     fn answer(&mut self, request: AnswerRequest<'_>) -> Result<AnswerResponse, String> {
         self.questions.push(request.question.to_owned());
+        self.trials.push(format!(
+            "{}:{}",
+            request.trial.id,
+            match &request.trial.randomness {
+                RandomnessControl::Seed(seed) => seed.to_string(),
+                RandomnessControl::Unavailable { .. } => "unavailable".to_owned(),
+            }
+        ));
         if self.request_details
             && request.can_search
             && !request.context.contains("[search results]")

@@ -160,7 +160,7 @@ fn run(path: &PathBuf) -> Result<String, String> {
     if let Some(freeze) = &plan.freeze {
         scorer.scoring_spec = Some(freeze.scoring_spec.clone());
     }
-    if plan.merl.trials.len() != plan.config.trials {
+    if plan.merl.trials.len() != plan.config.trials.len() {
         return Err(
             "one independently prepared Merl authority is required per paired trial".to_owned(),
         );
@@ -333,6 +333,7 @@ mod tests {
         BenchmarkConfig, EvaluationQuestion, FreezeRecord, MerlPlan, MerlTrialPlan, PathBuf, Plan,
         ProcessLimits, TokenUsage, digest, verify_freeze,
     };
+    use merl_eval::{RandomnessControl, TrialIdentity};
 
     #[test]
     fn held_out_execution_requires_unchanged_frozen_artifacts() {
@@ -359,12 +360,20 @@ mod tests {
             effort: "medium".to_owned(),
             system_prompt: "Read the evidence.".to_owned(),
             task_prompt: "Answer the question.".to_owned(),
-            trials: 2,
+            trials: vec![
+                TrialIdentity {
+                    id: "pair-a".to_owned(),
+                    randomness: RandomnessControl::Seed(1),
+                },
+                TrialIdentity {
+                    id: "pair-b".to_owned(),
+                    randomness: RandomnessControl::Seed(2),
+                },
+            ],
             recent_window: 2,
             max_tool_rounds: 2,
             search_results: 2,
             temperature: Some(0.0),
-            seed: Some(1),
         };
         let mut plan = Plan {
             schema: "merl.eval-plan/v1".to_owned(),

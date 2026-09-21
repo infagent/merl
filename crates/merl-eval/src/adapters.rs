@@ -60,7 +60,8 @@ impl ModelAdapter for ProcessModelAdapter {
         let response = self.call(&json!({
             "schema": WIRE_SCHEMA,
             "kind": "summarize",
-            "config": request.config,
+            "config": model_call_config(request.config),
+            "trial": request.trial,
             "previous_summary": request.previous,
             "source": {
                 "sequence": request.source.sequence,
@@ -69,7 +70,8 @@ impl ModelAdapter for ProcessModelAdapter {
                 "author_id": request.source.author_id,
                 "created_at": request.source.created_at,
                 "occurred_at": request.source.occurred_at,
-                "body": request.source.body
+                "body": request.source.body,
+                "disclosed_at_capture": request.source.disclosed_at_capture
             }
         }))?;
         match response {
@@ -79,17 +81,7 @@ impl ModelAdapter for ProcessModelAdapter {
     }
 
     fn answer(&mut self, request: AnswerRequest<'_>) -> Result<AnswerResponse, String> {
-        let response = self.call(&json!({
-            "schema": WIRE_SCHEMA,
-            "kind": "answer",
-            "config": request.config,
-            "method": request.method,
-            "question_id": request.question_id,
-            "question": request.question,
-            "context": request.context,
-            "can_search": request.can_search,
-            "can_expand": request.can_expand
-        }))?;
+        let response = self.call(&answer_wire_request(&request))?;
         let (action, usage) = match response {
             WireResponse::Final {
                 answer,
@@ -107,6 +99,31 @@ impl ModelAdapter for ProcessModelAdapter {
         };
         Ok(AnswerResponse { action, usage })
     }
+}
+
+fn answer_wire_request(request: &AnswerRequest<'_>) -> Value {
+    json!({
+        "schema": WIRE_SCHEMA,
+        "kind": "answer",
+        "config": model_call_config(request.config),
+        "trial": request.trial,
+        "question_id": request.question_id,
+        "question": request.question,
+        "context": request.context,
+        "can_search": request.can_search,
+        "can_expand": request.can_expand
+    })
+}
+
+fn model_call_config(config: &crate::BenchmarkConfig) -> Value {
+    json!({
+        "model": config.model,
+        "model_version": config.model_version,
+        "effort": config.effort,
+        "system_prompt": config.system_prompt,
+        "task_prompt": config.task_prompt,
+        "temperature": config.temperature
+    })
 }
 
 #[derive(Deserialize)]
@@ -380,7 +397,42 @@ impl MerlSurface for CliMerlSurface {
 mod tests {
     use serde_json::json;
 
-    use super::WireResponse;
+    use super::{AnswerRequest, WireResponse, answer_wire_request};
+    use crate::{BenchmarkConfig, BenchmarkMethod, RandomnessControl, TrialIdentity};
+
+    #[test]
+    fn model_answer_wire_does_not_reveal_the_benchmark_arm() {
+        let trial = TrialIdentity {
+            id: "pair-a".to_owned(),
+            randomness: RandomnessControl::Seed(7),
+        };
+        let config = BenchmarkConfig {
+            model: "model".to_owned(),
+            model_version: "v1".to_owned(),
+            effort: "medium".to_owned(),
+            system_prompt: "Use the context.".to_owned(),
+            task_prompt: "Answer the question.".to_owned(),
+            trials: vec![trial.clone()],
+            recent_window: 2,
+            max_tool_rounds: 1,
+            search_results: 2,
+            temperature: Some(0.0),
+        };
+        let wire = answer_wire_request(&AnswerRequest {
+            config: &config,
+            trial: &trial,
+            method: BenchmarkMethod::Merl,
+            question_id: "Q1",
+            question: "What is current?",
+            context: "D1 active",
+            can_search: false,
+            can_expand: true,
+        });
+        assert!(wire.get("method").is_none());
+        assert_eq!(wire["trial"]["id"], "pair-a");
+        assert_eq!(wire["trial"]["randomness"]["seed"], 7);
+        assert_eq!(wire["can_expand"], true);
+    }
 
     #[test]
     fn model_response_rejects_unexpected_prose_fields() {

@@ -2,7 +2,7 @@
 
 use std::{error::Error, fmt, fmt::Write as _};
 
-use merl_corpus::fixture::Fixture;
+use merl_corpus::fixture::{BodyAvailability, Fixture, available_body_at, body_availability};
 use serde::{Deserialize, Serialize};
 
 use crate::{InputError, ReaderMethod, SearchableSource, prepare_reader_input};
@@ -90,8 +90,8 @@ pub struct BenchmarkConfig {
     pub system_prompt: String,
     /// Shared task instruction prepended to each question.
     pub task_prompt: String,
-    /// Number of paired trials, at least one.
-    pub trials: usize,
+    /// Stable paired-trial identities and provider randomness controls.
+    pub trials: Vec<TrialIdentity>,
     /// Number of recent sources visible before search.
     pub recent_window: usize,
     /// Maximum search or expansion rounds per answer.
@@ -100,8 +100,26 @@ pub struct BenchmarkConfig {
     pub search_results: usize,
     /// Provider sampling temperature, when supported.
     pub temperature: Option<f64>,
-    /// Provider seed, when supported.
-    pub seed: Option<u64>,
+}
+
+/// One independently prepared five-method trial.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrialIdentity {
+    /// Stable ID shared by every method in this pair.
+    pub id: String,
+    /// Per-trial seed, or an explicit statement that the provider exposes none.
+    pub randomness: RandomnessControl,
+}
+
+/// Provider randomness control for a paired trial.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RandomnessControl {
+    /// Seed submitted to the provider for every method in the pair.
+    Seed(u64),
+    /// The provider exposes no usable seed; the reason remains in the report.
+    Unavailable { reason: String },
 }
 
 /// One model call to update the rolling summary after a source observation.
@@ -120,7 +138,9 @@ pub struct SummarySource<'a> {
     /// Time this version became visible.
     pub occurred_at: &'a str,
     /// Exact body visible at this position.
-    pub body: &'a str,
+    pub body: Option<&'a str>,
+    /// True when the body was first available in the terminal capture.
+    pub disclosed_at_capture: bool,
 }
 
 /// One model call to update the rolling summary after a source observation.
@@ -128,6 +148,8 @@ pub struct SummarySource<'a> {
 pub struct SummaryRequest<'a> {
     /// The same frozen model configuration used for answer calls.
     pub config: &'a BenchmarkConfig,
+    /// Paired identity and randomness for this summary preparation.
+    pub trial: &'a TrialIdentity,
     /// Previous summary, empty for the first observation.
     pub previous: &'a str,
     /// Source version newly available at this position.
@@ -148,6 +170,8 @@ pub struct SummaryResponse {
 pub struct AnswerRequest<'a> {
     /// Shared model and prompt configuration.
     pub config: &'a BenchmarkConfig,
+    /// Paired identity and randomness shared by all five methods.
+    pub trial: &'a TrialIdentity,
     /// Reader method, for audit and tool eligibility.
     pub method: BenchmarkMethod,
     /// Stable question identity.
@@ -267,6 +291,8 @@ pub struct TrialReport {
     pub method: BenchmarkMethod,
     /// Zero-based paired trial number.
     pub trial: usize,
+    /// Stable paired-trial identity.
+    pub trial_id: String,
     /// Reader answer.
     pub answer: String,
     /// Reader-supplied citations.
@@ -409,14 +435,38 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
     /// # Errors
     /// Rejects noncausal inputs, mismatched Merl views, invalid adapter replies,
     /// unavailable tools, or invalid scorer output.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "paired-trial validation and five-method execution share one public boundary"
+    )]
     pub fn run(
         &mut self,
         fixture: &Fixture,
         question: EvaluationQuestion,
         config: BenchmarkConfig,
     ) -> Result<BenchmarkReport, BenchmarkError> {
-        if config.trials == 0 {
+        if config.trials.is_empty() {
             return Err(BenchmarkError::InvalidConfig("trials must be positive"));
+        }
+        let mut ids = std::collections::HashSet::new();
+        let mut seeds = std::collections::HashSet::new();
+        let seeded = matches!(config.trials[0].randomness, RandomnessControl::Seed(_));
+        for trial in &config.trials {
+            if trial.id.is_empty() || !ids.insert(trial.id.as_str()) {
+                return Err(BenchmarkError::InvalidConfig(
+                    "paired trial IDs must be nonempty and unique",
+                ));
+            }
+            match &trial.randomness {
+                RandomnessControl::Seed(seed) if seeded && seeds.insert(*seed) => {}
+                RandomnessControl::Unavailable { reason }
+                    if !seeded && !reason.trim().is_empty() => {}
+                _ => {
+                    return Err(BenchmarkError::InvalidConfig(
+                        "trials need one supported randomness mode and distinct seeds",
+                    ));
+                }
+            }
         }
         if config.recent_window == 0 || config.search_results == 0 {
             return Err(BenchmarkError::InvalidConfig(
@@ -441,8 +491,8 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
             ReaderMethod::RecentRetrieval,
             config.recent_window,
         )?;
-        let mut trials = Vec::with_capacity(config.trials * BenchmarkMethod::ALL.len());
-        for trial in 0..config.trials {
+        let mut trials = Vec::with_capacity(config.trials.len() * BenchmarkMethod::ALL.len());
+        for (trial_index, trial) in config.trials.iter().enumerate() {
             let merl = self.merl.prepare(&question).map_err(BenchmarkError::Merl)?;
             if merl.source_cutoff != question.cutoff
                 || !merl.causal
@@ -451,7 +501,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                 return Err(BenchmarkError::InvalidMerlSurface);
             }
             let (summary, summary_usage) =
-                self.prepare_summary(fixture, question.cutoff, &config)?;
+                self.prepare_summary(fixture, question.cutoff, &config, trial)?;
             for method in BenchmarkMethod::ALL {
                 let (context, searchable, preparation_usage) = match method {
                     BenchmarkMethod::RawHistory => (
@@ -469,8 +519,15 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                     ),
                     BenchmarkMethod::Merl => (merl.view.as_str(), &[][..], merl.preparation_usage),
                 };
-                let mut result =
-                    self.read_once(method, trial, &question, &config, context, searchable)?;
+                let mut result = self.read_once(
+                    method,
+                    trial_index,
+                    trial,
+                    &question,
+                    &config,
+                    context,
+                    searchable,
+                )?;
                 result.preparation_usage = preparation_usage;
                 trials.push(result);
             }
@@ -508,6 +565,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
         fixture: &Fixture,
         cutoff: u64,
         config: &BenchmarkConfig,
+        trial: &TrialIdentity,
     ) -> Result<(String, TokenUsage), BenchmarkError> {
         let mut summary = String::new();
         let mut usage = TokenUsage::default();
@@ -520,6 +578,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                 .model
                 .summarize(SummaryRequest {
                     config,
+                    trial,
                     previous: &summary,
                     source: SummarySource {
                         sequence: source.sequence,
@@ -531,10 +590,11 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                             .and_then(|actor| actor.provider_id.as_deref()),
                         created_at: &source.created_at,
                         occurred_at: &source.occurred_at,
-                        body: source
-                            .body
-                            .as_deref()
-                            .ok_or(BenchmarkError::Input(InputError::NonCausalHistory))?,
+                        body: (body_availability(fixture, source)
+                            == Some(BodyAvailability::AtObservation))
+                        .then(|| available_body_at(fixture, source, source.sequence))
+                        .flatten(),
+                        disclosed_at_capture: false,
                     },
                 })
                 .map_err(BenchmarkError::Model)?;
@@ -544,13 +604,55 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
             usage.add(response.usage)?;
             summary = response.text;
         }
+        if cutoff == fixture.observations.last().map_or(0, |last| last.sequence) {
+            for source in fixture
+                .observations
+                .iter()
+                .filter(|item| item.sequence <= cutoff)
+                .filter(|item| {
+                    body_availability(fixture, item) == Some(BodyAvailability::AtCapture)
+                })
+            {
+                let response = self
+                    .model
+                    .summarize(SummaryRequest {
+                        config,
+                        trial,
+                        previous: &summary,
+                        source: SummarySource {
+                            sequence: source.sequence,
+                            supersedes: source.supersedes,
+                            provider_id: &source.provider_id,
+                            author_id: source
+                                .author
+                                .as_ref()
+                                .and_then(|actor| actor.provider_id.as_deref()),
+                            created_at: &source.created_at,
+                            occurred_at: &source.occurred_at,
+                            body: source.body.as_deref(),
+                            disclosed_at_capture: true,
+                        },
+                    })
+                    .map_err(BenchmarkError::Model)?;
+                if response.text.is_empty() {
+                    return Err(BenchmarkError::Model("empty rolling summary".to_owned()));
+                }
+                usage.add(response.usage)?;
+                summary = response.text;
+            }
+        }
         Ok((summary, usage))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "reader identity, paired trial, question, and disclosed context stay explicit"
+    )]
     fn read_once(
         &mut self,
         method: BenchmarkMethod,
-        trial: usize,
+        trial_index: usize,
+        trial: &TrialIdentity,
         question: &EvaluationQuestion,
         config: &BenchmarkConfig,
         initial_context: &str,
@@ -568,6 +670,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                 .model
                 .answer(AnswerRequest {
                     config,
+                    trial,
                     method,
                     question_id: &question.id,
                     question: &question.text,
@@ -590,7 +693,8 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                     }
                     return Ok(TrialReport {
                         method,
-                        trial,
+                        trial: trial_index,
+                        trial_id: trial.id.clone(),
                         answer,
                         citations,
                         score,
