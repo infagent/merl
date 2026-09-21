@@ -53,6 +53,36 @@ impl CorpusFixture {
         self.expects_state(object, GoldObjectState::Candidate)
     }
 
+    pub fn then_is_open(self, object: &str) -> Self {
+        self.expects_state(object, GoldObjectState::Open)
+    }
+
+    pub fn then_has_no_active_decision(self) -> Self {
+        let cutoff = self.cutoff.expect("a cutoff must be selected first");
+        let state = self
+            .fixture
+            .gold_states
+            .iter()
+            .find(|state| state.source_observation_cutoff == cutoff)
+            .expect("gold state");
+        assert!(!state.objects.iter().any(|object| {
+            object.kind == "decision" && object.lifecycle == GoldObjectState::Active
+        }));
+        self
+    }
+
+    pub fn then_task_is_reviewed_at(self, task: &str, timestamp: &str) -> Self {
+        let review = self
+            .object(task)
+            .task_plan
+            .as_ref()
+            .unwrap()
+            .review_at
+            .as_deref();
+        assert_eq!(review, Some(timestamp));
+        self
+    }
+
     pub fn then_has_current_support(self, object: &str) -> Self {
         let gold = self.object(object);
         assert_eq!(gold.support_status, SupportStatus::Current);
