@@ -49,6 +49,7 @@ struct MerlPlan {
 struct MerlTrialPlan {
     trial_id: String,
     source_cutoff: u64,
+    capture_phase: bool,
     database: PathBuf,
     preparation_record: PathBuf,
 }
@@ -218,8 +219,8 @@ fn run(path: &PathBuf) -> Result<String, String> {
 fn verify_trial_artifacts(plan: &Plan, fixture: &Fixture) -> Result<VerifiedTrials, String> {
     let mut cutoffs = Vec::new();
     for question in &plan.questions {
-        if !cutoffs.contains(&question.cutoff) {
-            cutoffs.push(question.cutoff);
+        if !cutoffs.contains(&(question.cutoff, question.capture_phase)) {
+            cutoffs.push((question.cutoff, question.capture_phase));
         }
     }
     if cutoffs.is_empty() || plan.merl.trials.len() != plan.config.trials.len() * cutoffs.len() {
@@ -235,14 +236,17 @@ fn verify_trial_artifacts(plan: &Plan, fixture: &Fixture) -> Result<VerifiedTria
         database_digests: Vec::new(),
         databases: Vec::new(),
     };
-    for ((identity, cutoff), trial) in plan
+    for ((identity, (cutoff, capture_phase)), trial) in plan
         .config
         .trials
         .iter()
         .flat_map(|identity| cutoffs.iter().map(move |cutoff| (identity, cutoff)))
         .zip(&plan.merl.trials)
     {
-        if trial.trial_id != identity.id || trial.source_cutoff != *cutoff {
+        if trial.trial_id != identity.id
+            || trial.source_cutoff != *cutoff
+            || trial.capture_phase != *capture_phase
+        {
             return Err(
                 "Merl preparation order or identity differs from the paired trial".to_owned(),
             );
@@ -261,6 +265,7 @@ fn verify_trial_artifacts(plan: &Plan, fixture: &Fixture) -> Result<VerifiedTria
                 trial_id: &identity.id,
                 project: &plan.merl.project,
                 source_cutoff: *cutoff,
+                capture_phase: *capture_phase,
                 candidate_commit: &plan.candidate_commit,
                 candidate_binary_sha256: &candidate_binary_sha256,
             },
@@ -409,6 +414,7 @@ mod tests {
         let question = EvaluationQuestion {
             id: "Q1".to_owned(),
             cutoff: 3,
+            capture_phase: false,
             text: "What changed?".to_owned(),
         };
         let config = BenchmarkConfig {
@@ -454,6 +460,7 @@ mod tests {
                 trials: vec![MerlTrialPlan {
                     trial_id: "pair-a".to_owned(),
                     source_cutoff: 3,
+                    capture_phase: false,
                     database: PathBuf::new(),
                     preparation_record: PathBuf::new(),
                 }],

@@ -54,6 +54,8 @@ pub struct ReaderInput {
     pub method: ReaderMethod,
     /// Inclusive observation cutoff.
     pub cutoff: u64,
+    /// Whether terminal-capture bytes were available in addition to observations.
+    pub capture_phase: bool,
     /// Exact text placed into the initial reader context.
     pub context: String,
     /// Older versions available only through explicit retrieval.
@@ -67,6 +69,8 @@ pub struct ReaderInput {
 pub struct ReaderFidelity {
     /// Corpus-level history class; it does not grant access to any particular body.
     pub history: HistoryFidelity,
+    /// A terminal provider snapshot was available to this reader.
+    pub capture_phase: bool,
     /// Observations whose bytes were unavailable at this cutoff.
     pub missing_bodies: Vec<u64>,
     /// Groups of visible observations whose upstream order is unresolved.
@@ -111,18 +115,36 @@ impl From<ValidationError> for InputError {
 /// # Errors
 /// Rejects invalid fixtures or a zero recent-window size. Unavailable bytes
 /// and unresolved upstream order remain explicit rather than being invented.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one causal reader selection keeps source availability and disclosure together"
-)]
 pub fn prepare_reader_input(
     fixture: &Fixture,
     cutoff: u64,
     method: ReaderMethod,
     recent_window: usize,
 ) -> Result<ReaderInput, InputError> {
+    prepare_reader_input_at(fixture, cutoff, false, method, recent_window)
+}
+
+/// Builds a reader context at either an observation cutoff or the separate
+/// terminal-capture position. Capture is only valid after the last observation.
+///
+/// # Errors
+/// Rejects invalid positions or fixtures; unavailable evidence stays visible as a gap.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one causal reader selection keeps source availability and disclosure together"
+)]
+pub fn prepare_reader_input_at(
+    fixture: &Fixture,
+    cutoff: u64,
+    capture_phase: bool,
+    method: ReaderMethod,
+    recent_window: usize,
+) -> Result<ReaderInput, InputError> {
     validate(fixture)?;
-    if cutoff == 0 || cutoff > fixture.observations.len() as u64 {
+    if cutoff == 0
+        || cutoff > fixture.observations.len() as u64
+        || (capture_phase && cutoff != fixture.observations.len() as u64)
+    {
         return Err(InputError::Fixture(ValidationError::UnknownCutoff(cutoff)));
     }
     if method == ReaderMethod::RecentRetrieval && recent_window == 0 {
@@ -216,11 +238,13 @@ pub fn prepare_reader_input(
         .observations
         .iter()
         .filter(|observation| observation.sequence <= cutoff)
-        .filter(|observation| available_body_at(fixture, observation, cutoff).is_none())
+        .filter(|observation| {
+            available_body_at(fixture, observation, cutoff, capture_phase).is_none()
+        })
         .map(|observation| observation.sequence)
         .collect();
     for (index, observation) in visible.into_iter().enumerate() {
-        let body = available_body_at(fixture, observation, cutoff);
+        let body = available_body_at(fixture, observation, cutoff, capture_phase);
         if included.contains(&index) {
             let _ = write!(
                 context,
@@ -254,11 +278,21 @@ pub fn prepare_reader_input(
     Ok(ReaderInput {
         method,
         cutoff,
+        capture_phase,
         context,
         searchable,
         fidelity: ReaderFidelity {
             history: fixture.capture.history_fidelity,
+            capture_phase,
             exact_replay: missing_bodies.is_empty()
+                && fixture
+                    .observations
+                    .iter()
+                    .filter(|observation| observation.sequence <= cutoff)
+                    .all(|observation| {
+                        merl_corpus::fixture::body_availability(fixture, observation)
+                            == Some(merl_corpus::fixture::BodyAvailability::AtObservation)
+                    })
                 && unordered_groups.is_empty()
                 && !cutoff_splits_unordered_group
                 && matches!(

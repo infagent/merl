@@ -5,7 +5,7 @@ use std::{error::Error, fmt, fmt::Write as _};
 use merl_corpus::fixture::{BodyAvailability, Fixture, available_body_at, body_availability};
 use serde::{Deserialize, Serialize};
 
-use crate::{InputError, ReaderFidelity, ReaderMethod, SearchableSource, prepare_reader_input};
+use crate::{InputError, ReaderFidelity, ReaderMethod, SearchableSource, prepare_reader_input_at};
 
 /// One method in the five-way Issue comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -72,6 +72,9 @@ pub struct EvaluationQuestion {
     pub id: String,
     /// Highest source observation available to any reader.
     pub cutoff: u64,
+    /// Whether the terminal provider capture is available after the last observation.
+    #[serde(default)]
+    pub capture_phase: bool,
     /// Identical task wording given to all five methods.
     pub text: String,
 }
@@ -381,6 +384,8 @@ pub struct BenchmarkReport {
 pub struct CutoffFidelity {
     /// Observation cutoff.
     pub cutoff: u64,
+    /// Whether the cutoff includes terminal capture.
+    pub capture_phase: bool,
     /// History class and unavailable bodies at that cutoff.
     pub fidelity: ReaderFidelity,
 }
@@ -491,8 +496,17 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                     "question IDs must be nonempty and unique",
                 ));
             }
-            if !cutoffs.contains(&question.cutoff) {
-                cutoffs.push(question.cutoff);
+            if let Some((_, capture_phase)) = cutoffs
+                .iter()
+                .find(|(cutoff, _)| *cutoff == question.cutoff)
+                && *capture_phase != question.capture_phase
+            {
+                return Err(BenchmarkError::InvalidConfig(
+                    "questions at one cutoff must share the capture phase",
+                ));
+            }
+            if !cutoffs.iter().any(|(cutoff, _)| *cutoff == question.cutoff) {
+                cutoffs.push((question.cutoff, question.capture_phase));
             }
         }
         if config.trials.is_empty() {
@@ -530,18 +544,21 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
         }
 
         let mut inputs = Vec::new();
-        for cutoff in cutoffs {
+        for (cutoff, capture_phase) in cutoffs {
             inputs.push((
                 cutoff,
-                prepare_reader_input(
+                capture_phase,
+                prepare_reader_input_at(
                     fixture,
                     cutoff,
+                    capture_phase,
                     ReaderMethod::RawHistory,
                     config.recent_window,
                 )?,
-                prepare_reader_input(
+                prepare_reader_input_at(
                     fixture,
                     cutoff,
+                    capture_phase,
                     ReaderMethod::RecentRetrieval,
                     config.recent_window,
                 )?,
@@ -550,7 +567,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
         let mut trials =
             Vec::with_capacity(config.trials.len() * questions.len() * BenchmarkMethod::ALL.len());
         for (trial_index, trial) in config.trials.iter().enumerate() {
-            for (cutoff, raw, recent) in &inputs {
+            for (cutoff, capture_phase, raw, recent) in &inputs {
                 let first_question = questions
                     .iter()
                     .find(|question| question.cutoff == *cutoff)
@@ -563,7 +580,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                     return Err(BenchmarkError::InvalidMerlSurface);
                 }
                 let (summary, summary_usage) =
-                    self.prepare_summary(fixture, *cutoff, &config, trial)?;
+                    self.prepare_summary(fixture, *cutoff, *capture_phase, &config, trial)?;
                 for (question_index, question) in questions
                     .iter()
                     .filter(|question| question.cutoff == *cutoff)
@@ -643,8 +660,9 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
             fixture_id: fixture.id.clone(),
             source_fidelity: inputs
                 .into_iter()
-                .map(|(cutoff, raw, _)| CutoffFidelity {
+                .map(|(cutoff, capture_phase, raw, _)| CutoffFidelity {
                     cutoff,
+                    capture_phase,
                     fidelity: raw.fidelity,
                 })
                 .collect(),
@@ -660,6 +678,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
         &mut self,
         fixture: &Fixture,
         cutoff: u64,
+        capture_phase: bool,
         config: &BenchmarkConfig,
         trial: &TrialIdentity,
     ) -> Result<(String, TokenUsage), BenchmarkError> {
@@ -688,7 +707,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                         occurred_at: &source.occurred_at,
                         body: (body_availability(fixture, source)
                             == Some(BodyAvailability::AtObservation))
-                        .then(|| available_body_at(fixture, source, source.sequence))
+                        .then(|| available_body_at(fixture, source, source.sequence, false))
                         .flatten(),
                         disclosed_at_capture: false,
                         upstream_order_unresolved: source_order_unresolved(
@@ -705,7 +724,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
             usage.add(response.usage)?;
             summary = response.text;
         }
-        if cutoff == fixture.observations.last().map_or(0, |last| last.sequence) {
+        if capture_phase && cutoff == fixture.observations.last().map_or(0, |last| last.sequence) {
             for source in fixture
                 .observations
                 .iter()

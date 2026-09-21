@@ -214,11 +214,16 @@ impl EvaluationScenario {
     }
 
     pub fn when_five_methods_answer_two_paired_trials_at(self, cutoff: u64) -> Self {
-        self.run_five_methods(cutoff, false)
+        self.run_five_methods(cutoff, false, false)
     }
 
     pub fn when_retrieval_and_merl_expansion_are_requested_at(self, cutoff: u64) -> Self {
-        self.run_five_methods(cutoff, true)
+        self.run_five_methods(cutoff, true, false)
+    }
+
+    pub fn when_five_methods_answer_at_terminal_capture(self) -> Self {
+        let cutoff = self.fixture.observations.len() as u64;
+        self.run_five_methods(cutoff, false, true)
     }
 
     pub fn when_two_questions_use_the_same_issue_cutoff(mut self) -> Self {
@@ -237,11 +242,13 @@ impl EvaluationScenario {
                     EvaluationQuestion {
                         id: "current-gain".to_owned(),
                         cutoff: 4,
+                        capture_phase: false,
                         text: "What gain is current?".to_owned(),
                     },
                     EvaluationQuestion {
                         id: "gain-rationale".to_owned(),
                         cutoff: 4,
+                        capture_phase: false,
                         text: "Why did the gain change?".to_owned(),
                     },
                 ],
@@ -278,7 +285,7 @@ impl EvaluationScenario {
         assert_eq!(report.trials[5].question_id, "gain-rationale");
     }
 
-    fn run_five_methods(mut self, cutoff: u64, request_details: bool) -> Self {
+    fn run_five_methods(mut self, cutoff: u64, request_details: bool, capture_phase: bool) -> Self {
         let mut model = FakeModel {
             request_details,
             ..FakeModel::default()
@@ -297,6 +304,7 @@ impl EvaluationScenario {
                     EvaluationQuestion {
                         id: "gain-at-cutoff".to_owned(),
                         cutoff,
+                        capture_phase,
                         text: "What gain strategy is current?".to_owned(),
                     },
                     BenchmarkConfig {

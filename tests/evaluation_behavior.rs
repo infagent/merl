@@ -62,6 +62,8 @@ fn a_rolling_summary_receives_terminal_capture_text_only_at_capture() {
         .when_five_methods_answer_two_paired_trials_at(1)
         .then_the_early_summaries_do_not_receive_the_opening_body()
         .when_five_methods_answer_two_paired_trials_at(4)
+        .then_the_early_summaries_do_not_receive_the_opening_body()
+        .when_five_methods_answer_at_terminal_capture()
         .then_the_opening_body_is_disclosed_after_the_history();
 }
 
