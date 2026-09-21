@@ -244,7 +244,10 @@ dependencies = [
 name = "merl-eval"
 version = "0.1.0"
 dependencies = [
+ "merl-cli",
  "merl-corpus",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
