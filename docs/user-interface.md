@@ -389,7 +389,7 @@ merl project rebuild --project P17 --database project.sqlite
 merl source replay --project P17 --database project.sqlite --run CR42 --json
 ```
 
-Use `project rebuild` to reconstruct accepted objects and relations from domain events. It never reads source prose or calls a compiler. The result includes the accepted revision and flags degraded provenance if payloads were erased. Use `source replay` to reconstruct one recorded compiler input at its historical cutoff and check its digest. It does not accept state. Missing bytes produce `MISSING_EVIDENCE`.
+Use `project rebuild` to reconstruct objects and relations from accepted events and the provider Issue mirror from accepted observations and sightings. It never reads source prose or calls a compiler. The result includes the accepted revision and flags degraded provenance if payloads were erased. Use `source replay` to reconstruct one recorded compiler input with its original selector and renderer. Missing bytes produce `MISSING_EVIDENCE`; an unknown selector or renderer produces `UNSUPPORTED_REPLAY_VERSION`. Replay does not accept state.
 
 An operator can run a configured process compiler against that causal input:
 
@@ -420,7 +420,7 @@ merl source purge-audit --version SE771 --project P17 \
   --database project.sqlite --json
 ```
 
-The preview names affected payloads, compilation runs, assertions, events, and accepted objects. Merl hashes that list; if another derivation appears before confirmation, the operator must preview again. Merl records the intent and payload digests, erases the bytes, and scrubs the active SQLite store before marking the purge complete. `purge-audit` shows the actor, reason, payload digests, and completion status later. Merl stores the reason behind a protected payload reference. Local same-user processes remain trusted. `--actor` records who performed the action but does not authenticate them at the OS level.
+The preview follows protected text through accepted objects into later compiler contexts. It names the affected payloads, runs, and accepted state. Merl hashes that set; if another derivation appears before confirmation, the operator must preview again. After erasure commits, a busy SQLite reader may delay the physical scrub. The command then returns a receipt with `completed=false`, and Merl retries the scrub on the next open. `purge-audit` shows the actor, reason, payload digests, and completion status. Merl stores the reason behind a protected payload reference. `--actor` records the local user's claim; it does not authenticate a process running under the same OS account.
 
 After purge, `merl show D18 --source` returns `source_content_unavailable` with the tombstone reference. Derived state remains visible in redacted form unless a separate policy action invalidates it.
 

@@ -194,11 +194,11 @@ Append-only envelopes must not become a hiding place for copied secrets. They ma
 
 The rule applies throughout both state planes. Decision statements, guidance, handoff notes, request summaries, impact descriptions, publication bodies, and rendered compiler inputs all use payload references. Human-facing examples may show the resolved text, but the stored structural record contains the reference.
 
-A purge preview follows derivation links and identifies assertions, events, projections, or rendered inputs that reference protected material. Policy may erase those payloads too, leaving structural tombstones and redacted projections. Merl reports the resulting loss of replay fidelity.
+A purge preview follows derivation links until it finds no more dependent runs. If one accepted object carries protected text into a later compiler context, the preview includes that context and any results derived from it. Policy may erase those payloads too, leaving structural tombstones and redacted projections. Merl reports the resulting loss of replay fidelity.
 
 Protected payloads do not share deletion fate across projects, principals, or retention scopes. Implementations may deduplicate hashes for comparison, but they must use separate stored copies or separately erasable encryption keys when one scope may delete content while another retains it. A purge guarantee covers the active Merl store and the Merl-managed local copies named by its retention policy. It does not claim erasure from unmanaged backups, filesystem snapshots, provider systems, or previously exported archives.
 
-The first local authority has no managed replicas. During purge, Merl records the intent and erases the selected payloads, scrubs the active SQLite file, then records completion. If the process stops partway through, Merl finishes the scrub on the next open before serving reads. Merl hashes the previewed payloads and derivations, so a changed set requires a new confirmation. The CLI records the actor supplied by the local user; it does not isolate processes running under that user's OS account.
+The first local authority has no managed replicas. During purge, Merl records the intent and erases the selected payloads, scrubs the active SQLite file, then records completion. A reader may delay the scrub after erasure commits. In that case, the command returns a receipt marked pending; Merl retries the scrub on the next open before serving reads. Merl hashes the previewed payloads and derivations, so a changed set requires a new confirmation. The CLI records the actor supplied by the local user; it does not isolate processes running under that user's OS account.
 
 ### Compilation contexts
 
@@ -249,7 +249,7 @@ Some provider APIs expose only the latest body of an edited comment. If Merl lac
 
 If the input remains ambiguous, the compiler returns an unresolved assertion or a structured request for more context. It does not silently load the full history.
 
-Replay uses the recorded manifest and available source bytes. A purge can make exact replay impossible; the run remains auditable through its manifest and digests.
+Replay uses the recorded manifest, available source bytes, and the run's recorded selector and renderer versions. An older supported selector must rebuild the input it originally chose. An unknown version gets an explicit unsupported-version result; a purge can make exact replay impossible even when the version is supported.
 
 The authority numbers compiler attempts within each project. Coverage selects the latest live attempt by that number and reports erased source or compiler-input bytes separately from a compiler failure. A replay run records a new interpretation without changing accepted project state.
 
@@ -338,7 +338,7 @@ Policy applies authority as well as confidence. Merl may accept a deterministic 
 
 Trusted provider facts follow a deterministic policy path. For example, an authenticated GitHub observation that an Issue is closed requires provenance and monotonic-version checks, not model interpretation. The accepted `provider_issue_state_observed` event updates the provider mirror, advances the same project revision used by semantic changes, and reaches agents through the normal delta and inbox path.
 
-If a later poll confirms the same provider facts, Merl updates the mirror's last-seen time without advancing the project revision. A different snapshot observed before that last-seen time cannot replace the current mirror.
+If a later poll confirms the same provider facts, Merl records an append-only sighting and updates the mirror's last-seen time without advancing the project revision. A rebuild restores the mirror from accepted provider observations and those sightings. A different snapshot observed before that last-seen time cannot replace the current mirror.
 
 Replay and evaluation results do not enter accepted state on their own. Promotion creates a new policy evaluation against current state. The original inputs remain unchanged.
 
@@ -372,7 +372,7 @@ Every accepted transaction groups its domain events under one stable `DomainEven
 
 Domain events are append-only. A correction emits another event that supersedes or reverses the earlier effect. Merl does not rewrite the historical record.
 
-Materialized objects and relations are the current projection of accepted domain events. They exist for fast reads and compact rendering. Merl must be able to rebuild them from the domain log.
+Materialized objects, relations, and provider Issue heads are disposable projections. Merl rebuilds objects and relations from accepted domain events, then restores provider heads from accepted provider observations and recorded sightings.
 
 An Issue view keeps provider-owned facts apart from Merl's decisions, questions, and other semantic objects. Each semantic object shows both its accepted lifecycle and the health of its supporting evidence. A source edit can leave a decision active while its evidence awaits revalidation; a later accepted decision can supersede it even when that original evidence remains sound. Relations such as `supersedes` record how those decisions connect. Rebuilding the projection must preserve all three: lifecycle, support, and relations.
 

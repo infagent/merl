@@ -151,10 +151,10 @@ The release is ready when:
 - an unrelated project revision does not require recompilation and does not invalidate an evaluation whose dependencies remain unchanged;
 - a changed dependency or write conflict forces reevaluation or returns a conflict;
 - accepted events, projections, the project revision, and inbox entries commit atomically;
-- rebuilding disposable projections from the accepted domain-event log reproduces the same accepted state and role views without running a compiler;
+- rebuilding disposable projections from accepted events, provider observations, and sightings reproduces the same Issue state and role views without running a compiler;
 - append-only structural records reject arbitrary user, source, and model prose and accept only bounded structural values or payload references;
 - identical protected bytes in different retention scopes can be erased independently;
-- a source-content purge previews dependent bytes and state, removes retained source bytes and protected derived copies from the active store, preserves audit tombstones and digests, and marks dependent evidence unavailable; no Merl-managed replica is configured in this release;
+- a source-content purge follows derivations through later object-backed compiler contexts, removes their protected bytes from the active store, preserves audit tombstones and digests, and marks dependent evidence unavailable; no Merl-managed replica is configured in this release;
 - purge output states that unmanaged backups, provider systems, and previously exported archives lie outside that guarantee;
 - purge never claims that affected state remains fully replayable;
 - the local CLI states that same-user filesystem access lies outside Merl's enforcement boundary;
