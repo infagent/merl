@@ -576,6 +576,12 @@ impl PolicyScenario {
                 .any(|payload| payload.id.as_str() == "src_direct-v1")
         );
         assert!(preview.runs.iter().any(|run| run.as_str() == "direct-run"));
+        assert!(
+            preview
+                .assertions
+                .iter()
+                .any(|assertion| assertion.run.as_str() == "direct-run" && assertion.index == 0)
+        );
         assert!(preview.objects.iter().any(|object| object.as_str() == "D1"));
         self
     }
