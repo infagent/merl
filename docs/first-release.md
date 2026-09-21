@@ -24,6 +24,8 @@ This order makes the build and release contract visible from the first Rust chan
 
 ## Evaluation corpus
 
+The [benchmark harness](benchmark-harness.md) owns the executable five-method comparison and its evaluator-only freeze gate. The visible corpus and sealed held-out boundary are described in [evaluation corpus](evaluation-corpus.md).
+
 Before compiler work begins, maintainers freeze 10 to 30 complete Issue histories and divide them into three sets:
 
 - a development set for ontology, prompt, rule, and policy work;

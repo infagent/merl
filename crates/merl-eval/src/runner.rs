@@ -300,6 +300,16 @@ pub struct MethodStats {
     pub read_token_variance: f64,
     /// Mean adjudicated correctness, if every trial has a grade.
     pub mean_correctness: Option<f64>,
+    /// Sample variance of correctness, if every trial has a grade.
+    pub correctness_variance: Option<f64>,
+    /// Mean provenance grade, if every trial has a grade.
+    pub mean_provenance: Option<f64>,
+    /// Sample variance of provenance, if every trial has a grade.
+    pub provenance_variance: Option<f64>,
+    /// Trials that relied on superseded state.
+    pub stale_state_errors: usize,
+    /// Trials that missed a required blocker.
+    pub missed_blockers: usize,
 }
 
 /// First read count where a method costs fewer total tokens than repeated raw reads.
@@ -433,8 +443,6 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
         )?;
         let mut trials = Vec::with_capacity(config.trials * BenchmarkMethod::ALL.len());
         for trial in 0..config.trials {
-            let (summary, summary_usage) =
-                self.prepare_summary(fixture, question.cutoff, &config)?;
             let merl = self.merl.prepare(&question).map_err(BenchmarkError::Merl)?;
             if merl.source_cutoff != question.cutoff
                 || !merl.causal
@@ -442,6 +450,8 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
             {
                 return Err(BenchmarkError::InvalidMerlSurface);
             }
+            let (summary, summary_usage) =
+                self.prepare_summary(fixture, question.cutoff, &config)?;
             for method in BenchmarkMethod::ALL {
                 let (context, searchable, preparation_usage) = match method {
                     BenchmarkMethod::RawHistory => (
@@ -680,11 +690,16 @@ fn method_stats(method: BenchmarkMethod, trials: &[TrialReport]) -> MethodStats 
     } else {
         0.0
     };
-    let mean_correctness = reads
+    let correctness = reads
         .iter()
         .map(|trial| trial.score.correctness)
-        .collect::<Option<Vec<_>>>()
-        .map(|scores| scores.iter().sum::<f64>() / count);
+        .collect::<Option<Vec<_>>>();
+    let provenance = reads
+        .iter()
+        .map(|trial| trial.score.provenance)
+        .collect::<Option<Vec<_>>>();
+    let (mean_correctness, correctness_variance) = grade_stats(correctness.as_deref());
+    let (mean_provenance, provenance_variance) = grade_stats(provenance.as_deref());
     MethodStats {
         method,
         total_preparation_tokens,
@@ -694,7 +709,37 @@ fn method_stats(method: BenchmarkMethod, trials: &[TrialReport]) -> MethodStats 
         mean_read_tokens,
         read_token_variance,
         mean_correctness,
+        correctness_variance,
+        mean_provenance,
+        provenance_variance,
+        stale_state_errors: reads
+            .iter()
+            .filter(|trial| trial.score.stale_state_error)
+            .count(),
+        missed_blockers: reads
+            .iter()
+            .filter(|trial| trial.score.missed_blocker)
+            .count(),
     }
+}
+
+fn grade_stats(grades: Option<&[f64]>) -> (Option<f64>, Option<f64>) {
+    let Some(grades) = grades else {
+        return (None, None);
+    };
+    #[expect(clippy::cast_precision_loss, reason = "display-only grade statistics")]
+    let count = grades.len() as f64;
+    let mean = grades.iter().sum::<f64>() / count;
+    let variance = if grades.len() > 1 {
+        grades
+            .iter()
+            .map(|grade| (grade - mean).powi(2))
+            .sum::<f64>()
+            / (count - 1.0)
+    } else {
+        0.0
+    };
+    (Some(mean), Some(variance))
 }
 
 fn break_even_reads(raw_total: u128, other_total: u128, preparation_total: u128) -> Option<u64> {

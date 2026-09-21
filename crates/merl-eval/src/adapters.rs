@@ -46,6 +46,7 @@ impl ProcessModelAdapter {
             request,
             self.max_request_bytes,
             self.max_response_bytes,
+            None,
         )?;
         if response.schema() != WIRE_SCHEMA {
             return Err("model adapter returned an unsupported schema".to_owned());
@@ -90,10 +91,16 @@ impl ModelAdapter for ProcessModelAdapter {
             "can_expand": request.can_expand
         }))?;
         let (action, usage) = match response {
-            WireResponse::Final { answer, citations, usage, .. } =>
-                (AnswerAction::Final { answer, citations }, usage),
+            WireResponse::Final {
+                answer,
+                citations,
+                usage,
+                ..
+            } => (AnswerAction::Final { answer, citations }, usage),
             WireResponse::Search { query, usage, .. } => (AnswerAction::Search(query), usage),
-            WireResponse::Expand { reference, usage, .. } => (AnswerAction::Expand(reference), usage),
+            WireResponse::Expand {
+                reference, usage, ..
+            } => (AnswerAction::Expand(reference), usage),
             WireResponse::Summary { .. } => {
                 return Err("model adapter returned a summary to an answer request".to_owned());
             }
@@ -144,6 +151,8 @@ impl WireResponse {
 pub struct ProcessScorer {
     program: PathBuf,
     max_response_bytes: usize,
+    /// Evaluator-owned scoring bundle, exposed only to the scorer process.
+    pub scoring_spec: Option<PathBuf>,
 }
 
 impl ProcessScorer {
@@ -153,6 +162,7 @@ impl ProcessScorer {
         Self {
             program: program.into(),
             max_response_bytes,
+            scoring_spec: None,
         }
     }
 }
@@ -174,6 +184,7 @@ impl Scorer for ProcessScorer {
             }),
             1_048_576,
             self.max_response_bytes,
+            self.scoring_spec.as_deref(),
         )?;
         if response.schema != "merl.eval-score/v1" {
             return Err("scorer returned an unsupported schema".to_owned());
@@ -194,12 +205,17 @@ fn run_json_process<T: for<'de> Deserialize<'de>>(
     request: &Value,
     max_request_bytes: usize,
     max_response_bytes: usize,
+    scoring_spec: Option<&Path>,
 ) -> Result<T, String> {
     let bytes = serde_json::to_vec(request).map_err(|error| error.to_string())?;
     if bytes.len() > max_request_bytes {
         return Err("adapter request exceeds its byte budget".to_owned());
     }
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    if let Some(path) = scoring_spec {
+        command.env("MERL_EVAL_SCORING_SPEC", path);
+    }
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -235,9 +251,18 @@ fn run_json_process<T: for<'de> Deserialize<'de>>(
 
 /// Reads a prepared Issue through Merl's public CLI and expands requested refs.
 #[derive(Debug)]
-pub struct CliMerlSurface {
-    /// Authority database prepared for exactly one causal cutoff.
+pub struct MerlTrialArtifact {
+    /// Closed authority database prepared for one independent trial.
     pub database: PathBuf,
+    /// Measured compilation, correction, and retry usage for this trial.
+    pub preparation_usage: TokenUsage,
+    /// Evaluator attestation that this trial used live or causal replay input.
+    pub causal: bool,
+}
+
+/// Reads prepared Issues through Merl's public CLI, one authority per trial.
+#[derive(Debug)]
+pub struct CliMerlSurface {
     /// Project identity within that database.
     pub project: String,
     /// Provider Issue object identity.
@@ -246,20 +271,41 @@ pub struct CliMerlSurface {
     pub scope: String,
     /// Reader role used for this benchmark case.
     pub role: String,
-    /// Measured compilation, correction, and retry usage for this preparation.
-    pub preparation_usage: TokenUsage,
-    /// Evaluator attestation that accepted state was built causally, without hindsight.
-    pub causal: bool,
+    /// Independently prepared authority and measured cost for each paired trial.
+    pub trials: Vec<MerlTrialArtifact>,
+    /// Index of the next authority to read.
+    pub next_trial: usize,
+    active_database: Option<PathBuf>,
 }
 
 impl CliMerlSurface {
-    fn command(&self, args: &[&str]) -> Result<Value, String> {
+    /// Creates a reader over independently prepared candidate trials.
+    #[must_use]
+    pub fn new(
+        project: String,
+        issue: String,
+        scope: String,
+        role: String,
+        trials: Vec<MerlTrialArtifact>,
+    ) -> Self {
+        Self {
+            project,
+            issue,
+            scope,
+            role,
+            trials,
+            next_trial: 0,
+            active_database: None,
+        }
+    }
+
+    fn command(&self, database: &Path, args: &[&str]) -> Result<Value, String> {
         let mut arguments = args.iter().map(ToString::to_string).collect::<Vec<_>>();
         arguments.extend([
             "--project".to_owned(),
             self.project.clone(),
             "--database".to_owned(),
-            self.database.display().to_string(),
+            database.display().to_string(),
             "--json".to_owned(),
         ]);
         let output = match merl_cli::run(&arguments) {
@@ -274,16 +320,23 @@ impl CliMerlSurface {
 
 impl MerlSurface for CliMerlSurface {
     fn prepare(&mut self, question: &EvaluationQuestion) -> Result<MerlPrepared, String> {
-        let view = self.command(&[
-            "issue",
-            "view",
-            "--issue",
-            &self.issue,
-            "--scope",
-            &self.scope,
-            "--role",
-            &self.role,
-        ])?;
+        let trial = self
+            .trials
+            .get(self.next_trial)
+            .ok_or("Merl trial artifact is missing")?;
+        let view = self.command(
+            &trial.database,
+            &[
+                "issue",
+                "view",
+                "--issue",
+                &self.issue,
+                "--scope",
+                &self.scope,
+                "--role",
+                &self.role,
+            ],
+        )?;
         let coverage = &view["coverage"];
         let source_cutoff = coverage["observation_head"]
             .as_u64()
@@ -297,20 +350,27 @@ impl MerlSurface for CliMerlSurface {
             ]
             .iter()
             .all(|field| coverage[*field].as_u64() == Some(0));
-        Ok(MerlPrepared {
+        let prepared = MerlPrepared {
             source_cutoff,
             view: serde_json::to_string(&view).map_err(|error| error.to_string())?,
-            preparation_usage: self.preparation_usage,
+            preparation_usage: trial.preparation_usage,
             required_coverage_complete: complete,
-            causal: self.causal,
-        })
+            causal: trial.causal,
+        };
+        self.active_database = Some(trial.database.clone());
+        self.next_trial += 1;
+        Ok(prepared)
     }
 
     fn expand(&mut self, reference: &str) -> Result<String, String> {
+        let database = self
+            .active_database
+            .as_deref()
+            .ok_or("prepare a Merl trial before expansion")?;
         let detail = if let Some(source) = reference.strip_prefix("source:") {
-            self.command(&["source", "show", "--version", source])?
+            self.command(database, &["source", "show", "--version", source])?
         } else {
-            self.command(&["show", reference, "--source"])?
+            self.command(database, &["show", reference, "--source"])?
         };
         serde_json::to_string(&detail).map_err(|error| error.to_string())
     }

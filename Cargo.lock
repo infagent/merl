@@ -248,6 +248,7 @@ dependencies = [
  "merl-corpus",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
