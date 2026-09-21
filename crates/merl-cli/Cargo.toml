@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 merl-core = { path = "../merl-core" }
 merl-corpus = { path = "../merl-corpus" }
+merl-compiler = { path = "../merl-compiler" }
 merl-ingest = { path = "../merl-ingest" }
 merl-store = { path = "../merl-store" }
 serde_json.workspace = true

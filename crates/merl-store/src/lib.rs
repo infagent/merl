@@ -862,6 +862,20 @@ impl Store {
         }
     }
 
+    /// Counts protected references whose bytes are no longer in the active store.
+    ///
+    /// # Errors
+    /// Returns an error if the project or payload table is unreadable.
+    pub fn erased_payload_count(&self, project: &ProjectId) -> Result<u64, StoreError> {
+        self.project_revision(project)?;
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM payloads WHERE project_id=?1 AND erased=1",
+            [project.as_str()],
+            |row| row.get(0),
+        )?;
+        u64::try_from(count).map_err(|_| StoreError::CorruptHistory)
+    }
+
     /// Marks one project's protected bytes unavailable while retaining its digest and ID.
     ///
     /// This is the payload boundary needed for later audited purge. SQLite may

@@ -24,6 +24,8 @@ pub enum CompileError {
     Store(StoreError),
     /// A historical version lacks exact bytes or has unresolved causal order.
     NonCausalHistory,
+    /// A retained source or compiler input was erased after the run was recorded.
+    MissingEvidence,
     /// The configured limit cannot fit the selected context.
     InputBudget,
     /// The adapter could not produce a valid bounded response.
@@ -41,6 +43,9 @@ impl fmt::Display for CompileError {
         match self {
             Self::Store(error) => write!(f, "{error}"),
             Self::NonCausalHistory => f.write_str("exact causal source history is unavailable"),
+            Self::MissingEvidence => {
+                f.write_str("protected source or compiler input bytes were erased")
+            }
             Self::InputBudget => f.write_str("compiler context exceeds its input budget"),
             Self::OutputBudget => f.write_str("compiler response exceeds its output budget"),
             Self::InvalidResponse => {
@@ -194,12 +199,18 @@ pub fn rebuild_recorded_context(
     let status = store
         .compilation_run_status(project, run_id)?
         .ok_or(CompileError::NonCausalHistory)?;
-    if status.limits != limits.recorded() {
+    if status.mode == "hindsight" || status.limits != limits.recorded() {
         return Err(CompileError::NonCausalHistory);
     }
     let saved = store
         .load_compilation_context(project, run_id)
-        .map_err(|_| CompileError::NonCausalHistory)?;
+        .map_err(|error| {
+            if matches!(error, StoreError::InvalidCompilation) {
+                CompileError::MissingEvidence
+            } else {
+                CompileError::Store(error)
+            }
+        })?;
     let rebuilt = build_context(store, project, &status.source, limits)?;
     let mut rebuilt_objects = rebuilt.objects.clone();
     let mut saved_objects = saved.objects;
@@ -315,7 +326,7 @@ fn build_context_from_sources(
                 .ok_or(CompileError::NonCausalHistory)?,
         )? {
             PayloadRead::Available(bytes) => bytes,
-            PayloadRead::Unavailable => return Err(CompileError::NonCausalHistory),
+            PayloadRead::Unavailable => return Err(CompileError::MissingEvidence),
         };
         payload_bytes = payload_bytes
             .checked_add(body.len())
@@ -443,7 +454,7 @@ fn render_objects(
                     }
                     Some(String::from_utf8(bytes).map_err(|_| CompileError::InvalidResponse)?)
                 }
-                PayloadRead::Unavailable => return Err(CompileError::NonCausalHistory),
+                PayloadRead::Unavailable => return Err(CompileError::MissingEvidence),
             },
             None => None,
         };
@@ -1031,6 +1042,7 @@ fn error_code(error: &CompileError) -> &'static str {
         CompileError::Adapter(_) => "adapter_failure",
         CompileError::InputBudget => "input_budget",
         CompileError::NonCausalHistory => "noncausal_history",
+        CompileError::MissingEvidence => "missing_evidence",
         CompileError::ContextRequired => "context_required",
         CompileError::Store(_) | CompileError::InvalidResponse => "invalid_response",
     }

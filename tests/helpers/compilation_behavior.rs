@@ -1037,7 +1037,7 @@ impl CompilationScenario {
                 "run-one",
                 limits(),
             ),
-            Err(merl_compiler::CompileError::NonCausalHistory)
+            Err(merl_compiler::CompileError::MissingEvidence)
         ) {
             ReplayCheck::MissingEvidence
         } else {

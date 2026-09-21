@@ -8,6 +8,7 @@ pub struct CliIssueHistory {
     directory: TestDirectory,
     latest: Option<serde_json::Value>,
     purge_digest: Option<String>,
+    compiler_program: Option<PathBuf>,
 }
 
 impl CliIssueHistory {
@@ -16,6 +17,7 @@ impl CliIssueHistory {
             directory: TestDirectory::new(),
             latest: None,
             purge_digest: None,
+            compiler_program: None,
         }
     }
 
@@ -239,6 +241,211 @@ impl CliIssueHistory {
         assert!(output.status.success());
         let source: serde_json::Value = serde_json::from_slice(&output.stdout).expect("source");
         assert_eq!(source["body"]["status"], "available");
+    }
+
+    pub fn when_the_project_projection_is_rebuilt(&mut self) -> &mut Self {
+        let database = self.database();
+        let output = merl(&[
+            "project",
+            "rebuild",
+            "--project",
+            "P1",
+            "--database",
+            path(&database),
+            "--json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        self.latest = Some(serde_json::from_slice(&output.stdout).expect("rebuild result"));
+        self
+    }
+
+    pub fn then_the_accepted_revision_and_issue_state_are_unchanged(&mut self) {
+        let result = self.latest.as_ref().expect("rebuild result");
+        assert_eq!(result["action"], "project.rebuild");
+        assert_eq!(result["revision"], 1);
+        assert_eq!(result["accepted_events"], 1);
+        let database = self.database();
+        let store = merl_store::Store::open(&database).expect("reopen authority");
+        let project = merl_core::ProjectId::try_from("P1").expect("project");
+        let source = merl_core::SourceVersionId::try_from(Self::first_version().as_str())
+            .expect("source version");
+        assert_eq!(
+            store
+                .compilation_run_count(&project, &source)
+                .expect("compiler runs"),
+            0
+        );
+    }
+
+    pub fn given_an_issue_with_a_recorded_compiler_run(&mut self) -> &mut Self {
+        self.given_a_new_project();
+        self.when_importing_an_issue();
+        let database = self.database();
+        let mut store = merl_store::Store::open(&database).expect("authority");
+        let project = merl_core::ProjectId::try_from("P1").expect("project");
+        let source = merl_core::SourceVersionId::try_from(Self::first_version().as_str())
+            .expect("source version");
+        let limits = merl_compiler::CompilerLimits {
+            input_bytes: 4096,
+            output_bytes: 4096,
+            output_tokens: 512,
+            assertions: 4,
+            context_requests: 1,
+            expansion_rounds: 1,
+            payload_bytes: 2048,
+            source_window: 2,
+            objects: 4,
+        };
+        let prepared = merl_compiler::prepare_compilation(
+            &mut store,
+            &project,
+            &source,
+            &merl_compiler::FakeCompiler,
+            merl_compiler::RunRequest {
+                id: "recorded-run",
+                limits,
+                mode: merl_compiler::RunMode::Live,
+                now_millis: 1_800_000_000_000,
+            },
+        )
+        .expect("prepare compiler")
+        .expect("new run");
+        let response = merl_compiler::execute_compilation(&prepared, &merl_compiler::FakeCompiler);
+        merl_compiler::record_compilation_result(
+            &mut store,
+            &project,
+            &prepared,
+            response,
+            1_800_000_000_001,
+        )
+        .expect("record compiler response");
+        self
+    }
+
+    pub fn when_the_recorded_source_is_replayed(&mut self) -> &mut Self {
+        let database = self.database();
+        let output = merl(&[
+            "source",
+            "replay",
+            "--project",
+            "P1",
+            "--database",
+            path(&database),
+            "--run",
+            "recorded-run",
+            "--json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        self.latest = Some(serde_json::from_slice(&output.stdout).expect("replay result"));
+        self
+    }
+
+    pub fn when_the_purged_source_is_replayed(&mut self) -> &mut Self {
+        let database = self.database();
+        let output = merl(&[
+            "source",
+            "replay",
+            "--project",
+            "P1",
+            "--database",
+            path(&database),
+            "--run",
+            "recorded-run",
+            "--json",
+        ]);
+        assert!(!output.status.success());
+        self.latest = Some(serde_json::from_slice(&output.stdout).expect("replay error"));
+        self
+    }
+
+    pub fn then_replay_reports_missing_evidence(&mut self) {
+        assert_eq!(
+            self.latest.as_ref().expect("replay error")["code"],
+            "MISSING_EVIDENCE"
+        );
+    }
+
+    pub fn then_the_input_digest_matches_without_an_accepted_change(&mut self) {
+        let result = self.latest.as_ref().expect("replay result");
+        assert_eq!(result["action"], "source.replay");
+        assert_eq!(result["input_matches"], true);
+        assert_eq!(result["interpretation_basis_revision"], 0);
+        assert_eq!(result["source_observation_cutoff"], 1);
+        assert_eq!(result["accepted_revision"], 1);
+    }
+
+    #[cfg(unix)]
+    pub fn given_a_deterministic_compiler_process(&mut self) -> &mut Self {
+        use std::os::unix::fs::PermissionsExt;
+        let program = self.directory.path.join("compiler.sh");
+        let source = Self::first_version();
+        let response = format!(
+            "{{\"schema\":\"merl.compiler-response/v1\",\"assertions\":[],\"context_required\":[],\"unresolved\":[{{\"source\":\"{source}\",\"span_start\":0,\"span_end\":0}}],\"relations\":[]}}"
+        );
+        std::fs::write(&program, format!("#!/bin/sh\nprintf '%s' '{response}'\n"))
+            .expect("test compiler program");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))
+            .expect("make compiler executable");
+        self.compiler_program = Some(program);
+        self
+    }
+
+    #[cfg(unix)]
+    pub fn when_the_recorded_source_is_recompiled(&mut self) -> &mut Self {
+        let database = self.database();
+        let program = self.compiler_program.as_ref().expect("compiler program");
+        let output = merl(&[
+            "source",
+            "replay",
+            "--project",
+            "P1",
+            "--database",
+            path(&database),
+            "--run",
+            "recorded-run",
+            "--program",
+            path(program),
+            "--new-run",
+            "replay-process",
+            "--compiler-version",
+            "v1",
+            "--model",
+            "deterministic-test",
+            "--prompt-digest",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "--json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        self.latest = Some(serde_json::from_slice(&output.stdout).expect("replay result"));
+        self
+    }
+
+    #[cfg(unix)]
+    pub fn then_a_new_replay_run_exists_without_an_accepted_change(&mut self) {
+        let result = self.latest.as_ref().expect("replay result");
+        assert_eq!(result["rerun"], "replay-process");
+        assert_eq!(result["accepted_history_changed"], false);
+        assert_eq!(result["accepted_revision"], 1);
+        let store = merl_store::Store::open(&self.database()).expect("authority");
+        let project = merl_core::ProjectId::try_from("P1").expect("project");
+        let rerun = store
+            .compilation_run_status(&project, "replay-process")
+            .expect("run lookup")
+            .expect("run");
+        assert_eq!(rerun.mode, "replay");
+        assert!(rerun.succeeded);
     }
 }
 

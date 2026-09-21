@@ -204,6 +204,7 @@ dependencies = [
 name = "merl-cli"
 version = "0.1.0"
 dependencies = [
+ "merl-compiler",
  "merl-core",
  "merl-corpus",
  "merl-ingest",
