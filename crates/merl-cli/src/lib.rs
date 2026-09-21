@@ -97,6 +97,25 @@ impl From<ImportError> for CliError {
     }
 }
 
+impl From<merl_compiler::CompileError> for CliError {
+    fn from(error: merl_compiler::CompileError) -> Self {
+        let code = match &error {
+            merl_compiler::CompileError::NonCausalHistory => "NON_CAUSAL_HISTORY",
+            merl_compiler::CompileError::MissingEvidence => "MISSING_EVIDENCE",
+            merl_compiler::CompileError::InputBudget => "COMPILER_INPUT_BUDGET",
+            merl_compiler::CompileError::OutputBudget => "COMPILER_OUTPUT_BUDGET",
+            merl_compiler::CompileError::InvalidResponse => "INVALID_COMPILER_RESPONSE",
+            merl_compiler::CompileError::ContextRequired => "COMPILER_CONTEXT_REQUIRED",
+            merl_compiler::CompileError::Adapter(_) => "COMPILER_ADAPTER_ERROR",
+            merl_compiler::CompileError::Store(_) => "STORAGE_ERROR",
+        };
+        Self {
+            code,
+            message: error.to_string(),
+        }
+    }
+}
+
 /// The command result and the output mode selected by the CLI parser.
 #[derive(Debug)]
 pub enum CliResponse {
@@ -145,6 +164,13 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
     let mut actor = None;
     let mut confirm_digest = None;
     let mut dry_run = false;
+    let mut run_id = None;
+    let mut new_run = None;
+    let mut program = None;
+    let mut compiler_args = Vec::new();
+    let mut compiler_version = None;
+    let mut model = None;
+    let mut prompt_digest = None;
     let mut history = false;
     let mut expand_source = false;
     let mut role = "general";
@@ -226,6 +252,34 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 confirm_digest = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
             }
             "--dry-run" => dry_run = true,
+            "--run" => {
+                index += 1;
+                run_id = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--new-run" => {
+                index += 1;
+                new_run = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--program" => {
+                index += 1;
+                program = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--compiler-arg" => {
+                index += 1;
+                compiler_args.push(arguments.get(index).ok_or_else(missing_value)?.clone());
+            }
+            "--compiler-version" => {
+                index += 1;
+                compiler_version = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--model" => {
+                index += 1;
+                model = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--prompt-digest" => {
+                index += 1;
+                prompt_digest = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
             "--history" => history = true,
             "--source" => expand_source = true,
             "--role" => {
@@ -249,6 +303,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
         ["help", "project"] => help("project", *json_output),
         ["help", "project", "init"] => help("project init", *json_output),
         ["help", "project", "revision"] => help("project revision", *json_output),
+        ["help", "project", "rebuild"] => help("project rebuild", *json_output),
         ["help", "project", "view"] => help("project view", *json_output),
         ["help", "project", "delta"] => help("project delta", *json_output),
         ["help", "project", "batch"] => help("project batch", *json_output),
@@ -262,6 +317,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
         ["help", "source"] => help("source", *json_output),
         ["help", "source", "show"] => help("source show", *json_output),
         ["help", "source", "purge"] => help("source purge", *json_output),
+        ["help", "source", "replay"] => help("source replay", *json_output),
         ["help", "issue", "view"] | ["issue", "view", "help"] => help("issue view", *json_output),
         ["help", "issue", "import-fixture"] | ["issue", "import-fixture", "help"] => {
             help("issue import-fixture", *json_output)
@@ -279,6 +335,28 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
             let store = Store::open(Path::new(path))?;
             let revision = store.project_revision(&id)?;
             result("project.revision", &id, revision.get(), *json_output)
+        }
+        ["project", "rebuild"] => {
+            let id = parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
+            let path = database.ok_or_else(|| invalid_input("--database is required"))?;
+            let mut store = Store::open(Path::new(path))?;
+            store.rebuild_projection(&id)?;
+            let revision = store.project_revision(&id)?;
+            let accepted_events = store.accepted_event_count(&id)?;
+            let erased_payloads = store.erased_payload_count(&id)?;
+            if *json_output {
+                render_json(&json!({
+                    "schema": "merl.result/v1", "action": "project.rebuild",
+                    "project": id.as_str(), "revision": revision.get(),
+                    "accepted_events": accepted_events, "erased_payloads": erased_payloads,
+                    "provenance": if erased_payloads == 0 { "complete" } else { "degraded" }
+                }))
+            } else {
+                Ok(format!(
+                    "Rebuilt {id} at revision {} from {accepted_events} accepted events; {erased_payloads} payloads unavailable\n",
+                    revision.get()
+                ))
+            }
         }
         ["project", "view"] => {
             let project =
@@ -533,12 +611,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 let digest = parse_sha256(
                     confirm_digest.ok_or_else(|| invalid_input("--confirm-digest is required"))?,
                 )?;
-                let now_millis = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(|_| invalid_input("system clock is before Unix epoch"))?
-                    .as_millis();
-                let now_millis = i64::try_from(now_millis)
-                    .map_err(|_| invalid_input("system clock is outside supported range"))?;
+                let now_millis = utc_now_millis()?;
                 let audit = store.purge_source(
                     &project,
                     &version,
@@ -548,6 +621,95 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                     digest,
                 )?;
                 render_purge_audit(&project, &audit, *json_output)
+            }
+        }
+        ["source", "replay"] => {
+            let project =
+                parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
+            let database = database.ok_or_else(|| invalid_input("--database is required"))?;
+            let run_id = run_id.ok_or_else(|| invalid_input("--run is required"))?;
+            let mut store = Store::open(Path::new(database))?;
+            let original = store
+                .compilation_run_status(&project, run_id)?
+                .ok_or_else(|| invalid_input("recorded compiler run does not exist"))?;
+            let limits = merl_compiler::CompilerLimits {
+                input_bytes: original.limits[0],
+                output_bytes: original.limits[1],
+                output_tokens: original.limits[2],
+                assertions: original.limits[3],
+                context_requests: original.limits[4],
+                expansion_rounds: original.limits[5],
+                payload_bytes: original.limits[6],
+                source_window: original.limits[7],
+                objects: original.limits[8],
+            };
+            let rebuilt =
+                merl_compiler::rebuild_recorded_context(&store, &project, run_id, limits)?;
+            let mut rerun_id = None;
+            if let Some(program) = program {
+                let new_id =
+                    new_run.ok_or_else(|| invalid_input("--new-run is required with --program"))?;
+                let adapter = merl_compiler::ProcessCompiler {
+                    program: program.into(),
+                    args: compiler_args,
+                    version: compiler_version
+                        .ok_or_else(|| invalid_input("--compiler-version is required"))?
+                        .into(),
+                    model: model
+                        .ok_or_else(|| invalid_input("--model is required"))?
+                        .into(),
+                    prompt_digest: parse_sha256(
+                        prompt_digest
+                            .ok_or_else(|| invalid_input("--prompt-digest is required"))?,
+                    )?,
+                };
+                let now = utc_now_millis()?;
+                if let Some(prepared) = merl_compiler::prepare_compilation(
+                    &mut store,
+                    &project,
+                    &original.source,
+                    &adapter,
+                    merl_compiler::RunRequest {
+                        id: new_id,
+                        limits,
+                        mode: merl_compiler::RunMode::Replay,
+                        now_millis: now,
+                    },
+                )? {
+                    let response = merl_compiler::execute_compilation(&prepared, &adapter);
+                    merl_compiler::record_compilation_result(
+                        &mut store,
+                        &project,
+                        &prepared,
+                        response,
+                        utc_now_millis()?,
+                    )?;
+                }
+                rerun_id = Some(new_id);
+            } else if new_run.is_some()
+                || compiler_version.is_some()
+                || model.is_some()
+                || prompt_digest.is_some()
+                || !compiler_args.is_empty()
+            {
+                return Err(invalid_input("compiler options require --program"));
+            }
+            let revision = store.project_revision(&project)?;
+            if *json_output {
+                render_json(&json!({
+                    "schema": "merl.replay/v1", "action": "source.replay",
+                    "project": project.as_str(), "run": run_id, "rerun": rerun_id,
+                    "input_matches": true, "input_digest": digest_text(&original.context_digest),
+                    "interpretation_basis_revision": rebuilt.interpretation_basis_revision.get(),
+                    "source_observation_cutoff": rebuilt.source_observation_cutoff,
+                    "accepted_revision": revision.get(), "accepted_history_changed": false
+                }))
+            } else {
+                Ok(format!(
+                    "Rebuilt {run_id} at source cutoff {}; input digest matches. Accepted revision remains {}.\n",
+                    rebuilt.source_observation_cutoff,
+                    revision.get()
+                ))
             }
         }
         _ => Err(invalid_input("unknown command; run `merl help`")),
@@ -767,6 +929,14 @@ fn parse_sha256(value: &str) -> Result<[u8; 32], CliError> {
             .map_err(|_| invalid_input("SHA-256 digest contains invalid hex"))?;
     }
     Ok(digest)
+}
+
+fn utc_now_millis() -> Result<i64, CliError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| invalid_input("system clock is before Unix epoch"))?
+        .as_millis();
+    i64::try_from(now).map_err(|_| invalid_input("system clock is outside supported range"))
 }
 
 fn render_purge_preview(
@@ -1279,10 +1449,11 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "project" => (
             "merl project <command>",
-            "Commands: init, revision, view, delta, batch.",
+            "Commands: init, revision, rebuild, view, delta, batch.",
             vec![
                 "project init",
                 "project revision",
+                "project rebuild",
                 "project view",
                 "project delta",
                 "project batch",
@@ -1297,6 +1468,11 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             "merl project revision --project <id> --database <path> [--format json]",
             "Read the accepted project revision.",
             vec!["project init"],
+        ),
+        "project rebuild" => (
+            "merl project rebuild --project <id> --database <path> [--format json]",
+            "Rebuild accepted object and relation projections from domain events. The compiler does not run.",
+            vec!["project revision", "project view"],
         ),
         "project view" => (
             "merl project view --project <id> --database <path> [--role researcher|engineer|pm] [--focus <object-id>] [--format json]",
@@ -1355,8 +1531,8 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "source" => (
             "merl source <command>",
-            "Commands: show, purge.",
-            vec!["source show", "source purge"],
+            "Commands: show, replay, purge.",
+            vec!["source show", "source replay", "source purge"],
         ),
         "source show" => (
             "merl source show --project <id> --database <path> --version <id> [--format json]",
@@ -1367,6 +1543,11 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             "merl source purge --project <id> --database <path> --version <id> --reason <text> (--dry-run | --actor <id> --confirm-digest sha256:<hex>) [--format json]",
             "Preview affected bytes and provenance, then confirm the digest to erase them from active Merl storage.",
             vec!["source show"],
+        ),
+        "source replay" => (
+            "merl source replay --project <id> --database <path> --run <id> [--program <path> --new-run <id> --compiler-version <version> --model <id> --prompt-digest sha256:<hex>] [--format json]",
+            "Rebuild a causal compiler input and check its digest. A configured process compiler creates a new replay run without accepting state.",
+            vec!["source show", "project rebuild"],
         ),
         "issue import-fixture" => (
             "merl issue import-fixture --project <id> --database <path> --fixture <path> [--format json]",
@@ -1379,6 +1560,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         "project init" => Some("merl project init --id P1 --database project.sqlite"),
         "project revision" => {
             Some("merl project revision --project P1 --database project.sqlite --json")
+        }
+        "project rebuild" => {
+            Some("merl project rebuild --project P1 --database project.sqlite --json")
         }
         "project view" => {
             Some("merl project view --project P1 --database project.sqlite --role pm --json")
@@ -1416,6 +1600,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         "source purge" => Some(
             "merl source purge --project P1 --database project.sqlite --version SV1 --reason 'Sensitive text' --dry-run --json",
         ),
+        "source replay" => {
+            Some("merl source replay --project P1 --database project.sqlite --run CR42 --json")
+        }
         _ => None,
     };
     if json_output {
@@ -1445,6 +1632,17 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
                 "INVALID_ID",
                 "INVALID_SOURCE",
                 "INVALID_PURGE",
+                "STORAGE_ERROR",
+            ]
+        } else if command == "source replay" {
+            vec![
+                "INVALID_INPUT",
+                "NON_CAUSAL_HISTORY",
+                "MISSING_EVIDENCE",
+                "COMPILER_INPUT_BUDGET",
+                "COMPILER_OUTPUT_BUDGET",
+                "INVALID_COMPILER_RESPONSE",
+                "COMPILER_ADAPTER_ERROR",
                 "STORAGE_ERROR",
             ]
         } else if command == "source show" {
