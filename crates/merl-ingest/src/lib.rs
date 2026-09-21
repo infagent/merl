@@ -137,9 +137,10 @@ pub fn import_fixture_for_causal_replay(
 
 /// Imports only the observations and source bytes available at a historical cutoff.
 ///
-/// A terminal-only body is withheld at earlier cutoffs. Evaluators should use a
-/// separate fresh authority for each cutoff, never replay an earlier position
-/// from a database that has already captured later evidence.
+/// A terminal-only body is withheld from historical compilation even at the
+/// final observation: it was captured after that source was authored. The
+/// ordinary reader can still use it at the terminal capture position.
+/// Evaluators use a fresh authority for each cutoff.
 ///
 /// # Errors
 /// Rejects invalid fixtures, invalid cutoffs, or a nonempty project.
@@ -205,7 +206,7 @@ fn import_fixture_inner(
             ObservationKind::IssueComment => "issue_comment",
             ObservationKind::Controlled => "controlled",
         };
-        let body_available = body_available_for_import(fixture, observation, historical, cutoff);
+        let body_available = body_available_for_import(fixture, observation, historical);
         let capture = SourceCapture {
             binding: binding.clone(),
             source,
@@ -296,13 +297,10 @@ fn body_available_for_import(
     fixture: &Fixture,
     observation: &merl_corpus::fixture::Observation,
     historical: bool,
-    cutoff: u64,
 ) -> bool {
     match body_availability(fixture, observation) {
         Some(BodyAvailability::AtObservation) => true,
-        Some(BodyAvailability::AtCapture) => {
-            !historical || cutoff == fixture.observations.len() as u64
-        }
+        Some(BodyAvailability::AtCapture) => !historical,
         None => false,
     }
 }

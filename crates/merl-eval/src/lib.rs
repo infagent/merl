@@ -69,6 +69,10 @@ pub struct ReaderFidelity {
     pub history: HistoryFidelity,
     /// Observations whose bytes were unavailable at this cutoff.
     pub missing_bodies: Vec<u64>,
+    /// Groups of visible observations whose upstream order is unresolved.
+    pub unordered_groups: Vec<Vec<u64>>,
+    /// A later-captured tied event prevents an exact historical cutoff claim.
+    pub cutoff_splits_unordered_group: bool,
     /// Whether the fixture can reproduce the full source history exactly.
     pub exact_replay: bool,
 }
@@ -105,8 +109,8 @@ impl From<ValidationError> for InputError {
 /// Builds a reader context without exposing later edits or comments.
 ///
 /// # Errors
-/// Rejects invalid fixtures, ambiguous source order, or a zero recent-window
-/// size. Unavailable bytes appear as gaps; terminal bodies never fill them.
+/// Rejects invalid fixtures or a zero recent-window size. Unavailable bytes
+/// and unresolved upstream order remain explicit rather than being invented.
 #[expect(
     clippy::too_many_lines,
     reason = "one causal reader selection keeps source availability and disclosure together"
@@ -118,25 +122,37 @@ pub fn prepare_reader_input(
     recent_window: usize,
 ) -> Result<ReaderInput, InputError> {
     validate(fixture)?;
-    require_unambiguous_order_through(fixture, cutoff)?;
+    if cutoff == 0 || cutoff > fixture.observations.len() as u64 {
+        return Err(InputError::Fixture(ValidationError::UnknownCutoff(cutoff)));
+    }
     if method == ReaderMethod::RecentRetrieval && recent_window == 0 {
         return Err(InputError::EmptyRecentWindow);
     }
 
-    let mut visible = Vec::<&Observation>::new();
-    let mut entity_position = HashMap::<&str, usize>::new();
-    for observation in fixture
+    let unordered_groups = visible_unordered_groups(fixture, cutoff);
+    let cutoff_splits_unordered_group = usize::try_from(cutoff)
+        .ok()
+        .and_then(|index| fixture.observations.get(index))
+        .is_some_and(|next| next.ambiguous_order_with_previous);
+    let candidates = fixture
         .observations
         .iter()
         .filter(|item| item.sequence <= cutoff)
-    {
-        if let Some(&index) = entity_position.get(observation.provider_id.as_str()) {
-            visible[index] = observation;
-        } else {
-            entity_position.insert(observation.provider_id.as_str(), visible.len());
-            visible.push(observation);
-        }
+        .collect::<Vec<_>>();
+    let mut latest_by_entity = HashMap::<&str, &Observation>::new();
+    for observation in &candidates {
+        latest_by_entity.insert(&observation.provider_id, observation);
     }
+    let visible = candidates
+        .into_iter()
+        .filter(|observation| {
+            let latest = latest_by_entity[observation.provider_id.as_str()];
+            observation.sequence == latest.sequence
+                || unordered_groups.iter().any(|group| {
+                    group.contains(&observation.sequence) && group.contains(&latest.sequence)
+                })
+        })
+        .collect::<Vec<_>>();
 
     let opening = visible
         .iter()
@@ -159,12 +175,42 @@ pub fn prepare_reader_input(
                     .take(recent_window)
                     .map(|(index, _)| index),
             );
+            let selected_sequences = positions
+                .iter()
+                .map(|index| visible[*index].sequence)
+                .collect::<Vec<_>>();
+            for group in &unordered_groups {
+                if group
+                    .iter()
+                    .any(|sequence| selected_sequences.contains(sequence))
+                {
+                    positions.extend(
+                        visible
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, observation)| group.contains(&observation.sequence))
+                            .map(|(index, _)| index),
+                    );
+                }
+            }
             positions.sort_unstable();
+            positions.dedup();
             positions
         }
     };
 
     let mut context = String::new();
+    for group in &unordered_groups {
+        let _ = writeln!(
+            context,
+            "[upstream order unresolved for observations {}; listing order is capture order only]",
+            group
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     let mut searchable = Vec::new();
     let missing_bodies: Vec<u64> = fixture
         .observations
@@ -213,6 +259,8 @@ pub fn prepare_reader_input(
         fidelity: ReaderFidelity {
             history: fixture.capture.history_fidelity,
             exact_replay: missing_bodies.is_empty()
+                && unordered_groups.is_empty()
+                && !cutoff_splits_unordered_group
                 && matches!(
                     fixture.capture.history_fidelity,
                     HistoryFidelity::ExactObserved
@@ -220,6 +268,8 @@ pub fn prepare_reader_input(
                         | HistoryFidelity::StagedExact
                 ),
             missing_bodies,
+            unordered_groups,
+            cutoff_splits_unordered_group,
         },
     })
 }
@@ -236,6 +286,7 @@ pub fn prepare_exact_reader_input(
 ) -> Result<ReaderInput, InputError> {
     validate(fixture)?;
     require_exact_source_bodies_through(fixture, cutoff)?;
+    require_unambiguous_order_through(fixture, cutoff)?;
     if !matches!(
         fixture.capture.history_fidelity,
         HistoryFidelity::ExactObserved
@@ -245,4 +296,28 @@ pub fn prepare_exact_reader_input(
         return Err(InputError::NonCausalHistory);
     }
     prepare_reader_input(fixture, cutoff, method, recent_window)
+}
+
+fn visible_unordered_groups(fixture: &Fixture, cutoff: u64) -> Vec<Vec<u64>> {
+    let mut groups = Vec::<Vec<u64>>::new();
+    for observation in fixture
+        .observations
+        .iter()
+        .filter(|observation| observation.sequence <= cutoff)
+    {
+        if observation.ambiguous_order_with_previous {
+            if groups
+                .last()
+                .is_some_and(|group| group.last() == Some(&(observation.sequence - 1)))
+            {
+                groups
+                    .last_mut()
+                    .expect("group exists")
+                    .push(observation.sequence);
+            } else {
+                groups.push(vec![observation.sequence - 1, observation.sequence]);
+            }
+        }
+    }
+    groups
 }

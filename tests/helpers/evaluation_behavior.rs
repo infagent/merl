@@ -1,6 +1,6 @@
 use merl_core::ProjectId;
 use merl_corpus::fixture::{
-    BodyAvailability, Fixture, HistoryFidelity, MissingBodyReason, source_digest,
+    BodyAvailability, Fixture, HistoryFidelity, MissingBodyReason, Origin, source_digest,
 };
 use merl_eval::{
     AnswerAction, AnswerRequest, AnswerResponse, BenchmarkConfig, BenchmarkMethod, BenchmarkReport,
@@ -69,6 +69,38 @@ impl EvaluationScenario {
         scenario
     }
 
+    pub fn given_two_sources_with_unresolved_order() -> Self {
+        let mut scenario = Self::given_the_gain_discussion();
+        scenario.fixture.origin = Origin::Natural;
+        scenario.fixture.provider_snapshot.updated_at = Some("2026-01-01T12:00:00Z".to_owned());
+        "2026-01-01T09:00:00Z".clone_into(&mut scenario.fixture.observations[1].created_at);
+        "2026-01-01T09:00:00Z".clone_into(&mut scenario.fixture.observations[1].occurred_at);
+        scenario.fixture.observations[1].ambiguous_order_with_previous = true;
+        scenario.fixture.capture.source_sha256 = source_digest(
+            &scenario.fixture.provider_snapshot,
+            &scenario.fixture.observations,
+        );
+        scenario
+    }
+
+    pub fn when_a_reader_revisits_the_tied_cutoff(mut self) -> Self {
+        self.raw = Some(
+            prepare_reader_input(&self.fixture, 2, ReaderMethod::RawHistory, 2)
+                .expect("qualified reader input"),
+        );
+        self
+    }
+
+    pub fn then_both_sources_are_labeled_unordered(self) -> Self {
+        let input = self.raw.as_ref().expect("qualified reader input");
+        assert_eq!(input.fidelity.unordered_groups, vec![vec![1, 2]]);
+        assert!(!input.fidelity.exact_replay);
+        assert!(input.context.contains("upstream order unresolved"));
+        assert!(input.context.contains("observation 1"));
+        assert!(input.context.contains("observation 2"));
+        self
+    }
+
     fn from_fixture(json: &str) -> Self {
         Self {
             fixture: serde_json::from_str(json).expect("controlled fixture"),
@@ -86,17 +118,27 @@ impl EvaluationScenario {
     }
 
     pub fn when_imported_for_an_earlier_cutoff(mut self) -> Self {
+        self.import_at_cutoff(1);
+        self
+    }
+
+    pub fn when_imported_for_the_terminal_cutoff(mut self) -> Self {
+        let cutoff = self.fixture.observations.len() as u64;
+        self.import_at_cutoff(cutoff);
+        self
+    }
+
+    fn import_at_cutoff(&mut self, cutoff: u64) {
         let mut store = Store::open_in_memory().expect("authority");
         let project = ProjectId::try_from("eval-partial").expect("project");
         store.create_project(&project).expect("project authority");
-        import_fixture_for_causal_replay_through(&mut store, &project, &self.fixture, 1)
+        import_fixture_for_causal_replay_through(&mut store, &project, &self.fixture, cutoff)
             .expect("causal prefix");
         let first = store
             .source_version_at(&project, 1)
             .expect("source lookup")
             .expect("source version");
         self.imported_terminal_payload = Some(first.payload.is_some());
-        self
     }
 
     pub fn then_terminal_only_bytes_are_not_in_the_authority(self) {
@@ -219,6 +261,7 @@ impl EvaluationScenario {
         assert_eq!(report.trials.len(), 10);
         assert_eq!(self.summary_calls, 4);
         assert_eq!(report.methods[1].total_preparation_tokens, 8);
+        assert!((report.methods[1].mean_preparation_tokens - 8.0).abs() < f64::EPSILON);
         assert_eq!(report.methods[4].total_preparation_tokens, 30);
         assert_eq!(report.trials[0].question_id, "current-gain");
         assert_eq!(report.trials[5].question_id, "gain-rationale");
@@ -409,6 +452,15 @@ impl EvaluationScenario {
         assert!(matches!(
             self.reader_error,
             Some(InputError::NonCausalHistory)
+        ));
+    }
+
+    pub fn then_exact_replay_rejects_unresolved_order(self) {
+        assert!(matches!(
+            self.reader_error,
+            Some(InputError::Fixture(
+                merl_corpus::fixture::ValidationError::AmbiguousCausalOrder(_)
+            ))
         ));
     }
 

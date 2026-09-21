@@ -71,7 +71,8 @@ impl ModelAdapter for ProcessModelAdapter {
                 "created_at": request.source.created_at,
                 "occurred_at": request.source.occurred_at,
                 "body": request.source.body,
-                "disclosed_at_capture": request.source.disclosed_at_capture
+                "disclosed_at_capture": request.source.disclosed_at_capture,
+                "upstream_order_unresolved": request.source.upstream_order_unresolved
             }
         }))?;
         match response {
