@@ -6,11 +6,16 @@ use merl_corpus::fixture::{
     Fixture, HistoryFidelity, Observation, ObservationKind, ValidationError, available_body_at,
     require_exact_source_bodies_through, require_unambiguous_order_through, validate,
 };
+use serde::Serialize;
 
 mod adapters;
+mod preparation;
 mod runner;
 
 pub use adapters::{CliMerlSurface, MerlTrialArtifact, ProcessModelAdapter, ProcessScorer};
+pub use preparation::{
+    CompilerArtifacts, MerlPreparationRecord, PreparationExpectation, verify_preparation,
+};
 
 pub use runner::{
     AnswerAction, AnswerRequest, AnswerResponse, BenchmarkConfig, BenchmarkError, BenchmarkMethod,
@@ -57,7 +62,7 @@ pub struct ReaderInput {
 }
 
 /// Source gaps carried into the reader and benchmark report.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ReaderFidelity {
     /// Corpus-level history class; it does not grant access to any particular body.
     pub history: HistoryFidelity,

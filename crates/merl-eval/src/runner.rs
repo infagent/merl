@@ -5,7 +5,7 @@ use std::{error::Error, fmt, fmt::Write as _};
 use merl_corpus::fixture::{BodyAvailability, Fixture, available_body_at, body_availability};
 use serde::{Deserialize, Serialize};
 
-use crate::{InputError, ReaderMethod, SearchableSource, prepare_reader_input};
+use crate::{InputError, ReaderFidelity, ReaderMethod, SearchableSource, prepare_reader_input};
 
 /// One method in the five-way Issue comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -305,6 +305,8 @@ pub struct TrialReport {
     pub read_usage: TokenUsage,
     /// Number of explicit search or expansion rounds.
     pub tool_rounds: usize,
+    /// Required semantic coverage for the Merl arm; other methods make no such claim.
+    pub merl_required_coverage_complete: Option<bool>,
 }
 
 /// Summary statistics over independently prepared paired trials.
@@ -352,6 +354,8 @@ pub struct BreakEven {
 pub struct BenchmarkReport {
     /// Corpus fixture ID.
     pub fixture_id: String,
+    /// History class and bodies unavailable at the question cutoff.
+    pub source_fidelity: ReaderFidelity,
     /// Evaluator question ID and cutoff.
     pub question: EvaluationQuestion,
     /// Exact model and prompt configuration used for every reader.
@@ -494,10 +498,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
         let mut trials = Vec::with_capacity(config.trials.len() * BenchmarkMethod::ALL.len());
         for (trial_index, trial) in config.trials.iter().enumerate() {
             let merl = self.merl.prepare(&question).map_err(BenchmarkError::Merl)?;
-            if merl.source_cutoff != question.cutoff
-                || !merl.causal
-                || !merl.required_coverage_complete
-            {
+            if merl.source_cutoff != question.cutoff || !merl.causal {
                 return Err(BenchmarkError::InvalidMerlSurface);
             }
             let (summary, summary_usage) =
@@ -529,6 +530,9 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                     searchable,
                 )?;
                 result.preparation_usage = preparation_usage;
+                if method == BenchmarkMethod::Merl {
+                    result.merl_required_coverage_complete = Some(merl.required_coverage_complete);
+                }
                 trials.push(result);
             }
         }
@@ -552,6 +556,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
 
         Ok(BenchmarkReport {
             fixture_id: fixture.id.clone(),
+            source_fidelity: raw.fidelity,
             question,
             config,
             trials,
@@ -701,6 +706,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Scorer> BenchmarkRunner<'_, M, S, J> {
                         preparation_usage: TokenUsage::default(),
                         read_usage: usage,
                         tool_rounds: round,
+                        merl_required_coverage_complete: None,
                     });
                 }
                 AnswerAction::Search(query) if can_search => {

@@ -64,3 +64,10 @@ fn a_rolling_summary_receives_terminal_capture_text_only_at_capture() {
         .when_five_methods_answer_two_paired_trials_at(4)
         .then_the_opening_body_is_disclosed_after_the_history();
 }
+
+#[test]
+fn causal_import_withholds_terminal_only_text_at_an_earlier_cutoff() {
+    EvaluationScenario::given_an_opening_body_known_only_from_terminal_capture()
+        .when_imported_for_an_earlier_cutoff()
+        .then_terminal_only_bytes_are_not_in_the_authority();
+}

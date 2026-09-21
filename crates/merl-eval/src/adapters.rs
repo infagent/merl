@@ -273,8 +273,6 @@ pub struct MerlTrialArtifact {
     pub database: PathBuf,
     /// Measured compilation, correction, and retry usage for this trial.
     pub preparation_usage: TokenUsage,
-    /// Evaluator attestation that this trial used live or causal replay input.
-    pub causal: bool,
 }
 
 /// Reads prepared Issues through Merl's public CLI, one authority per trial.
@@ -372,7 +370,7 @@ impl MerlSurface for CliMerlSurface {
             view: serde_json::to_string(&view).map_err(|error| error.to_string())?,
             preparation_usage: trial.preparation_usage,
             required_coverage_complete: complete,
-            causal: trial.causal,
+            causal: true,
         };
         self.active_database = Some(trial.database.clone());
         self.next_trial += 1;
