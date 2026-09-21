@@ -193,6 +193,7 @@ dependencies = [
  "merl-compiler",
  "merl-core",
  "merl-corpus",
+ "merl-eval",
  "merl-ingest",
  "merl-policy",
  "merl-store",
@@ -237,6 +238,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "time",
+]
+
+[[package]]
+name = "merl-eval"
+version = "0.1.0"
+dependencies = [
+ "merl-corpus",
 ]
 
 [[package]]

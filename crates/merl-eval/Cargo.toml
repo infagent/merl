@@ -1,0 +1,15 @@
+[package]
+name = "merl-eval"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Causal benchmark inputs and paired evaluation for Merl"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+merl-corpus = { path = "../merl-corpus" }
+
+[lints]
+workspace = true
