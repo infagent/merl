@@ -27,7 +27,9 @@ fn an_older_selector_version_rebuilds_its_original_context() {
     CompilationScenario::given_many_unrelated_objects_and_a_named_decision()
         .when_an_older_selector_run_is_recorded()
         .when_that_run_is_rebuilt()
-        .then_the_original_selection_and_bytes_match();
+        .then_the_original_selection_and_bytes_match()
+        .when_that_input_is_replayed_with_a_new_compiler()
+        .then_the_new_run_uses_the_verified_bytes_and_original_selector();
 }
 
 #[test]

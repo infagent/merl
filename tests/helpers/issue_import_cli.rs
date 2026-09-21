@@ -492,6 +492,16 @@ impl CliIssueHistory {
             .expect("run");
         assert_eq!(rerun.mode, "replay");
         assert!(rerun.succeeded);
+        let original = store
+            .load_compilation_context(&project, "recorded-run")
+            .expect("recorded input");
+        let replay = store
+            .load_compilation_context(&project, "replay-process")
+            .expect("new replay input");
+        assert_eq!(replay.rendered, original.rendered);
+        assert_eq!(replay.source_window, original.source_window);
+        assert_eq!(replay.objects, original.objects);
+        assert_eq!(rerun.selector_version, "issue_context_v1");
     }
 }
 

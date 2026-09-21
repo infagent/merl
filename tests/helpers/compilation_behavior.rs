@@ -1,7 +1,7 @@
 use merl_compiler::{
     CompilerLimits, FakeCompiler, ProcessCompiler, RunMode, RunRequest, SequentialReplay,
-    build_context, execute_compilation, prepare_compilation, rebuild_recorded_context,
-    record_compilation_result,
+    build_context, execute_compilation, prepare_compilation, prepare_replay_compilation,
+    rebuild_recorded_context, record_compilation_result,
 };
 use merl_core::{
     ActorId, BatchId, CapturePolicyVersion, CompilationMode, CoverageRequirement, DomainEvent,
@@ -178,6 +178,9 @@ pub struct CompilationScenario {
     replay_check: ReplayCheck,
     legacy_context: Option<Vec<u8>>,
     legacy_replay: Option<Result<Vec<u8>, merl_compiler::CompileError>>,
+    rerun_context: Option<Vec<u8>>,
+    rerun_selector: Option<String>,
+    rerun_kept_revision: bool,
 }
 
 impl CompilationScenario {
@@ -197,6 +200,9 @@ impl CompilationScenario {
             replay_check: ReplayCheck::NotRun,
             legacy_context: None,
             legacy_replay: None,
+            rerun_context: None,
+            rerun_selector: None,
+            rerun_kept_revision: false,
         }
     }
 
@@ -463,14 +469,88 @@ impl CompilationScenario {
         self
     }
 
-    pub fn then_the_original_selection_and_bytes_match(&mut self) {
+    pub fn then_the_original_selection_and_bytes_match(&mut self) -> &mut Self {
         assert_eq!(
             self.legacy_replay
                 .take()
                 .expect("replay result")
                 .expect("legacy replay"),
-            self.legacy_context.take().expect("recorded input")
+            self.legacy_context
+                .as_ref()
+                .expect("recorded input")
+                .clone()
         );
+        self
+    }
+
+    pub fn when_that_input_is_replayed_with_a_new_compiler(&mut self) -> &mut Self {
+        let before = self
+            .store
+            .project_revision(&self.project)
+            .expect("accepted revision");
+        let rebuilt =
+            rebuild_recorded_context(&self.store, &self.project, "legacy-selector-run", limits())
+                .expect("verified legacy input");
+        let prepared = prepare_replay_compilation(
+            &mut self.store,
+            &self.project,
+            "legacy-selector-run",
+            rebuilt,
+            &FakeCompiler,
+            RunRequest {
+                id: "legacy-rerun",
+                limits: limits(),
+                mode: RunMode::Replay,
+                now_millis: 31,
+            },
+        )
+        .expect("prepare replay")
+        .expect("new replay run");
+        let response = execute_compilation(&prepared, &FakeCompiler);
+        record_compilation_result(&mut self.store, &self.project, &prepared, response, 32)
+            .expect("record replay result");
+        self.rerun_context = Some(
+            self.store
+                .load_compilation_context(&self.project, "legacy-rerun")
+                .expect("new replay input")
+                .rendered,
+        );
+        self.rerun_selector = Some(
+            self.store
+                .compilation_run_status(&self.project, "legacy-rerun")
+                .expect("new replay status")
+                .expect("run")
+                .selector_version,
+        );
+        self.rerun_kept_revision = self
+            .store
+            .project_revision(&self.project)
+            .expect("accepted revision")
+            == before;
+        self
+    }
+
+    pub fn then_the_new_run_uses_the_verified_bytes_and_original_selector(&mut self) {
+        assert_eq!(self.rerun_context.as_ref(), self.legacy_context.as_ref());
+        assert_eq!(self.rerun_selector.as_deref(), Some("object_id_prefix_v1"));
+        let original = self
+            .store
+            .load_compilation_context(&self.project, "legacy-selector-run")
+            .expect("original manifest");
+        let replay = self
+            .store
+            .load_compilation_context(&self.project, "legacy-rerun")
+            .expect("replay manifest");
+        assert_eq!(replay.source_window, original.source_window);
+        assert_eq!(replay.objects, original.objects);
+        let status = self
+            .store
+            .compilation_run_status(&self.project, "legacy-rerun")
+            .expect("replay status")
+            .expect("new run");
+        assert_eq!(status.renderer_version, "json_v1");
+        assert_eq!(status.mode, "replay");
+        assert!(self.rerun_kept_revision);
     }
 
     pub fn given_many_other_issue_objects_and_one_local_decision() -> Self {
@@ -1082,10 +1162,11 @@ impl CompilationScenario {
         } else {
             ReplayCheck::NotRun
         };
-        run_compiler(
+        let prepared = prepare_replay_compilation(
             &mut self.store,
             &self.project,
-            &self.note,
+            "run-one",
+            rebuilt,
             &FakeCompiler,
             RunRequest {
                 id: "replay-run",
@@ -1094,7 +1175,11 @@ impl CompilationScenario {
                 now_millis: 40,
             },
         )
-        .expect("replay run");
+        .expect("prepare replay")
+        .expect("new replay run");
+        let response = execute_compilation(&prepared, &FakeCompiler);
+        record_compilation_result(&mut self.store, &self.project, &prepared, response, 40)
+            .expect("record replay run");
         self
     }
 
