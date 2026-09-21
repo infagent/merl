@@ -2214,6 +2214,19 @@ impl Store {
         .transpose()
     }
 
+    /// Lists every recorded compiler attempt in durable attempt order.
+    ///
+    /// # Errors
+    /// Returns a SQLite error if the project history cannot be read.
+    pub fn compilation_run_ids(&self, project: &ProjectId) -> Result<Vec<String>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id FROM compilation_runs WHERE project_id=?1 ORDER BY attempt_order",
+        )?;
+        let rows = statement.query_map(params![project.as_str()], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StoreError::from)
+    }
+
     /// Reads the source-version manifest without expanding retained prose.
     ///
     /// # Errors

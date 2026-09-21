@@ -9,7 +9,8 @@ use merl_core::{
     SourceKind, SourceProvider, SourceVersionId,
 };
 use merl_corpus::fixture::{
-    Fixture, MissingBodyReason, ObservationKind, ValidationError, validate,
+    BodyAvailability, Fixture, MissingBodyReason, ObservationKind, ValidationError,
+    body_availability, validate,
 };
 use merl_policy::{PolicyError, PolicyRules, Proposal, evaluate};
 use merl_store::{MissingSourceBody, PayloadRead, SourceBinding, SourceCapture, Store, StoreError};
@@ -104,7 +105,13 @@ pub fn import_fixture(
     project: &ProjectId,
     fixture: &Fixture,
 ) -> Result<ImportReport, ImportError> {
-    import_fixture_inner(store, project, fixture, false)
+    import_fixture_inner(
+        store,
+        project,
+        fixture,
+        false,
+        fixture.observations.len() as u64,
+    )
 }
 
 /// Captures a historical fixture without accepting its terminal provider snapshot.
@@ -120,10 +127,36 @@ pub fn import_fixture_for_causal_replay(
     project: &ProjectId,
     fixture: &Fixture,
 ) -> Result<ImportReport, ImportError> {
-    if store.project_revision(project)?.get() != 0 || store.source_observation_head(project)? != 0 {
+    import_fixture_for_causal_replay_through(
+        store,
+        project,
+        fixture,
+        fixture.observations.len() as u64,
+    )
+}
+
+/// Imports only the observations and source bytes available at a historical cutoff.
+///
+/// A terminal-only body is withheld at earlier cutoffs. Evaluators should use a
+/// separate fresh authority for each cutoff, never replay an earlier position
+/// from a database that has already captured later evidence.
+///
+/// # Errors
+/// Rejects invalid fixtures, invalid cutoffs, or a nonempty project.
+pub fn import_fixture_for_causal_replay_through(
+    store: &mut Store,
+    project: &ProjectId,
+    fixture: &Fixture,
+    cutoff: u64,
+) -> Result<ImportReport, ImportError> {
+    if cutoff == 0
+        || cutoff > fixture.observations.len() as u64
+        || store.project_revision(project)?.get() != 0
+        || store.source_observation_head(project)? != 0
+    {
         return Err(ImportError::Store(StoreError::InvalidCompilation));
     }
-    import_fixture_inner(store, project, fixture, true)
+    import_fixture_inner(store, project, fixture, true, cutoff)
 }
 
 fn import_fixture_inner(
@@ -131,6 +164,7 @@ fn import_fixture_inner(
     project: &ProjectId,
     fixture: &Fixture,
     historical: bool,
+    cutoff: u64,
 ) -> Result<ImportReport, ImportError> {
     validate(fixture)?;
     let binding = fixture_binding(fixture)?;
@@ -138,15 +172,12 @@ fn import_fixture_inner(
     let policy_version = CapturePolicyVersion::try_from(FIXTURE_CAPTURE_POLICY_VERSION)
         .map_err(|_| ImportError::InvalidIdentity)?;
     let mut captured = 0;
-    for observation in &fixture.observations {
-        let source = SourceId::try_from(
-            digest_id(
-                "so",
-                &format!("{}:{}", binding.provider, observation.provider_id),
-            )
-            .as_str(),
-        )
-        .map_err(|_| ImportError::InvalidIdentity)?;
+    for observation in fixture
+        .observations
+        .iter()
+        .filter(|observation| observation.sequence <= cutoff)
+    {
+        let source = fixture_source_id(&binding, observation)?;
         let version = fixture_version_id(&observation.version_id)?;
         let supersedes = observation
             .supersedes
@@ -174,6 +205,7 @@ fn import_fixture_inner(
             ObservationKind::IssueComment => "issue_comment",
             ObservationKind::Controlled => "controlled",
         };
+        let body_available = body_available_for_import(fixture, observation, historical, cutoff);
         let capture = SourceCapture {
             binding: binding.clone(),
             source,
@@ -196,7 +228,10 @@ fn import_fixture_inner(
             provider_actor_id,
             source_author,
             provider_source_author_id,
-            body: observation.body.as_deref().map(str::as_bytes),
+            body: body_available
+                .then_some(observation.body.as_deref())
+                .flatten()
+                .map(str::as_bytes),
             edit_diff: observation
                 .edit
                 .as_ref()
@@ -208,7 +243,7 @@ fn import_fixture_inner(
                 .and_then(|edit| edit.deleted_at.as_deref())
                 .map(utc_millis)
                 .transpose()?,
-            missing_body_reason: observation.missing_body_reason.map(missing_body_reason),
+            missing_body_reason: import_missing_body_reason(observation, body_available),
             compilation_mode: CompilationMode::Eager,
             coverage_requirement: CoverageRequirement::Required,
             policy_version: policy_version.clone(),
@@ -230,6 +265,46 @@ fn import_fixture_inner(
         accepted_revision: store.project_revision(project)?.get(),
         provider_changed,
     })
+}
+
+fn import_missing_body_reason(
+    observation: &merl_corpus::fixture::Observation,
+    body_available: bool,
+) -> Option<MissingSourceBody> {
+    if observation.body.is_some() && !body_available {
+        Some(MissingSourceBody::PriorVersionUnavailable)
+    } else {
+        observation.missing_body_reason.map(missing_body_reason)
+    }
+}
+
+fn fixture_source_id(
+    binding: &SourceBinding,
+    observation: &merl_corpus::fixture::Observation,
+) -> Result<SourceId, ImportError> {
+    SourceId::try_from(
+        digest_id(
+            "so",
+            &format!("{}:{}", binding.provider, observation.provider_id),
+        )
+        .as_str(),
+    )
+    .map_err(|_| ImportError::InvalidIdentity)
+}
+
+fn body_available_for_import(
+    fixture: &Fixture,
+    observation: &merl_corpus::fixture::Observation,
+    historical: bool,
+    cutoff: u64,
+) -> bool {
+    match body_availability(fixture, observation) {
+        Some(BodyAvailability::AtObservation) => true,
+        Some(BodyAvailability::AtCapture) => {
+            !historical || cutoff == fixture.observations.len() as u64
+        }
+        None => false,
+    }
 }
 
 fn actor_identity(provider_id: Option<&str>) -> Result<Option<ActorId>, ImportError> {

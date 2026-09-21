@@ -7,6 +7,9 @@ use merl_eval::{
     RandomnessControl, ReaderInput, ReaderMethod, Score, Scorer, SummaryRequest, SummaryResponse,
     TokenUsage, TrialIdentity, prepare_exact_reader_input, prepare_reader_input,
 };
+use merl_core::ProjectId;
+use merl_ingest::import_fixture_for_causal_replay_through;
+use merl_store::Store;
 
 pub struct EvaluationScenario {
     fixture: Fixture,
@@ -19,6 +22,7 @@ pub struct EvaluationScenario {
     summary_disclosures: Vec<(u64, bool, Option<String>)>,
     tool_result_methods: Vec<BenchmarkMethod>,
     reader_error: Option<InputError>,
+    imported_terminal_payload: Option<bool>,
 }
 
 impl EvaluationScenario {
@@ -77,7 +81,26 @@ impl EvaluationScenario {
             summary_disclosures: Vec::new(),
             tool_result_methods: Vec::new(),
             reader_error: None,
+            imported_terminal_payload: None,
         }
+    }
+
+    pub fn when_imported_for_an_earlier_cutoff(mut self) -> Self {
+        let mut store = Store::open_in_memory().expect("authority");
+        let project = ProjectId::try_from("eval-partial").expect("project");
+        store.create_project(&project).expect("project authority");
+        import_fixture_for_causal_replay_through(&mut store, &project, &self.fixture, 1)
+            .expect("causal prefix");
+        let first = store
+            .source_version_at(&project, 1)
+            .expect("source lookup")
+            .expect("source version");
+        self.imported_terminal_payload = Some(first.payload.is_some());
+        self
+    }
+
+    pub fn then_terminal_only_bytes_are_not_in_the_authority(self) {
+        assert_eq!(self.imported_terminal_payload, Some(false));
     }
 
     pub fn when_raw_and_recent_readers_revisit_observation(mut self, cutoff: u64) -> Self {
