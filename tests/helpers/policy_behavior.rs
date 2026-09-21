@@ -90,6 +90,7 @@ struct StatementCompiler {
     version: &'static str,
     body_len: usize,
     attributed_to: Option<&'static str>,
+    value: &'static str,
 }
 
 impl CompilerAdapter for StatementCompiler {
@@ -107,9 +108,10 @@ impl CompilerAdapter for StatementCompiler {
     }
     fn compile(&self, _context: &[u8], _limits: CompilerLimits) -> Result<Vec<u8>, CompileError> {
         Ok(format!(
-            r#"{{"schema":"merl.compiler-response/v1","assertions":[{{"source":"{}","span_start":0,"span_end":{},"subject":"D1","predicate":"decision","value":"none","act":"request","epistemic_basis":"reported","polarity":"positive","confidence_millis":900,"attributed_to":{}}}]}}"#,
+            r#"{{"schema":"merl.compiler-response/v1","assertions":[{{"source":"{}","span_start":0,"span_end":{},"subject":"D1","predicate":"decision","value":"{}","act":"request","epistemic_basis":"reported","polarity":"positive","confidence_millis":900,"attributed_to":{}}}]}}"#,
             self.version,
             self.body_len,
+            self.value,
             self.attributed_to.map_or("null".to_owned(), |value| format!("\"{value}\""))
         ).into_bytes())
     }
@@ -186,6 +188,62 @@ impl PolicyScenario {
             .commit(&mut scenario.store)
             .expect("accept decision");
         scenario
+    }
+
+    pub fn given_a_later_compiler_context_containing_an_accepted_decision() -> Self {
+        let mut scenario = Self::file_backed();
+        let body = "Use fixed gain SECRET_PURGE_CHAIN_7461";
+        scenario.capture("direct-v1", body, "alice");
+        scenario.compile_with_value("direct-v1", body.len(), "decision-body", "direct-run");
+        let payload = id("decision-body");
+        scenario
+            .store
+            .put_payload(&scenario.project, &payload, body.as_bytes())
+            .expect("decision payload");
+        let accepted = evaluate(
+            &scenario.store,
+            &scenario.project,
+            &id("authority"),
+            id("support-eval"),
+            id("support-batch"),
+            NOW + 3,
+            &scenario.rules,
+            &[Proposal::ObservedAssertion {
+                id: id("support-assertion"),
+                run: id("direct-run"),
+                index: 0,
+                event: event("support-event", "D1", "decision", Some(payload)),
+            }],
+        )
+        .expect("evaluate source assertion");
+        accepted
+            .commit(&mut scenario.store)
+            .expect("accept decision");
+        let later = "Check D1";
+        scenario.capture("later-v1", later, "alice");
+        scenario.compile("later-v1", later.len(), None, "later-run");
+        scenario
+    }
+
+    pub fn then_the_preview_includes_the_later_context(&mut self) -> &mut Self {
+        let preview = self.purge_preview.as_ref().expect("preview");
+        assert!(preview.runs.iter().any(|run| run.as_str() == "later-run"));
+        self
+    }
+
+    pub fn then_the_later_context_and_protected_bytes_are_gone(&mut self) {
+        assert!(
+            self.store
+                .load_compilation_context(&self.project, "later-run")
+                .is_err()
+        );
+        let file = self.persisted_file.as_ref().expect("file-backed authority");
+        let bytes = std::fs::read(&file.0).expect("read active database");
+        assert!(
+            !bytes
+                .windows(b"SECRET_PURGE_CHAIN_7461".len())
+                .any(|part| part == b"SECRET_PURGE_CHAIN_7461")
+        );
     }
 
     pub fn when_the_earlier_comment_is_edited(&mut self) -> &mut Self {
@@ -336,6 +394,7 @@ impl PolicyScenario {
             version: "direct-v1",
             body_len: body.len(),
             attributed_to: None,
+            value: "none",
         };
         let prepared_run = prepare_compilation(
             &mut self.store,
@@ -1015,10 +1074,32 @@ impl PolicyScenario {
         attributed_to: Option<&'static str>,
         run_id: &'static str,
     ) {
+        self.compile_with_attribution_and_value(version, body_len, attributed_to, "none", run_id);
+    }
+
+    fn compile_with_value(
+        &mut self,
+        version: &'static str,
+        body_len: usize,
+        value: &'static str,
+        run_id: &'static str,
+    ) {
+        self.compile_with_attribution_and_value(version, body_len, None, value, run_id);
+    }
+
+    fn compile_with_attribution_and_value(
+        &mut self,
+        version: &'static str,
+        body_len: usize,
+        attributed_to: Option<&'static str>,
+        value: &'static str,
+        run_id: &'static str,
+    ) {
         let compiler = StatementCompiler {
             version,
             body_len,
             attributed_to,
+            value,
         };
         let prepared = prepare_compilation(
             &mut self.store,
