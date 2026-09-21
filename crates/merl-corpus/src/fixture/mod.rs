@@ -719,7 +719,8 @@ pub fn require_exact_source_bodies_through(
     Ok(())
 }
 
-/// Returns retained bytes only when the fixture proves they were available at this cutoff.
+/// Returns retained bytes only when the fixture proves they were available at
+/// the observation cutoff or at an explicitly requested terminal capture.
 ///
 /// Older natural fixtures did not label individual bodies. For those, terminal
 /// capture bytes stay hidden until the final observation unless the fixture
@@ -729,12 +730,14 @@ pub fn available_body_at<'a>(
     fixture: &Fixture,
     observation: &'a Observation,
     cutoff: u64,
+    capture_phase: bool,
 ) -> Option<&'a str> {
     let body = observation.body.as_deref()?;
     match body_availability(fixture, observation)? {
         BodyAvailability::AtObservation if observation.sequence <= cutoff => Some(body),
         BodyAvailability::AtCapture
-            if cutoff == fixture.observations.last().map_or(0, |last| last.sequence) =>
+            if capture_phase
+                && cutoff == fixture.observations.last().map_or(0, |last| last.sequence) =>
         {
             Some(body)
         }

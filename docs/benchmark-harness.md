@@ -12,7 +12,7 @@ The runner handles several questions per Issue, including questions at different
 | Summary plus retrieval | Rolling summary | Search visible sources |
 | Merl | Accepted Issue view from a prepared authority | Expand an object or source reference |
 
-An edit replaces the version shown by the raw and recent readers at that cutoff when its order is known. Missing historical bodies appear as gaps, and the summary reader sees terminal-capture text only after the observation history. For timestamp-tied observations with unresolved upstream order, the reader sees the retained versions and an explicit uncertainty marker. The report records when a cutoff splits such a group; the model does not see later observations. Exact replay still refuses ambiguous order or missing historical bytes.
+An edit replaces the version shown by the raw and recent readers at that cutoff when its order is known. Missing historical bodies appear as gaps. A question names an observation cutoff and separately says whether terminal capture is included; the latter is permitted only after the final observation. The summary reader receives terminal-capture text only in that phase. For timestamp-tied observations with unresolved upstream order, the reader sees the retained versions and an explicit uncertainty marker. The report records when a cutoff splits such a group; the model does not see later observations. Exact replay still refuses ambiguous order or missing historical bytes.
 
 ## Running a development case
 
@@ -28,7 +28,7 @@ cargo run --locked -p merl-eval -- run --plan /path/to/development-plan.json
 
 The plan uses `merl.eval-plan/v1`. It names the fixture, questions, shared model configuration, model and scorer programs, compiler artifacts, process byte limits, and prepared Merl trials. Each preparation record must match the candidate commit and evaluator binary, the exact compiler program/prompt/rules/configuration hashes, and every recorded compiler run. The run modes must be causal (`live` or `replay`), never `hindsight` or `eval`. Its measured call ledger includes retries and corrections. The harness records SHA-256 digests of the receipt and database and reads the Issue through Merl's public CLI.
 
-Questions at the same cutoff share one rolling summary and Merl preparation within a paired trial. Their answer calls remain separate. The report charges each shared preparation once, not once per question. A different cutoff needs a different prepared authority and summary.
+Questions at the same cutoff and capture phase share one rolling summary and Merl preparation within a paired trial. Their answer calls remain separate. The report charges each shared preparation once, not once per question. A different cutoff needs a different prepared authority and summary. One plan cannot mix observation-only and terminal-capture questions at the same cutoff; split them into separate plans so neither phase inherits the other's evidence.
 
 A development plan looks like this, with paths supplied by the evaluator:
 
@@ -39,6 +39,7 @@ A development plan looks like this, with paths supplied by the evaluator:
   "questions": [{
     "id": "DEV-C1-Q1",
     "cutoff": 4,
+    "capture_phase": false,
     "text": "What receive-gain strategy is current for the baseline?"
   }],
   "config": {
@@ -74,12 +75,14 @@ A development plan looks like this, with paths supplied by the evaluator:
       {
         "trial_id": "pair-a",
         "source_cutoff": 4,
+        "capture_phase": false,
         "database": "/path/to/trial-1.sqlite",
         "preparation_record": "/path/to/trial-1-preparation.json"
       },
       {
         "trial_id": "pair-b",
         "source_cutoff": 4,
+        "capture_phase": false,
         "database": "/path/to/trial-2.sqlite",
         "preparation_record": "/path/to/trial-2-preparation.json"
       }
@@ -98,6 +101,7 @@ The evaluator writes one `merl.eval-preparation/v1` record for each prepared aut
   "trial_id": "pair-a",
   "project": "P1",
   "source_cutoff": 4,
+  "capture_phase": false,
   "candidate_commit": "40-character-candidate-git-sha",
   "candidate_binary_sha256": "sha256:...",
   "compiler": {

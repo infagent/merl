@@ -4,7 +4,7 @@ use std::{collections::HashSet, fs, path::Path};
 
 use merl_core::ProjectId;
 use merl_corpus::fixture::{BodyAvailability, Fixture, body_availability};
-use merl_ingest::fixture_version_id;
+use merl_ingest::{fixture_issue_id, fixture_version_id};
 use merl_store::{CompilationRunStatus, Store};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -91,6 +91,8 @@ pub struct MerlPreparationRecord {
     pub project: String,
     /// Highest source observation allowed to contribute to this view.
     pub source_cutoff: u64,
+    /// Observation-only or terminal-capture reader position.
+    pub capture_phase: bool,
     /// Candidate source revision that built the authority.
     pub candidate_commit: String,
     /// Candidate evaluator executable hash; the binary embeds the Merl crates.
@@ -114,6 +116,8 @@ pub struct PreparationExpectation<'a> {
     pub project: &'a str,
     /// Question cutoff shared by every method.
     pub source_cutoff: u64,
+    /// Reader position, independent of the source observation number.
+    pub capture_phase: bool,
     /// Candidate source revision.
     pub candidate_commit: &'a str,
     /// Hash of the evaluator executable embedding this Merl candidate.
@@ -136,6 +140,7 @@ pub fn verify_preparation(
         || record.trial_id != expected.trial_id
         || record.project != expected.project
         || record.source_cutoff != expected.source_cutoff
+        || record.capture_phase != expected.capture_phase
         || record.candidate_commit != expected.candidate_commit
         || record.candidate_binary_sha256 != expected.candidate_binary_sha256
     {
@@ -167,7 +172,19 @@ pub fn verify_preparation(
 
     let project_id = ProjectId::try_from(expected.project).map_err(|_| "invalid project ID")?;
     let store = Store::open(database).map_err(|error| error.to_string())?;
-    verify_source_availability(&store, &project_id, fixture, expected.source_cutoff)?;
+    verify_source_availability(
+        &store,
+        &project_id,
+        fixture,
+        expected.source_cutoff,
+        expected.capture_phase,
+    )?;
+    let provider_head = store
+        .provider_issue_head(
+            &project_id,
+            &fixture_issue_id(fixture).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
     let run_ids = store
         .compilation_run_ids(&project_id)
         .map_err(|error| error.to_string())?;
@@ -186,6 +203,12 @@ pub fn verify_preparation(
             .map_err(|error| error.to_string())?
             .ok_or("preparation run is missing")?;
         validate_run(record, run, &status, &contract)?;
+        if provider_head
+            .as_ref()
+            .is_some_and(|head| status.interpretation_basis_revision.get() >= head.revision.get())
+        {
+            return Err("compiler context included terminal provider state".to_owned());
+        }
         let selected = store
             .compilation_context_sources(&project_id, &run.id)
             .map_err(|error| error.to_string())?;
@@ -259,6 +282,7 @@ fn verify_source_availability(
     project: &ProjectId,
     fixture: &Fixture,
     cutoff: u64,
+    capture_phase: bool,
 ) -> Result<(), String> {
     if store
         .source_observation_head(project)
@@ -266,6 +290,17 @@ fn verify_source_availability(
         != cutoff
     {
         return Err("prepared authority source head differs from the question cutoff".to_owned());
+    }
+    if !capture_phase
+        && store
+            .provider_issue_head(
+                project,
+                &fixture_issue_id(fixture).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?
+            .is_some()
+    {
+        return Err("terminal provider mirror entered an observation-only trial".to_owned());
     }
     for source in fixture
         .observations
@@ -282,7 +317,8 @@ fn verify_source_availability(
         let allowed = matches!(
             body_availability(fixture, source),
             Some(BodyAvailability::AtObservation)
-        ) || (cutoff == fixture.observations.len() as u64
+        ) || (capture_phase
+            && cutoff == fixture.observations.len() as u64
             && body_availability(fixture, source) == Some(BodyAvailability::AtCapture));
         if !allowed && stored.payload.is_some() {
             return Err(
@@ -364,6 +400,7 @@ mod tests {
             trial_id: "pair-a".to_owned(),
             project: "P1".to_owned(),
             source_cutoff: 4,
+            capture_phase: false,
             candidate_commit: "a".repeat(40),
             candidate_binary_sha256: digest_text(&contract),
             compiler: CompilerAttestation {
