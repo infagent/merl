@@ -1,6 +1,6 @@
 //! SQLite authority for accepted events and independently erasable payloads.
 
-use std::{error::Error, fmt, fmt::Write as _, path::Path};
+use std::{collections::BTreeSet, error::Error, fmt, fmt::Write as _, path::Path};
 
 use merl_core::{
     ActorId, AgentId, CapturePolicyVersion, CompilationMode, CoverageRequirement, DomainEvent,
@@ -12,7 +12,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -45,6 +45,8 @@ pub enum StoreError {
     InvalidPolicyEvaluation,
     /// An inbox acknowledgement skipped an earlier entry or named no entry.
     InvalidInboxAcknowledgement,
+    /// The preview changed, the actor omitted a reason, or this source was purged already.
+    InvalidPurge,
 }
 
 impl fmt::Display for StoreError {
@@ -80,6 +82,7 @@ impl fmt::Display for StoreError {
             Self::InvalidInboxAcknowledgement => {
                 formatter.write_str("inbox entry is absent or out of order")
             }
+            Self::InvalidPurge => formatter.write_str("purge request does not match its preview"),
         }
     }
 }
@@ -99,6 +102,53 @@ pub enum PayloadRead {
     Available(Vec<u8>),
     /// The reference remains, but protected bytes were erased.
     Unavailable,
+}
+
+/// One protected payload named in an administrative purge preview.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PurgePayload {
+    /// Project-scoped payload identity.
+    pub id: PayloadId,
+    /// Digest retained after the bytes disappear.
+    pub digest: [u8; 32],
+}
+
+/// Exact dependency set an operator must confirm before source erasure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PurgePreview {
+    /// Captured version whose retained bytes initiated this request.
+    pub source: SourceVersionId,
+    /// Source and derived payloads that will become unavailable.
+    pub payloads: Vec<PurgePayload>,
+    /// Compiler inputs whose exact replay will become unavailable.
+    pub runs: Vec<merl_core::CompilationRunId>,
+    /// Assertions whose recorded input will lose retained bytes.
+    pub assertions: u64,
+    /// Accepted events whose supporting evidence will change.
+    pub events: Vec<merl_core::EventId>,
+    /// Accepted objects needing reconsideration.
+    pub objects: Vec<ObjectId>,
+    /// Accepted relations whose assertion provenance becomes unavailable.
+    pub relations: Vec<RelationId>,
+    /// Digest of the complete structural preview, used at confirmation.
+    pub confirm_digest: [u8; 32],
+}
+
+/// Durable receipt for an administrative source-content purge.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PurgeAudit {
+    /// Source version whose bytes were selected.
+    pub source: SourceVersionId,
+    /// Administrator recorded by the local authority.
+    pub actor: ActorId,
+    /// UTC request time in Unix milliseconds.
+    pub requested_at_millis: i64,
+    /// Protected reason text, retained separately from structural history.
+    pub reason: PayloadId,
+    /// Confirmed dependency and payload digest.
+    pub preview_digest: [u8; 32],
+    /// Active-store scrubbing finished after logical erasure.
+    pub completed: bool,
 }
 
 /// The current projection of one accepted object.
@@ -544,6 +594,8 @@ pub struct SemanticCoverage {
     pub required_pending: u64,
     /// Required versions whose latest live compiler attempt failed.
     pub required_failed: u64,
+    /// Required versions whose captured body was erased after capture.
+    pub required_purged: u64,
     /// Optional versions whose latest live attempt has not succeeded.
     pub optional_cold: u64,
 }
@@ -674,6 +726,7 @@ impl Store {
 
     fn from_connection(mut connection: Connection) -> Result<Self, StoreError> {
         connection.pragma_update(None, "foreign_keys", "ON")?;
+        connection.pragma_update(None, "secure_delete", "ON")?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if !(0..=SCHEMA_VERSION).contains(&version) {
             return Err(StoreError::UnsupportedSchema(version));
@@ -727,10 +780,15 @@ impl Store {
                     "../migrations/0013_compilation_attempt_order.sql"
                 ))?;
             }
+            if version < 14 {
+                transaction.execute_batch(include_str!("../migrations/0014_purge_audit.sql"))?;
+            }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         }
-        Ok(Self { connection })
+        let mut store = Self { connection };
+        store.finish_pending_purges()?;
+        Ok(store)
     }
 
     /// Creates the accepted-history boundary for a project at revision zero.
@@ -840,6 +898,276 @@ impl Store {
         }
         if let Some(source) = source {
             record_evidence_impacts(&transaction, project, &source, None, "reevaluate", 0)?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Lists source and derived bytes, accepted support, and the digest to confirm.
+    ///
+    /// # Errors
+    /// Rejects an unknown source or damaged structural lineage.
+    pub fn preview_source_purge(
+        &self,
+        project: &ProjectId,
+        source: &SourceVersionId,
+    ) -> Result<PurgePreview, StoreError> {
+        Self::preview_source_purge_on(&self.connection, project, source)
+    }
+
+    fn preview_source_purge_on(
+        connection: &Connection,
+        project: &ProjectId,
+        source: &SourceVersionId,
+    ) -> Result<PurgePreview, StoreError> {
+        let captured: Option<(Option<String>, Option<String>)> = connection.query_row(
+            "SELECT payload_id,edit_diff_payload_id FROM source_versions WHERE project_id=?1 AND id=?2",
+            params![project.as_str(), source.as_str()],
+            |row| Ok((row.get(0)?,row.get(1)?)),
+        ).optional()?;
+        let (body, diff) = captured.ok_or(StoreError::InvalidSource)?;
+        let mut payload_ids = BTreeSet::new();
+        if let Some(body) = body {
+            payload_ids.insert(body);
+        }
+        if let Some(diff) = diff {
+            payload_ids.insert(diff);
+        }
+        let mut run_statement = connection.prepare(
+            "SELECT DISTINCT r.id,r.context_payload_id,c.response_payload_id
+             FROM compilation_runs r
+             JOIN compilation_context_sources s ON s.project_id=r.project_id AND s.run_id=r.id
+             LEFT JOIN compilation_results c ON c.project_id=r.project_id AND c.run_id=r.id
+             WHERE r.project_id=?1 AND s.source_version_id=?2 ORDER BY r.id",
+        )?;
+        let run_rows =
+            run_statement.query_map(params![project.as_str(), source.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })?;
+        let mut runs = Vec::new();
+        let mut assertions = 0_u64;
+        let mut event_ids = BTreeSet::new();
+        let mut object_ids = BTreeSet::new();
+        let mut relation_ids = BTreeSet::new();
+        for row in run_rows {
+            let (run, context, response) = row?;
+            payload_ids.insert(context);
+            if let Some(response) = response {
+                payload_ids.insert(response);
+            }
+            assertions += collect_purge_consequences(
+                connection,
+                project,
+                &run,
+                &mut payload_ids,
+                &mut event_ids,
+                &mut object_ids,
+                &mut relation_ids,
+            )?;
+            runs.push(
+                merl_core::CompilationRunId::try_from(run.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
+            );
+        }
+        let mut payloads = Vec::new();
+        for id in payload_ids {
+            let digest: Vec<u8> = connection.query_row(
+                "SELECT digest FROM payloads WHERE project_id=?1 AND id=?2",
+                params![project.as_str(), id],
+                |row| row.get(0),
+            )?;
+            payloads.push(PurgePayload {
+                id: PayloadId::try_from(id.as_str()).map_err(|_| StoreError::CorruptHistory)?,
+                digest: digest.try_into().map_err(|_| StoreError::CorruptHistory)?,
+            });
+        }
+        let events = event_ids
+            .into_iter()
+            .map(|id| {
+                merl_core::EventId::try_from(id.as_str()).map_err(|_| StoreError::CorruptHistory)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let objects = object_ids
+            .into_iter()
+            .map(|id| ObjectId::try_from(id.as_str()).map_err(|_| StoreError::CorruptHistory))
+            .collect::<Result<Vec<_>, _>>()?;
+        let relations = relation_ids
+            .into_iter()
+            .map(|id| RelationId::try_from(id.as_str()).map_err(|_| StoreError::CorruptHistory))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut preview = PurgePreview {
+            source: source.clone(),
+            payloads,
+            runs,
+            assertions,
+            events,
+            objects,
+            relations,
+            confirm_digest: [0; 32],
+        };
+        preview.confirm_digest = purge_preview_digest(project, &preview);
+        Ok(preview)
+    }
+
+    /// Erases a confirmed source and derived payload set, then scrubs the active store.
+    ///
+    /// The local authority records the supplied actor; same-user process isolation
+    /// remains outside Merl's first-release security boundary.
+    ///
+    /// # Errors
+    /// Rejects a stale preview, missing reason, prior purge, or failed SQLite scrub.
+    pub fn purge_source(
+        &mut self,
+        project: &ProjectId,
+        source: &SourceVersionId,
+        actor: &ActorId,
+        reason: &[u8],
+        now_millis: i64,
+        confirm_digest: [u8; 32],
+    ) -> Result<PurgeAudit, StoreError> {
+        if reason.is_empty() || reason.len() > 4096 || self.purge_audit(project, source)?.is_some()
+        {
+            return Err(StoreError::InvalidPurge);
+        }
+        let reason_id = purge_reason_id(project, source)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let preview = Self::preview_source_purge_on(&transaction, project, source)?;
+        if preview.confirm_digest != confirm_digest || preview.payloads.is_empty() {
+            return Err(StoreError::InvalidPurge);
+        }
+        insert_protected_payload(
+            &transaction,
+            project,
+            &reason_id,
+            reason,
+            &Sha256::digest(reason),
+        )?;
+        transaction.execute(
+            "INSERT INTO purge_intents
+             (project_id,source_version_id,actor_id,requested_at_millis,reason_payload_id,preview_digest)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            params![project.as_str(),source.as_str(),actor.as_str(),now_millis,reason_id.as_str(),confirm_digest.as_slice()],
+        )?;
+        for payload in &preview.payloads {
+            transaction.execute(
+                "INSERT INTO purge_intent_payloads
+                 (project_id,source_version_id,payload_id,digest) VALUES (?1,?2,?3,?4)",
+                params![
+                    project.as_str(),
+                    source.as_str(),
+                    payload.id.as_str(),
+                    payload.digest.as_slice()
+                ],
+            )?;
+            transaction.execute(
+                "UPDATE payloads SET bytes=NULL,erased=1 WHERE project_id=?1 AND id=?2 AND erased=0",
+                params![project.as_str(),payload.id.as_str()],
+            )?;
+        }
+        record_evidence_impacts(
+            &transaction,
+            project,
+            source.as_str(),
+            None,
+            "reevaluate",
+            now_millis,
+        )?;
+        transaction.commit()?;
+        self.finish_pending_purges()?;
+        self.purge_audit(project, source)?
+            .ok_or(StoreError::CorruptHistory)
+    }
+
+    /// Returns the durable purge receipt even if physical scrubbing is pending.
+    ///
+    /// # Errors
+    /// Rejects damaged audit metadata or an unreadable store.
+    pub fn purge_audit(
+        &self,
+        project: &ProjectId,
+        source: &SourceVersionId,
+    ) -> Result<Option<PurgeAudit>, StoreError> {
+        let row: Option<(String, i64, String, Vec<u8>, bool)> = self
+            .connection
+            .query_row(
+                "SELECT i.actor_id,i.requested_at_millis,i.reason_payload_id,i.preview_digest,
+                    c.source_version_id IS NOT NULL
+             FROM purge_intents i LEFT JOIN purge_completions c
+               ON c.project_id=i.project_id AND c.source_version_id=i.source_version_id
+             WHERE i.project_id=?1 AND i.source_version_id=?2",
+                params![project.as_str(), source.as_str()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|(actor, requested_at_millis, reason, digest, completed)| {
+            Ok(PurgeAudit {
+                source: source.clone(),
+                actor: ActorId::try_from(actor.as_str()).map_err(|_| StoreError::CorruptHistory)?,
+                requested_at_millis,
+                reason: PayloadId::try_from(reason.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                preview_digest: digest.try_into().map_err(|_| StoreError::CorruptHistory)?,
+                completed,
+            })
+        })
+        .transpose()
+    }
+
+    fn finish_pending_purges(&mut self) -> Result<(), StoreError> {
+        let pending = {
+            let mut statement = self.connection.prepare(
+                "SELECT i.project_id,i.source_version_id,i.requested_at_millis
+                 FROM purge_intents i LEFT JOIN purge_completions c
+                   ON c.project_id=i.project_id AND c.source_version_id=i.source_version_id
+                 WHERE c.source_version_id IS NULL ORDER BY i.project_id,i.source_version_id",
+            )?;
+            statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        if pending.is_empty() {
+            return Ok(());
+        }
+        // Scrub after the logical erasure commits. A crash before completion leaves
+        // the intent pending so the next open repeats the scrub before serving reads.
+        let busy: i64 =
+            self.connection
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+        if busy != 0 {
+            return Err(StoreError::Storage(
+                "SQLite checkpoint is busy during purge".into(),
+            ));
+        }
+        self.connection.execute_batch("VACUUM")?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for (project, source, at) in pending {
+            transaction.execute(
+                "INSERT INTO purge_completions (project_id,source_version_id,completed_at_millis)
+                 VALUES (?1,?2,?3)",
+                params![project, source, at],
+            )?;
         }
         transaction.commit()?;
         Ok(())
@@ -1645,29 +1973,36 @@ impl Store {
             params![project.as_str(), scope],
             |row| row.get(0),
         )?;
-        let (required_gaps, required_failed, optional_cold, first_gap, required_pending):
-            (i64, i64, i64, Option<i64>, i64) = self.connection.query_row(
+        let (required_gaps, required_failed, optional_cold, first_gap, required_pending, required_purged):
+            (i64, i64, i64, Option<i64>, i64, i64) = self.connection.query_row(
             "WITH scoped AS (
                SELECT s.sequence,s.coverage_requirement,
+                 (COALESCE(p.erased,0)=1 OR COALESCE((
+                   SELECT cp.erased FROM compilation_runs cr
+                   JOIN payloads cp ON cp.project_id=cr.project_id AND cp.id=cr.context_payload_id
+                   WHERE cr.project_id=s.project_id AND cr.source_version_id=s.id AND cr.mode='live'
+                   ORDER BY cr.attempt_order DESC LIMIT 1),0)=1) AS unavailable,
                  COALESCE((SELECT COALESCE(c.outcome,'pending')
                    FROM compilation_runs r LEFT JOIN compilation_results c
                      ON c.project_id=r.project_id AND c.run_id=r.id
                    WHERE r.project_id=s.project_id AND r.source_version_id=s.id
                      AND r.mode='live'
                    ORDER BY r.attempt_order DESC LIMIT 1),'unprocessed') AS latest_outcome
-               FROM source_versions s
+               FROM source_versions s LEFT JOIN payloads p
+                 ON p.project_id=s.project_id AND p.id=s.payload_id
                WHERE s.project_id=?1 AND (?2 IS NULL OR s.context_scope_id=?2)
              )
              SELECT
-               COALESCE(SUM(coverage_requirement='required' AND latest_outcome!='succeeded'),0),
-               COALESCE(SUM(coverage_requirement='required' AND latest_outcome='failed'),0),
-               COALESCE(SUM(coverage_requirement='optional' AND latest_outcome!='succeeded'),0),
-               MIN(CASE WHEN coverage_requirement='required' AND latest_outcome!='succeeded'
+               COALESCE(SUM(coverage_requirement='required' AND (latest_outcome!='succeeded' OR unavailable)),0),
+               COALESCE(SUM(coverage_requirement='required' AND latest_outcome='failed' AND NOT unavailable),0),
+               COALESCE(SUM(coverage_requirement='optional' AND (latest_outcome!='succeeded' OR unavailable)),0),
+               MIN(CASE WHEN coverage_requirement='required' AND (latest_outcome!='succeeded' OR unavailable)
                    THEN sequence END),
-               COALESCE(SUM(coverage_requirement='required' AND latest_outcome IN ('pending','needs_context')),0)
+               COALESCE(SUM(coverage_requirement='required' AND latest_outcome IN ('pending','needs_context') AND NOT unavailable),0),
+               COALESCE(SUM(coverage_requirement='required' AND unavailable),0)
              FROM scoped",
             params![project.as_str(), scope],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
         )?;
         let head = u64::try_from(observation_head).map_err(|_| StoreError::CorruptHistory)?;
         Ok(SemanticCoverage {
@@ -1680,6 +2015,8 @@ impl Store {
             required_pending: u64::try_from(required_pending)
                 .map_err(|_| StoreError::CorruptHistory)?,
             required_failed: u64::try_from(required_failed)
+                .map_err(|_| StoreError::CorruptHistory)?,
+            required_purged: u64::try_from(required_purged)
                 .map_err(|_| StoreError::CorruptHistory)?,
             optional_cold: u64::try_from(optional_cold).map_err(|_| StoreError::CorruptHistory)?,
         })
@@ -3548,6 +3885,105 @@ impl Store {
     }
 }
 
+fn collect_purge_consequences(
+    connection: &Connection,
+    project: &ProjectId,
+    run: &str,
+    payloads: &mut BTreeSet<String>,
+    events: &mut BTreeSet<String>,
+    objects: &mut BTreeSet<String>,
+    relations: &mut BTreeSet<String>,
+) -> Result<u64, StoreError> {
+    let count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM observed_assertions WHERE project_id=?1 AND run_id=?2",
+        params![project.as_str(), run],
+        |row| row.get(0),
+    )?;
+    let mut object_statement = connection.prepare(
+        "SELECT DISTINCT e.id,e.object_id,e.payload_id
+         FROM policy_assertion_inputs a
+         JOIN policy_evaluation_inputs i
+           ON i.project_id=a.project_id AND i.evaluation_id=a.evaluation_id AND i.input_id=a.input_id
+         JOIN policy_evaluation_domain_events o
+           ON o.project_id=i.project_id AND o.evaluation_id=i.evaluation_id AND o.input_index=i.input_index
+         JOIN domain_events e ON e.project_id=o.project_id AND e.id=o.event_id
+         WHERE a.project_id=?1 AND a.run_id=?2 ORDER BY e.id",
+    )?;
+    let object_rows = object_statement.query_map(params![project.as_str(), run], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    for row in object_rows {
+        let (event, object, payload) = row?;
+        events.insert(event);
+        objects.insert(object);
+        if let Some(payload) = payload {
+            payloads.insert(payload);
+        }
+    }
+    let mut relation_statement = connection.prepare(
+        "SELECT DISTINCT e.id,e.relation_id
+         FROM policy_assertion_inputs a
+         JOIN policy_evaluation_inputs i
+           ON i.project_id=a.project_id AND i.evaluation_id=a.evaluation_id AND i.input_id=a.input_id
+         JOIN policy_evaluation_relation_events o
+           ON o.project_id=i.project_id AND o.evaluation_id=i.evaluation_id AND o.input_index=i.input_index
+         JOIN relation_events e ON e.project_id=o.project_id AND e.id=o.event_id
+         WHERE a.project_id=?1 AND a.run_id=?2 ORDER BY e.id",
+    )?;
+    let relation_rows = relation_statement.query_map(params![project.as_str(), run], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in relation_rows {
+        let (event, relation) = row?;
+        events.insert(event);
+        relations.insert(relation);
+    }
+    u64::try_from(count).map_err(|_| StoreError::CorruptHistory)
+}
+
+fn purge_preview_digest(project: &ProjectId, preview: &PurgePreview) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(project.as_str().as_bytes());
+    hash.update([0]);
+    hash.update(preview.source.as_str().as_bytes());
+    for payload in &preview.payloads {
+        hash.update([0]);
+        hash.update(payload.id.as_str().as_bytes());
+        hash.update(payload.digest);
+    }
+    for run in &preview.runs {
+        hash.update([1]);
+        hash.update(run.as_str().as_bytes());
+    }
+    for event in &preview.events {
+        hash.update([2]);
+        hash.update(event.as_str().as_bytes());
+    }
+    for object in &preview.objects {
+        hash.update([3]);
+        hash.update(object.as_str().as_bytes());
+    }
+    for relation in &preview.relations {
+        hash.update([4]);
+        hash.update(relation.as_str().as_bytes());
+    }
+    hash.update(preview.assertions.to_be_bytes());
+    hash.finalize().into()
+}
+
+fn purge_reason_id(project: &ProjectId, source: &SourceVersionId) -> Result<PayloadId, StoreError> {
+    let digest = Sha256::digest(format!("{project}/{source}").as_bytes());
+    let mut id = String::from("purge_reason_");
+    for byte in digest {
+        write!(&mut id, "{byte:02x}").expect("writing a digest is infallible");
+    }
+    PayloadId::try_from(id.as_str()).map_err(|_| StoreError::InvalidPurge)
+}
+
 fn to_sql_revision(revision: ProjectRevision) -> Result<i64, StoreError> {
     i64::try_from(revision.get()).map_err(|_| StoreError::CorruptHistory)
 }
@@ -4121,7 +4557,7 @@ fn record_evidence_impacts(
             write!(&mut id, "{byte:02x}").expect("writing a digest is infallible");
         }
         transaction.execute(
-            "INSERT INTO evidence_impacts
+            "INSERT OR IGNORE INTO evidence_impacts
              (project_id,id,object_id,support_event_id,source_version_id,replacement_version_id,next_action,recorded_at_millis,affected_run_id)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![project.as_str(), id, object, support_event, previous, replacement, next_action, recorded_at_millis, affected_run],
