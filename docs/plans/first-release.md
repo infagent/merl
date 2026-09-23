@@ -130,6 +130,9 @@ The release is ready when:
 - incomplete historical version data produces an explicit hindsight run that cannot count as causal replay or enter accepted state without promotion;
 - rebuilding a recorded compiler input produces the same bytes;
 - an ambiguous reference produces an explicit context request or unresolved assertion instead of an invented meaning;
+- context requests commit with their result, reserve one successor per round, and resume through `compilation expand` with the original compiler configuration and limits;
+- expansion adds only named project objects or source versions at the original causal basis, keeps unavailable references visibly unresolved, and rejects repeated context or exhausted budgets without partial assertions;
+- final assertions expose every contributing context round, and replay reconstructs that chain after restart;
 - the compiler does not need the full Issue history to process the selected incremental fixtures;
 - a caught-up required Issue view reports its observation head, contiguous processed cutoff, and no required compilation gaps;
 - a view with required cold, pending, failed, purged, or excluded sources distinguishes "no accepted blocker" from a complete claim that no blocker exists;

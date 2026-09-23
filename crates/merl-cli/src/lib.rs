@@ -5,6 +5,7 @@ mod authority;
 mod candidates;
 mod capture;
 mod commands;
+mod compilations;
 
 use std::{
     collections::BTreeSet, error::Error, fmt, fmt::Write as _, fs::File, io::Read, path::Path,
@@ -140,6 +141,9 @@ impl From<merl_compiler::CompileError> for CliError {
             merl_compiler::CompileError::OutputBudget => "COMPILER_OUTPUT_BUDGET",
             merl_compiler::CompileError::InvalidResponse => "INVALID_COMPILER_RESPONSE",
             merl_compiler::CompileError::ContextRequired => "COMPILER_CONTEXT_REQUIRED",
+            merl_compiler::CompileError::ExpansionReference => "COMPILER_EXPANSION_REFERENCE",
+            merl_compiler::CompileError::ExpansionLoop => "COMPILER_EXPANSION_LOOP",
+            merl_compiler::CompileError::ExpansionRoundBudget => "COMPILER_EXPANSION_ROUND_BUDGET",
             merl_compiler::CompileError::UnauthorizedCompilation => "COMPILER_UNAUTHORIZED",
             merl_compiler::CompileError::UnsupportedReplayVersion(_) => {
                 "UNSUPPORTED_REPLAY_VERSION"
@@ -484,6 +488,26 @@ fn execute(
                 clock()?,
             )
         }
+        ["help", "compilation"] | ["compilation", "help"] => compilations::help(None, *json_output),
+        ["help", "compilation", operation] | ["compilation", operation, "help"] => {
+            compilations::help(Some(operation), *json_output)
+        }
+        ["compilation", operation] => compilations::execute(
+            operation,
+            compilations::Options {
+                project,
+                database,
+                run: run_id,
+                program,
+                compiler_version,
+                model,
+                prompt_digest,
+                compiler_args: &compiler_args,
+                offset,
+                json: *json_output,
+            },
+            clock,
+        ),
         [] | ["help"] => help("", *json_output),
         ["help", "project"] => help("project", *json_output),
         ["help", "project", "init"] => help("project init", *json_output),
@@ -1751,6 +1775,7 @@ fn assertion_json(
         "act": assertion.act, "epistemic_basis": assertion.epistemic_basis,
         "polarity": assertion.polarity, "confidence_millis": assertion.confidence_millis
     });
+    detail["context_rounds"] = compilations::lineage(store, project, run.as_str())?;
     if expand_source {
         let source = store
             .source_version(project, &assertion.source)?
@@ -2061,11 +2086,12 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
     let (usage, summary, related) = match command {
         "" => (
             "merl <group> <command>",
-            "Groups: project, issue, source, candidate, decision, question, finding, hypothesis, claim, task, inbox, show. Run `merl help <group>` for commands.",
+            "Groups: project, issue, source, compilation, candidate, decision, question, finding, hypothesis, claim, task, inbox, show. Run `merl help <group>` for commands.",
             vec![
                 "project",
                 "issue",
                 "source",
+                "compilation",
                 "candidate",
                 "decision",
                 "question",

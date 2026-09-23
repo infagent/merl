@@ -3,10 +3,12 @@
 mod authority;
 mod candidates;
 mod commands;
+mod expansions;
 pub use candidates::{Candidate, CandidateReview, ReviewAction};
 pub use commands::{
     CommandOperation, Commitment, Execution, Scheduling, SemanticCommandRecord, TaskState,
 };
+pub use expansions::{COMPILATION_WORK_PAGE_SIZE, ExpansionWork};
 
 pub use authority::AuthorityGrants;
 
@@ -22,7 +24,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 22;
+const SCHEMA_VERSION: i64 = 23;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -874,6 +876,10 @@ impl Store {
         Self::from_connection(Connection::open_in_memory()?)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "ordered schema migrations stay together for audit"
+    )]
     fn from_connection(mut connection: Connection) -> Result<Self, StoreError> {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "secure_delete", "ON")?;
@@ -968,6 +974,10 @@ impl Store {
             if version < 22 {
                 transaction
                     .execute_batch(include_str!("../migrations/0022_semantic_commands.sql"))?;
+            }
+            if version < 23 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0023_context_expansions.sql"))?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -1825,7 +1835,7 @@ impl Store {
         revision: ProjectRevision,
         limit: usize,
     ) -> Result<SelectedObjects, StoreError> {
-        self.objects_at_revision_with_scope(project, revision, limit, None)
+        self.objects_at_revision_with_scope(project, revision, limit, None, false)
     }
 
     /// Selects current semantic objects by caller-provided relevance before a bounded view.
@@ -1928,7 +1938,23 @@ impl Store {
         if !valid_provider_id(scope) {
             return Err(StoreError::InvalidCompilation);
         }
-        self.objects_at_revision_with_scope(project, revision, limit, Some(scope))
+        self.objects_at_revision_with_scope(project, revision, limit, Some(scope), false)
+    }
+
+    /// Selects only project-level and matching-Issue state for an initial context.
+    ///
+    /// Explicit context requests may add other project objects later.
+    ///
+    /// # Errors
+    /// Rejects future revisions, invalid limits, and corrupt history.
+    pub fn objects_at_revision_for_context(
+        &self,
+        project: &ProjectId,
+        revision: ProjectRevision,
+        limit: usize,
+        scope: &str,
+    ) -> Result<SelectedObjects, StoreError> {
+        self.objects_at_revision_with_scope(project, revision, limit, Some(scope), true)
     }
 
     fn objects_at_revision_with_scope(
@@ -1937,6 +1963,7 @@ impl Store {
         revision: ProjectRevision,
         limit: usize,
         scope: Option<&str>,
+        restrict_scope: bool,
     ) -> Result<SelectedObjects, StoreError> {
         if revision > self.project_revision(project)? || limit == 0 {
             return Err(StoreError::InvalidCompilation);
@@ -1956,10 +1983,16 @@ impl Store {
                  AND domain_events.object_kind NOT IN
                    ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review')
              ) SELECT object_id, payload_id, object_revision FROM history
-               WHERE rank = 1 ORDER BY CASE WHEN ?4 IS NOT NULL AND issue_scope_id=?4 THEN 0 ELSE 1 END, object_id LIMIT ?3",
+               WHERE rank = 1 AND (NOT ?5 OR issue_scope_id IS NULL OR issue_scope_id=?4) ORDER BY CASE WHEN ?4 IS NOT NULL AND issue_scope_id=?4 THEN 0 ELSE 1 END, object_id LIMIT ?3",
         )?;
         let basis = i64::try_from(revision.get()).map_err(|_| StoreError::InvalidCompilation)?;
-        let mut rows = statement.query(params![project.as_str(), basis, lookahead, scope])?;
+        let mut rows = statement.query(params![
+            project.as_str(),
+            basis,
+            lookahead,
+            scope,
+            restrict_scope
+        ])?;
         let mut objects = Vec::new();
         while let Some(row) = rows.next()? {
             let id: String = row.get(0)?;
@@ -2034,10 +2067,51 @@ impl Store {
         project: &ProjectId,
         record: &CompilationIntent<'_>,
     ) -> Result<(), StoreError> {
+        self.prepare_compilation_with_origin(project, record, None)
+    }
+
+    /// Persists a replay intent with its immutable context origin in the same transaction.
+    ///
+    /// # Errors
+    /// Rejects missing origins, changed context, invalid intents, and storage failures.
+    pub fn prepare_compilation_replay(
+        &mut self,
+        project: &ProjectId,
+        record: &CompilationIntent<'_>,
+        original: &str,
+    ) -> Result<(), StoreError> {
+        let prior = self
+            .compilation_run_status(project, original)?
+            .ok_or(StoreError::InvalidCompilation)?;
+        if record.mode != "replay"
+            || *record.source != prior.source
+            || record.interpretation_basis_revision != prior.interpretation_basis_revision
+            || record.source_observation_cutoff != prior.source_observation_cutoff
+            || Sha256::digest(record.context).as_slice() != prior.context_digest
+            || record.selector_version != prior.selector_version
+            || record.renderer_version != prior.renderer_version
+        {
+            return Err(StoreError::InvalidCompilation);
+        }
+        self.prepare_compilation_with_origin(project, record, Some(original))
+    }
+
+    fn prepare_compilation_with_origin(
+        &mut self,
+        project: &ProjectId,
+        record: &CompilationIntent<'_>,
+        original: Option<&str>,
+    ) -> Result<(), StoreError> {
         validate_compilation_intent(self, project, record)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let blocked: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM compilation_expansions e JOIN compilation_expansion_failures f ON f.project_id=e.project_id AND f.parent_run=e.parent_run WHERE e.project_id=?1 AND e.child_run=?2)",params![project.as_str(),record.id],|r|r.get(0))?;
+        if blocked {
+            return Err(StoreError::InvalidCompilation);
+        }
+
+        expansions::validate_retained_context(&transaction, project, record, original)?;
         let context_payload = format!("ctx_{}", record.id);
         let context_digest: [u8; 32] = Sha256::digest(record.context).into();
         insert_protected_payload(
@@ -2093,6 +2167,12 @@ impl Store {
                 record.adapter_config_digest.as_slice(), record.mode, record.started_at_millis, attempt_order],
         )?;
         insert_context_references(&transaction, project, record)?;
+        if let Some(original) = original {
+            transaction.execute(
+                "INSERT INTO compilation_replay_origins VALUES (?1,?2,?3)",
+                params![project.as_str(), record.id, original],
+            )?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -2106,6 +2186,22 @@ impl Store {
         project: &ProjectId,
         result: &CompilationResult<'_>,
     ) -> Result<(), StoreError> {
+        self.complete_compilation_with_requests(project, result, &[])
+    }
+
+    /// Commits a compiler result and its structural follow-up requests atomically.
+    ///
+    /// # Errors
+    /// Rejects invalid results, requests without a needs-context outcome, and storage failures.
+    pub fn complete_compilation_with_requests(
+        &mut self,
+        project: &ProjectId,
+        result: &CompilationResult<'_>,
+        requests: &[String],
+    ) -> Result<(), StoreError> {
+        if !result.needs_context && !requests.is_empty() {
+            return Err(StoreError::InvalidCompilation);
+        }
         let status = self
             .compilation_run_status(project, result.run_id)?
             .ok_or(StoreError::InvalidCompilation)?;
@@ -2163,6 +2259,9 @@ impl Store {
             ],
         )?;
         insert_assertions(&transaction, project, result, &source_window)?;
+        if result.needs_context {
+            expansions::insert_work(&transaction, project, result, &status, requests)?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -6336,6 +6435,7 @@ fn validate_compilation_intent(
     project: &ProjectId,
     record: &CompilationIntent<'_>,
 ) -> Result<(), StoreError> {
+    expansions::validate_successor(store, project, record)?;
     let source = store
         .source_version(project, record.source)?
         .ok_or(StoreError::InvalidCompilation)?;
