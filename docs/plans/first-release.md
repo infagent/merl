@@ -140,7 +140,7 @@ The release is ready when:
 - decision, question, finding, hypothesis, claim, and task commands accept protected semantic content through the CLI under durable command authority;
 - command content and supplemental notes commit with an immutable receipt; interrupted retries preserve that receipt, reject changed content, and cannot restore erased bytes;
 - task requests, acceptance, deferral, start, and completion preserve independent commitment, scheduling, and execution, including `accepted + deferred + not_started` with a reason and review date;
-- a structured command with supplemental prose records semantic lineage to the command, accepted batch, and affected objects; matching subject/kind requests are covered, while different-subject requests of the same kind remain candidates for review rather than being discarded or accepted automatically;
+- a structured command with supplemental prose records semantic lineage to the command, accepted batch, and affected objects; positive requests matching the subject, kind, and nonempty represented value reference are covered; same-subject requests with changed or absent values and different-subject requests of the same kind remain candidates for review;
 - every accepted object expands to its policy evaluation and typed derivation inputs;
 - extracted objects also expand through their assertions and compilation runs to available source content;
 - one compound comment may yield several assertions with independent policy dispositions and precise source spans;

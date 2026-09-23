@@ -450,7 +450,7 @@ impl merl_compiler::CompilerAdapter for Compiler {
 }
 impl Commands {
     pub fn when_a_supplement_is_compiled_with_repeated_and_additional_semantics(mut self) -> Self {
-        let note = "Keep gain fixed. Also use double precision. Measurements support both.";
+        let note = "Keep gain fixed. Also use double precision. Measurements support both. Correction: sweep the gain instead.";
         let created = self.cli(&[
             "decision",
             "create",
@@ -517,11 +517,13 @@ impl Commands {
             )
             .unwrap(),
         );
-        let assertion = |subject: &str, kind: &str, act: &str, text: &str| {
-            let start = note.find(text).unwrap();
-            serde_json::json!({"source":source.as_str(),"span_start":start,"span_end":start+text.len(),"subject":subject,"predicate":kind,"value":"none","act":act,"epistemic_basis":"reported","polarity":"positive","confidence_millis":900,"attributed_to":null})
-        };
-        let response = serde_json::json!({"schema":"merl.compiler-response/v1","assertions":[assertion("D1","decision","request","Keep gain fixed"),assertion("D2","decision","request","Also use double precision"),assertion("F1","finding","report","Measurements support both")]});
+        store
+            .put_payload(&project, &id("gain-correction"), b"Sweep the gain instead")
+            .unwrap();
+        let original_value = self.results[0]["sources"][0]["semantic_origin"]["value"]
+            .as_str()
+            .unwrap();
+        let response = supplemental_assertions(source.as_str(), note, original_value);
         merl_compiler::record_compilation_result(
             &mut store,
             &project,
@@ -598,6 +600,66 @@ impl Commands {
             self.results[6]["evidence_history"][0]["assertion"]["evidence"]["text"],
             "Also use double precision"
         );
+    }
+    pub fn then_corrective_requests_for_the_original_subject_remain_candidates(self) -> Self {
+        let inputs = self.results[1]["inputs"].as_array().unwrap();
+        for input in &inputs[3..5] {
+            assert_eq!(input["outcome"], "candidate", "{input}");
+            assert_eq!(input["reason"], "supplemental_correction");
+        }
+        assert_eq!(self.results[2]["history"].as_array().unwrap().len(), 1);
+        self
+    }
+    pub fn when_the_original_decision_is_corrected(mut self) -> Self {
+        let candidates = self.cli(&["candidate", "list"]);
+        let candidate = candidates["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|candidate| candidate["index"] == 3)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap();
+        self.results.push(self.cli(&[
+            "candidate",
+            "correct",
+            candidate,
+            "--actor",
+            "writer",
+            "--id",
+            "correct-gain",
+            "--subject",
+            "D1",
+            "--kind",
+            "decision",
+            "--value",
+            "gain-correction",
+            "--reason",
+            "The note corrects the original gain setting",
+        ]));
+        self.results
+            .push(self.cli(&["show", "D1", "--source", "--history"]));
+        self.results
+            .push(self.cli(&["candidate", "show", candidate]));
+        self
+    }
+    pub fn then_review_preserves_the_original_and_accepts_the_correction(self) {
+        assert_eq!(
+            self.results[4]["outcome"], "accepted",
+            "{:?}",
+            self.results[4]
+        );
+        let decision = &self.results[5];
+        assert_eq!(decision["content"]["text"], "Sweep the gain instead");
+        let history = decision["history"].as_array().unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(history.contains(&self.results[2]["history"][0]));
+        assert_eq!(
+            decision["evidence_history"][0]["assertion"]["evidence"]["text"],
+            "Correction: sweep the gain instead"
+        );
+        assert_eq!(self.results[6]["assertion"]["subject"], "D1");
+        assert_eq!(self.results[6]["assertion"]["value"], "gain-correction");
     }
     pub fn when_invalid_planning_transitions_and_previews_are_submitted(mut self) -> Self {
         self.results.push(self.cli(&[
@@ -832,4 +894,23 @@ impl Commands {
             None
         );
     }
+}
+
+fn supplemental_assertions(source: &str, note: &str, original_value: &str) -> Value {
+    let assertion = |subject: &str, kind: &str, act: &str, text: &str, value: &str| {
+        let start = note.find(text).unwrap();
+        serde_json::json!({
+            "source": source, "span_start": start, "span_end": start + text.len(),
+            "subject": subject, "predicate": kind, "value": value, "act": act,
+            "epistemic_basis": "reported", "polarity": "positive",
+            "confidence_millis": 900, "attributed_to": null
+        })
+    };
+    serde_json::json!({"schema": "merl.compiler-response/v1", "assertions": [
+        assertion("D1", "decision", "request", "Keep gain fixed", original_value),
+        assertion("D2", "decision", "request", "Also use double precision", "none"),
+        assertion("F1", "finding", "report", "Measurements support both", "none"),
+        assertion("D1", "decision", "request", "Correction: sweep the gain instead", "gain-correction"),
+        assertion("D1", "decision", "request", "Correction: sweep the gain instead", "none")
+    ]})
 }

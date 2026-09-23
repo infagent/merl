@@ -495,7 +495,9 @@ with an affected-object reference only after acceptance. Erasure leaves the refe
 and an unavailable result. Retrying the command cannot restore erased bytes.
 
 An authorized later compile sees the note's originating intent. Policy records a
-positive request matching the accepted command's subject and kind as `duplicate`.
+positive request matching the accepted command's subject, kind, and nonempty
+represented value reference as `duplicate`. A same-subject request with a different
+value reference or `none` remains a `candidate` with reason `supplemental_correction`.
 A request of the same kind with a different subject becomes a `candidate` with reason
 `possible_supplemental_duplicate`. It may repeat the original act under another ID
 or express a separate request. Inspect it through `candidate show`, then accept,

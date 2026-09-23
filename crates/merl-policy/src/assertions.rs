@@ -294,14 +294,21 @@ fn supplemental_disposition(
             && assertion.act == "request"
             && assertion.polarity == "positive"
         {
-            return Ok(Some(if assertion.subject == command.object.as_str() {
-                (PolicyDisposition::Duplicate, "covered_by_command")
-            } else {
-                (
+            if assertion.subject != command.object.as_str() {
+                return Ok(Some((
                     PolicyDisposition::Candidate,
                     "possible_supplemental_duplicate",
-                )
-            }));
+                )));
+            }
+            // Only an exact value reference demonstrates a restatement. A changed
+            // or absent value may express a correction to the same object.
+            if command
+                .payload
+                .as_ref()
+                .is_some_and(|value| assertion.value == value.as_str())
+            {
+                return Ok(Some((PolicyDisposition::Duplicate, "covered_by_command")));
+            }
         }
         // Notes may report new evidence, but a compiler cannot replace the object
         // whose accepted transition the note explains. Corrections require review.

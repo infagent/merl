@@ -60,3 +60,12 @@ fn reviewed_evidence_from_a_project_note_stays_project_scoped() {
         .when_a_project_note_yields_a_reviewed_finding()
         .then_the_finding_has_no_invented_issue_scope();
 }
+
+#[test]
+fn supplemental_corrective_requests_preserve_the_original_decision_for_review() {
+    Commands::given_a_project_with_a_command_actor()
+        .when_a_supplement_is_compiled_with_repeated_and_additional_semantics()
+        .then_corrective_requests_for_the_original_subject_remain_candidates()
+        .when_the_original_decision_is_corrected()
+        .then_review_preserves_the_original_and_accepts_the_correction();
+}

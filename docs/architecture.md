@@ -425,7 +425,7 @@ An identical request retry returns its recorded outcome after restart, erasure, 
 
 ### Durable semantic authority
 
-The local authority stores project-scoped `decision_author` and `command_actor` grants alongside its bootstrap administrators. Public application paths load the same grant snapshot when evaluating provider observations, source requirements, compiler-spend requests, and authority changes. `authority_v5` identifies the rules; a canonical digest records the effective actor sets used by each evaluation. The explicit-rule evaluator remains a controlled kernel seam for policy tests, while application entry points use durable grants.
+The local authority stores project-scoped `decision_author` and `command_actor` grants alongside its bootstrap administrators. Public application paths load the same grant snapshot when evaluating provider observations, source requirements, compiler-spend requests, and authority changes. `authority_v6` identifies the rules; a canonical digest records the effective actor sets used by each evaluation. The explicit-rule evaluator remains a controlled kernel seam for policy tests, while application entry points use durable grants.
 
 An administrator grants or revokes a semantic permission through an administrative policy input. The accepted batch records the actor, reason payload, policy evaluation, and project revision, then reaches the normal delta and inbox stream. Each actor/permission pair has an immutable structural target and a rebuildable `authority_grant` object. An active object grants the permission; an invalidated object records revocation. A target created for a rejected request grants nothing. Grant objects stay out of semantic views and compiler context.
 
@@ -480,7 +480,11 @@ A supplemental compiler context carries the immutable command intent, target, ki
 and represented value reference, plus task facets when present. It does not inject
 an acceptance outcome that occurred after the source cutoff. At application time,
 policy treats a positive `request` as covered when it matches an accepted originating
-command's subject and kind. A request of that kind with a different subject becomes
+command's subject, kind, and nonempty represented value reference. The compiler can
+copy that reference from `semantic_origin.value` when restating the command. A
+same-subject request with a different value reference or `none` remains a
+`supplemental_correction` candidate: matching identity does not prove matching meaning.
+A request of that kind with a different subject becomes
 a `possible_supplemental_duplicate` candidate, even from a granted decision author.
 The reviewer decides whether it repeats the command or expresses a separate act;
 sharing a source and kind does not establish equivalence. Other predicates can
