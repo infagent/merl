@@ -24,7 +24,9 @@ This order makes the build and release contract visible from the first Rust chan
 
 ## Evaluation corpus
 
-The [benchmark harness](benchmark-harness.md) owns the executable five-method comparison and its evaluator-only freeze gate. The visible corpus and sealed held-out boundary are described in [evaluation corpus](evaluation-corpus.md). Held-out v3 is archival review lineage, not an execution package. Before an evaluator prepares v4, maintainers complete the visible benchmark work and audit every first-release criterion that can be checked without held-out results. They fix or explicitly remove any confirmed gap, then freeze the product, corpus, and harness contracts. An independent evaluator prepares and reviews v4 from the selected sources after that freeze. V4 is the only held-out set used for the release claim.
+The [benchmark harness](benchmark-harness.md) runs the five-method comparison and enforces the held-out gate. [Evaluation corpus](evaluation-corpus.md) describes the visible corpus and the sealed material. Held-out v3 is an archive, not a runnable evaluation set.
+
+Before the evaluator builds v4, we finish the visible benchmark and test every first-release promise that does not need held-out results. If Merl cannot complete a promised workflow through its public interface, we fix it or remove that promise from the release. We then freeze Merl, the corpus format, and the harness. The evaluator builds and reviews v4 from the selected sources against that frozen contract. Only v4 supports the release claim.
 
 Before compiler work begins, maintainers freeze 10 to 30 complete Issue histories and divide them into three sets:
 
@@ -71,7 +73,7 @@ The slice performs these actions:
 7. Render compact researcher, engineer, and PM views with optional object focus, expansion to available evidence, and scoped semantic-coverage metadata.
 8. Ingest one new comment and expose only its accepted delta through a pollable inbox.
 9. Rebuild the same state from an empty database.
-10. Finish visible development and adversarial trials. Audit the public first-release workflow against every acceptance criterion, fix or explicitly remove confirmed gaps, and freeze the product, corpus, and harness contracts. Have an independent evaluator build and review held-out v4 before closing #24. Freeze the exact release candidate and evaluation configuration; #32 then runs v4 against all four simpler baselines and reports correctness, provenance, failures, break-even, and variance. A final evidence audit records the release decision without changing the evaluated candidate.
+10. Finish the visible development and adversarial trials, then exercise the whole release through public commands. Fix any missing workflow or remove it from the release. Once no product gaps remain, freeze Merl, the corpus format, and the harness. An independent evaluator then builds and reviews held-out v4. Close #24, freeze the exact candidate and evaluation settings, and run #32. That run compares Merl with the four simpler methods and reports correctness, provenance, failures, break-even, and variance. The final audit records the release decision; it does not change the candidate that was tested.
 
 The compiler may ask for more context when a phrase such as "the issue above" remains ambiguous. It must not guess or silently fall back to the whole thread.
 
