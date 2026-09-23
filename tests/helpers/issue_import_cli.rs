@@ -35,15 +35,20 @@ impl CliIssueHistory {
     }
 
     pub fn given_an_optional_issue_note_and_project_administrator(&mut self) -> &mut Self {
+        let output = merl(&[
+            "project",
+            "init",
+            "--id",
+            "P1",
+            "--database",
+            path(&self.database()),
+            "--administrator",
+            "pm",
+            "--json",
+        ]);
+        assert!(output.status.success(), "project initialization failed");
         let mut store = Store::open(&self.database()).expect("authority");
         let project = ProjectId::try_from("P1").expect("project");
-        store.create_project(&project).expect("project");
-        store
-            .grant_administrator_unchecked_bootstrap(
-                &project,
-                &ActorId::try_from("pm").expect("administrator"),
-            )
-            .expect("administrator grant");
         store
             .capture_source_version(
                 &project,
