@@ -495,9 +495,11 @@ with an affected-object reference only after acceptance. Erasure leaves the refe
 and an unavailable result. Retrying the command cannot restore erased bytes.
 
 An authorized later compile sees the note's originating intent. Policy records a
-repeated positive request of that command's kind as `duplicate`, including when the
-compiler assigns it another object ID. Use a separate command or source for another
-act of the same kind. Added findings or other predicates still receive their own
+positive request matching the accepted command's subject and kind as `duplicate`.
+A request of the same kind with a different subject becomes a `candidate` with reason
+`possible_supplemental_duplicate`. It may repeat the original act under another ID
+or express a separate request. Inspect it through `candidate show`, then accept,
+reject, or correct it. Added findings or other predicates still receive their own
 policy dispositions; corrections to the original object require review.
 
 Results use `merl.semantic-command/v1`; previews use
@@ -571,7 +573,7 @@ merl project rebuild --project P17 --database project.sqlite
 merl source replay --project P17 --database project.sqlite --run CR42 --json
 ```
 
-Use `project rebuild` to reconstruct objects and relations from accepted events and the provider Issue mirror from accepted observations and sightings. It never reads source prose or calls a compiler. The result includes the accepted revision and flags degraded provenance if payloads were erased. Use `source replay` to reconstruct one recorded compiler input with its original selector and renderer. Missing bytes produce `MISSING_EVIDENCE`; an unknown selector or renderer produces `UNSUPPORTED_REPLAY_VERSION`. Replay does not accept state.
+Use `project rebuild` to reconstruct objects and relations from accepted events and the provider Issue mirror from accepted observations and sightings. Accepted views also need the immutable typed policy inputs referenced by those events; semantic command receipts supply task facets and question/finding resolution status. It never reads source prose or calls a compiler. The result includes the accepted revision and flags degraded provenance if payloads were erased. Use `source replay` to reconstruct one recorded compiler input with its original selector and renderer. Missing bytes produce `MISSING_EVIDENCE`; an unknown selector or renderer produces `UNSUPPORTED_REPLAY_VERSION`. Replay does not accept state.
 
 An operator can run a configured process compiler against that causal input:
 

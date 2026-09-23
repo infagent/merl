@@ -425,7 +425,7 @@ An identical request retry returns its recorded outcome after restart, erasure, 
 
 ### Durable semantic authority
 
-The local authority stores project-scoped `decision_author` and `command_actor` grants alongside its bootstrap administrators. Public application paths load the same grant snapshot when evaluating provider observations, source requirements, compiler-spend requests, and authority changes. `authority_v4` identifies the rules; a canonical digest records the effective actor sets used by each evaluation. The explicit-rule evaluator remains a controlled kernel seam for policy tests, while application entry points use durable grants.
+The local authority stores project-scoped `decision_author` and `command_actor` grants alongside its bootstrap administrators. Public application paths load the same grant snapshot when evaluating provider observations, source requirements, compiler-spend requests, and authority changes. `authority_v5` identifies the rules; a canonical digest records the effective actor sets used by each evaluation. The explicit-rule evaluator remains a controlled kernel seam for policy tests, while application entry points use durable grants.
 
 An administrator grants or revokes a semantic permission through an administrative policy input. The accepted batch records the actor, reason payload, policy evaluation, and project revision, then reaches the normal delta and inbox stream. Each actor/permission pair has an immutable structural target and a rebuildable `authority_grant` object. An active object grants the permission; an invalidated object records revocation. A target created for a rejected request grants nothing. Grant objects stay out of semantic views and compiler context.
 
@@ -479,11 +479,13 @@ accepted object with a distinct `resolved` status and the supplied answer.
 A supplemental compiler context carries the immutable command intent, target, kind,
 and represented value reference, plus task facets when present. It does not inject
 an acceptance outcome that occurred after the source cutoff. At application time,
-policy treats a positive `request` of the originating command's kind as covered when
-that command was accepted, even if the compiler chose another subject ID. This rule
-is conservative: submit another act of that kind through a separate command or
-source. Other predicates can supply added evidence; proposed changes to the original
-object remain candidates for explicit review. Both assertion application and review
+policy treats a positive `request` as covered when it matches an accepted originating
+command's subject and kind. A request of that kind with a different subject becomes
+a `possible_supplemental_duplicate` candidate, even from a granted decision author.
+The reviewer decides whether it repeats the command or expresses a separate act;
+sharing a source and kind does not establish equivalence. Other predicates can
+supply added evidence; proposed changes to the original object remain candidates
+for explicit review. Both assertion application and review
 inherit the command's Issue scope; a project-level note cannot invent one from its
 conversation key. Object history retains note references
 after later commands change the object. Expansion resolves at most eight notes
@@ -501,7 +503,7 @@ Every accepted transaction groups its domain events under one stable `DomainEven
 
 Domain events are append-only. A correction emits another event that supersedes or reverses the earlier effect. Merl does not rewrite the historical record.
 
-Materialized objects, relations, and provider Issue heads are disposable projections. Merl rebuilds objects and relations from accepted domain events, then restores provider heads from accepted provider observations and recorded sightings.
+Materialized objects, relations, and provider Issue heads are disposable projections. Merl rebuilds objects and relations from accepted domain events, then restores provider heads from accepted provider observations and recorded sightings. Accepted views also resolve the immutable typed policy inputs referenced by those events: task planning facets and question/finding resolution status come from semantic command receipts. Those receipts are part of retained accepted history, not disposable projections. Reconstruction requires both the events and their referenced inputs; it does not require erased prose bytes.
 
 An Issue view keeps provider-owned facts apart from Merl's decisions, questions, and other semantic objects. Each semantic object shows both its accepted lifecycle and the health of its supporting evidence. A source edit can leave a decision active while its evidence awaits revalidation; a later accepted decision can supersede it even when that original evidence remains sound. Relations such as `supersedes` record how those decisions connect. Rebuilding the projection must preserve all three: lifecycle, support, and relations.
 
@@ -1244,7 +1246,7 @@ The implementation must preserve these rules:
 - Accepted-object lifecycle remains distinct from support status during revalidation.
 - Replay and evaluation runs cannot change accepted state without promotion.
 - Corrections create new domain events.
-- Materialized accepted state is reconstructible from accepted domain events.
+- Materialized accepted state is reconstructible from accepted domain events and their referenced immutable typed policy inputs.
 - Each accepted domain-event batch advances one project revision exactly once.
 - Objects carry independent revisions for update checks and future concurrency refinement.
 - Policy evaluations accept typed derivation inputs; direct commands do not require fabricated assertions or source events.

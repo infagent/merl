@@ -287,14 +287,21 @@ fn supplemental_disposition(
                 &merl_core::PolicyInput::Command(command.id.clone()),
             )?
             .is_some();
-        // A note supplements its structured act. A second subject chosen by the
-        // compiler cannot turn the same authority-bearing request into a new act.
+        // A different subject may repeat the originating act or express a separate one.
+        // Preserve that ambiguity for review instead of discarding project intent.
         if accepted
             && assertion.predicate == command.kind.as_str()
             && assertion.act == "request"
             && assertion.polarity == "positive"
         {
-            return Ok(Some((PolicyDisposition::Duplicate, "covered_by_command")));
+            return Ok(Some(if assertion.subject == command.object.as_str() {
+                (PolicyDisposition::Duplicate, "covered_by_command")
+            } else {
+                (
+                    PolicyDisposition::Candidate,
+                    "possible_supplemental_duplicate",
+                )
+            }));
         }
         // Notes may report new evidence, but a compiler cannot replace the object
         // whose accepted transition the note explains. Corrections require review.

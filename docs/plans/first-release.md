@@ -140,7 +140,7 @@ The release is ready when:
 - decision, question, finding, hypothesis, claim, and task commands accept protected semantic content through the CLI under durable command authority;
 - command content and supplemental notes commit with an immutable receipt; interrupted retries preserve that receipt, reject changed content, and cannot restore erased bytes;
 - task requests, acceptance, deferral, start, and completion preserve independent commitment, scheduling, and execution, including `accepted + deferred + not_started` with a reason and review date;
-- a structured command with supplemental prose records semantic lineage to the command, accepted batch, and affected objects; later compilation may enrich the action but cannot create a duplicate task or decision;
+- a structured command with supplemental prose records semantic lineage to the command, accepted batch, and affected objects; matching subject/kind requests are covered, while different-subject requests of the same kind remain candidates for review rather than being discarded or accepted automatically;
 - every accepted object expands to its policy evaluation and typed derivation inputs;
 - extracted objects also expand through their assertions and compilation runs to available source content;
 - one compound comment may yield several assertions with independent policy dispositions and precise source spans;
@@ -171,7 +171,7 @@ The release is ready when:
 - an unrelated project revision does not require recompilation and does not invalidate an evaluation whose dependencies remain unchanged;
 - a changed dependency or write conflict forces reevaluation or returns a conflict;
 - accepted events, projections, the project revision, and inbox entries commit atomically;
-- rebuilding disposable projections from accepted events, provider observations, and sightings reproduces the same Issue state and role views without running a compiler;
+- rebuilding disposable projections from accepted events, their referenced immutable typed policy inputs, provider observations, and sightings reproduces the same Issue state and role views without running a compiler;
 - append-only structural records reject arbitrary user, source, and model prose and accept only bounded structural values or payload references;
 - identical protected bytes in different retention scopes can be erased independently;
 - a source-content purge follows derivations through later object-backed compiler contexts, removes their protected bytes from the active store, preserves audit tombstones and digests, and marks dependent evidence unavailable; no Merl-managed replica is configured in this release;

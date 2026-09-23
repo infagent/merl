@@ -450,6 +450,7 @@ impl merl_compiler::CompilerAdapter for Compiler {
 }
 impl Commands {
     pub fn when_a_supplement_is_compiled_with_repeated_and_additional_semantics(mut self) -> Self {
+        let note = "Keep gain fixed. Also use double precision. Measurements support both.";
         let created = self.cli(&[
             "decision",
             "create",
@@ -458,7 +459,7 @@ impl Commands {
             "--summary",
             "Keep gain fixed",
             "--note",
-            "Keep gain fixed; measurements support the choice",
+            note,
             "--actor",
             "writer",
             "--id",
@@ -516,8 +517,11 @@ impl Commands {
             )
             .unwrap(),
         );
-        let assertion = |subject: &str, kind: &str, act: &str| serde_json::json!({"source":source.as_str(),"span_start":0,"span_end":15,"subject":subject,"predicate":kind,"value":"none","act":act,"epistemic_basis":"reported","polarity":"positive","confidence_millis":900,"attributed_to":null});
-        let response = serde_json::json!({"schema":"merl.compiler-response/v1","assertions":[assertion("D1","decision","request"),assertion("D2","decision","request"),assertion("F1","finding","report")]});
+        let assertion = |subject: &str, kind: &str, act: &str, text: &str| {
+            let start = note.find(text).unwrap();
+            serde_json::json!({"source":source.as_str(),"span_start":start,"span_end":start+text.len(),"subject":subject,"predicate":kind,"value":"none","act":act,"epistemic_basis":"reported","polarity":"positive","confidence_millis":900,"attributed_to":null})
+        };
+        let response = serde_json::json!({"schema":"merl.compiler-response/v1","assertions":[assertion("D1","decision","request","Keep gain fixed"),assertion("D2","decision","request","Also use double precision"),assertion("F1","finding","report","Measurements support both")]});
         merl_compiler::record_compilation_result(
             &mut store,
             &project,
@@ -541,7 +545,7 @@ impl Commands {
         self.results.push(self.cli(&["show", "D2"]));
         self
     }
-    pub fn then_policy_covers_the_original_action_and_keeps_added_evidence(self) {
+    pub fn then_policy_covers_the_original_action_and_keeps_added_evidence(self) -> Self {
         assert_eq!(
             self.results[0]["sources"][0]["semantic_origin"]["command"],
             "note-decision"
@@ -552,10 +556,48 @@ impl Commands {
         );
         let inputs = self.results[1]["inputs"].as_array().unwrap();
         assert_eq!(inputs[0]["outcome"], "duplicate", "{:?}", self.results);
-        assert_eq!(inputs[1]["outcome"], "duplicate");
+        assert_eq!(inputs[0]["reason"], "covered_by_command");
+        assert_eq!(inputs[1]["outcome"], "candidate");
+        assert_eq!(inputs[1]["reason"], "possible_supplemental_duplicate");
         assert_eq!(inputs[2]["outcome"], "candidate");
         assert_eq!(self.results[2]["history"].as_array().unwrap().len(), 1);
         assert_eq!(self.results[3]["code"], "OBJECT_NOT_FOUND");
+        self
+    }
+    pub fn when_the_additional_decision_is_reviewed(mut self) -> Self {
+        let candidates = self.cli(&["candidate", "list"]);
+        let candidate = candidates["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|candidate| candidate["index"] == 1)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap();
+        self.results
+            .push(self.cli(&["candidate", "show", candidate]));
+        self.results.push(self.cli(&[
+            "candidate",
+            "accept",
+            candidate,
+            "--actor",
+            "writer",
+            "--id",
+            "accept-separate-decision",
+        ]));
+        self.results
+            .push(self.cli(&["show", "D2", "--source", "--history"]));
+        self
+    }
+    pub fn then_review_accepts_the_separate_decision_with_its_own_evidence(self) {
+        assert_eq!(self.results[4]["status"], "pending");
+        assert_eq!(self.results[4]["assertion"]["subject"], "D2");
+        assert_eq!(self.results[5]["outcome"], "accepted");
+        assert_eq!(self.results[6]["history"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            self.results[6]["evidence_history"][0]["assertion"]["evidence"]["text"],
+            "Also use double precision"
+        );
     }
     pub fn when_invalid_planning_transitions_and_previews_are_submitted(mut self) -> Self {
         self.results.push(self.cli(&[

@@ -32,10 +32,12 @@ fn interrupted_commands_resume_without_restoring_erased_content() {
 }
 
 #[test]
-fn compiling_supplemental_prose_cannot_repeat_the_originating_action() {
+fn supplemental_prose_keeps_a_separate_decision_for_review() {
     Commands::given_a_project_with_a_command_actor()
         .when_a_supplement_is_compiled_with_repeated_and_additional_semantics()
-        .then_policy_covers_the_original_action_and_keeps_added_evidence();
+        .then_policy_covers_the_original_action_and_keeps_added_evidence()
+        .when_the_additional_decision_is_reviewed()
+        .then_review_accepts_the_separate_decision_with_its_own_evidence();
 }
 
 #[test]
