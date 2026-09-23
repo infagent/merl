@@ -59,9 +59,9 @@ An `AgentTemplate` records one approved envelope for provisioning:
 - concurrency and relative cost limits;
 - scratch and storage allowances.
 
-Templates contain credential references rather than secret values. A human or another actor with delegation authority grants a manager permission to use named template versions within a smaller concurrency or spending limit.
+Templates contain credential references rather than secret values. An authorized human grants a manager permission to use named template versions within a smaller concurrency or spending limit.
 
-Changing a template or delegation requires the same authority as creating it. A manager cannot derive a broader template from a narrow grant.
+An authorized human must change or revoke a template or delegation. A manager cannot derive a broader template from a narrow grant or delegate that grant again.
 
 ## Provisioning
 
@@ -116,8 +116,6 @@ The host worker attempts the action after commit. Interrupt requested, host deli
 Host actions target an adapter-issued session handle with process-start identity. Merl never treats a PID alone as durable identity.
 
 ## Deliverables
-
-Phase 5 includes:
 
 - versioned agent templates and human-controlled delegation grants;
 - durable runtime advertisements with provenance and expiry;

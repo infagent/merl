@@ -27,7 +27,7 @@ This document defines Merl's implementation architecture. The [product descripti
 | Direct prose | Immutable source evidence; delivery grants no semantic authority |
 | Work planning | Commitment, scheduling, and execution remain independent |
 | Agent continuity | Structured guidance and checkpoints outlive model context |
-| Agent selection | Session advertisements match task requirements with visible reasons |
+| Agent staffing | Eligible logical agents, ready sessions, and approved templates are ranked with visible reasons |
 | Agent provisioning | PMs instantiate only human-approved templates within delegated limits |
 | Workspace isolation | One writable worktree and branch per active assignment |
 | Temporary storage | Owned disk-backed scratch with reservations, quotas, and safe cleanup |
@@ -556,7 +556,7 @@ A checkpoint preserves continuity, not truth. Current accepted state wins when a
 
 ### Delegated agent provisioning
 
-An `AgentTemplate` defines the limits within which a project manager may create agents. A human or another actor with delegation authority sets:
+An `AgentTemplate` defines the limits within which a project manager may create agents. An authorized human sets:
 
 - role and allowed projects
 - host adapter and model or effort bounds
@@ -564,7 +564,7 @@ An `AgentTemplate` defines the limits within which a project manager may create 
 - context, workspace, review, and storage policies
 - concurrency and relative cost limits
 
-The template contains credential references, never secret values. Changing a template or its delegation requires the same authority as the original grant.
+The template contains credential references, never secret values. An authorized human also grants, changes, or revokes a PM's delegation. Phase 5 does not support recursive delegation.
 
 An authorized PM submits a `SpawnRequest` against one template and task. Policy checks the delegation, task state, concurrency, cost allowance, source access, and storage reservation before accepting it. The accepted transition creates a logical agent instance or selects a reusable identity, reserves its resources, and writes a durable provisioning intent.
 
@@ -1121,14 +1121,14 @@ The implementation must preserve these rules:
 - Agent guidance is scoped, attributable, lifecycle-managed, and subordinate to project policy.
 - Every fresh model context receives a bounded resume pointer; durable guidance and command documentation load only on demand.
 - Logical agents and disposable model-context generations are separate identities.
-- Context clears occur only after durable checkpoint, cursor, task-reference, assignment, and lease transitions commit.
+- Context clears occur only after the checkpoint, cursor, session closure, and lease releases commit.
 - A failed or unsupported host reset cannot masquerade as a cleared context.
 - Task-scoped reset removes prior transcript context but preserves active guidance and current project references.
 - Model, effort, availability, and cost describe an agent session rather than its logical identity.
 - Runtime advertisements retain field provenance and observation time; stale sessions are ineligible for new assignments.
 - Runtime advertisements never grant project membership, provider capability, or source access.
-- Candidate ranking excludes agents that miss hard task requirements and explains ordering among eligible agents.
-- An authorized assignment records the task requirements and session advertisement used to make the choice.
+- Candidate ranking excludes candidates that miss hard task requirements and explains ordering among eligible candidates.
+- A `StaffingDecision` records the requirements, candidate evidence, policy, and rationale. An `Assignment` records durable Agent-to-Task responsibility, while runtime advertisements belong to session execution.
 - PM agent creation stays within a human-approved template, delegation, concurrency limit, cost limit, and credential scope.
 - An agent is unavailable until its provisioning attempt produces a durable ready session.
 - Duplicate or ambiguous provisioning attempts cannot start two agents for one accepted spawn request.
