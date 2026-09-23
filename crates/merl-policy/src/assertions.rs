@@ -11,7 +11,10 @@ use merl_store::{PayloadRead, RecordedPolicyEvaluation, Store, StoreError};
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 
-fn identity<T: for<'a> TryFrom<&'a str>>(prefix: &str, parts: &[&str]) -> Result<T, PolicyError> {
+pub(super) fn identity<T: for<'a> TryFrom<&'a str>>(
+    prefix: &str,
+    parts: &[&str],
+) -> Result<T, PolicyError> {
     let mut hash = Sha256::new();
     for part in parts {
         hash.update((part.len() as u64).to_be_bytes());
@@ -190,26 +193,27 @@ pub(super) fn disposition(
     {
         return Err(PolicyError::InvalidProposal);
     }
+    if let Some(candidate) = store.candidate(
+        project,
+        &identity::<PolicyInputId>(
+            "assertion",
+            &[project.as_str(), run.as_str(), &index.to_string()],
+        )?,
+    )? && let Some(resolution) = store.candidate_resolution(project, &candidate)?
+    {
+        return Ok(if resolution == "accept" {
+            (PolicyDisposition::Duplicate, "assertion_already_accepted")
+        } else {
+            (PolicyDisposition::Rejected, "candidate_resolved")
+        });
+    }
     if store.accepted_assertion(project, run, index)? {
         return Ok((PolicyDisposition::Duplicate, "assertion_already_accepted"));
     }
     if !store.compilation_evidence_current(project, run)? {
         return Ok((PolicyDisposition::Rejected, "assertion_evidence_changed"));
     }
-    if !matches!(
-        kind.as_str(),
-        "decision"
-            | "requirement"
-            | "question"
-            | "fact"
-            | "blocker"
-            | "finding"
-            | "hypothesis"
-            | "claim"
-            | "task"
-            | "experiment"
-            | "next_action"
-    ) {
+    if !supported_kind(kind) {
         return Ok((
             PolicyDisposition::Rejected,
             "unsupported_assertion_predicate",
@@ -248,4 +252,21 @@ pub(super) fn disposition(
     } else {
         Ok((PolicyDisposition::Candidate, "outside_decision_authority"))
     }
+}
+
+pub(super) fn supported_kind(kind: &ObjectKind) -> bool {
+    matches!(
+        kind.as_str(),
+        "decision"
+            | "requirement"
+            | "question"
+            | "fact"
+            | "blocker"
+            | "finding"
+            | "hypothesis"
+            | "claim"
+            | "task"
+            | "experiment"
+            | "next_action"
+    )
 }

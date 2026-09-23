@@ -474,16 +474,31 @@ Reuse `--id` when retrying the same application. Merl returns the original outco
 
 ### Reviewing candidates
 
-Authorized users can inspect interpretations that policy did not accept:
+Inspect the candidates produced by `source apply`, then act with a current `command_actor` grant:
 
 ```bash
-merl candidate list
-merl candidate show C81
-merl candidate accept C81
-merl candidate reject C81 --reason 'Capture S1 does not measure this effect'
+merl candidate list --project P1 --database project.sqlite --json
+merl candidate show C81 --project P1 --database project.sqlite --json
+merl candidate accept C81 --project P1 --database project.sqlite \
+  --actor reviewer --id review-1 --json
+merl candidate reject C82 --project P1 --database project.sqlite \
+  --actor reviewer --id review-2 --reason 'Capture S1 does not measure this effect'
+merl candidate correct C83 --project P1 --database project.sqlite \
+  --actor reviewer --id review-3 --subject Q41 --kind question --value none \
+  --reason 'The author left this question open' --json
 ```
 
-Accepting a candidate runs a new policy evaluation against current project state. It does not rewrite the old evaluation or force its proposed events through a stale basis revision.
+Use the candidate ID returned by `list`; the examples abbreviate it as `C81`. Lists include pending and resolved candidates, with up to 100 entries per page. Pass `next_after` as `--after` to continue. `show` displays the original assertion, exact source span, semantic axes, proposed effect, first policy reason, and current dependency state. It also returns up to 100 review attempts; pass `next_offset` as `--offset` for the next page. Inspection reads no unrelated prose and spends no compiler tokens.
+
+Acceptance adopts the original proposal. Correction creates a new typed proposal linked to that candidate and assertion. `--kind` uses the same supported semantic predicates as assertion application; `--value` names an existing retained payload or `none`. A correction keeps the original Issue scope and cannot replace an existing object's kind or scope. `merl show Q41 --source --history` expands the accepted correction to the original interpretation and the reviewer's replacement, including after a later object update.
+
+Each action runs policy under current command authority. A source author's `decision_author` grant alone cannot authorize review. Acceptance and correction conflict if evidence changed or disappeared, the original target changed, or another action already resolved the candidate. Rejection can close a stale candidate. An accepted rejection advances the revision with a control record but creates no semantic object from the rejected assertion. Review control records stay out of project semantic views.
+
+Rejection and correction require `--reason`; acceptance permits it. Merl stores the note behind an erasable payload reference and limits it to 8 KiB. Inspection reports `reason_available=false` after erasure. The original assertion and review record remain available, and retrying the request does not restore erased bytes.
+
+Reuse `--id` for an identical retry. Merl returns the original outcome even after grants change. Different content under the same ID returns `POLICY_INPUT_CONFLICT`; another request to resolve a completed candidate returns `conflict`. Later `source apply` calls cannot revive rejected or corrected candidates. Use `--dry-run` to preview current policy without writing a request, reason payload, revision, or inbox entry.
+
+JSON uses `merl.candidates/v1`, `merl.candidate/v1`, `merl.candidate-review/v1`, and `merl.candidate-review-preview/v1`. A review result separates `action` from `outcome`: an authorized rejection has `action=reject` and `outcome=accepted`. Results name the reviewer, policy evaluation, and accepted revision when one exists. Policy rejection and conflict are successful command results with explicit dispositions. Invalid requests return the error envelope; an unknown candidate uses `CANDIDATE_NOT_FOUND`. Human output exposes the same dispositions and provenance.
 
 ### Rebuilding and replaying
 

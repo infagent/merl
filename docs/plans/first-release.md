@@ -144,6 +144,9 @@ The release is ready when:
 - public `source assertions` and `source apply` commands connect completed live compiler output to policy, one accepted revision, and one inbox batch without caller-supplied provenance;
 - automatic decision-author acceptance is limited to direct, positive, reported `decision` directives with act `request`; other requests and quoted authority remain candidates;
 - assertion application retries preserve recorded outcomes, new attempts deduplicate accepted run/index pairs, and concurrent grant or evidence changes cannot accept stale work;
+- public candidate commands list and inspect durable interpretations, then accept, reject, or correct them under current command authority;
+- review preserves the original compiler and policy records, stores reasons behind erasable payload references, and exposes replacement provenance through object history;
+- review retries preserve their recorded outcome, resolved candidates cannot be accepted twice, and changed evidence, targets, or grants prevent stale acceptance;
 - assertion speech act, epistemic basis, polarity, confidence, source author, assertion speaker, and attributed actor remain separate fields;
 - quoted or relayed authority remains unverified unless it links to an authenticated original source;
 - `unable_to_determine` remains a compiler outcome rather than a fabricated assertion;

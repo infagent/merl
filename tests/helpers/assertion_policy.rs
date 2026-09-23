@@ -754,3 +754,665 @@ impl AssertionScenario {
         );
     }
 }
+
+impl AssertionScenario {
+    pub fn given_a_candidate_for_review() -> Self {
+        let mut s = Self::new();
+        s.compile(
+            "ungranted",
+            Some("bob"),
+            RunMode::Live,
+            Some(Self::response(&[Self::assertion("D1")])),
+        );
+        s.basis = s.store().project_revision(&id("P1")).unwrap().get();
+        let result = s.cli(&[
+            "source",
+            "apply",
+            "--run",
+            "ungranted",
+            "--actor",
+            "worker",
+            "--id",
+            "candidate-origin",
+        ]);
+        assert_eq!(result["inputs"][0]["outcome"], "candidate", "{result}");
+        s.outputs.push(result);
+        s
+    }
+    fn candidate_id(&self) -> String {
+        self.outputs[0]["inputs"][0]["input"]
+            .as_str()
+            .unwrap()
+            .into()
+    }
+    pub fn when_the_candidate_is_inspected_and_accepted(mut self) -> Self {
+        let candidate = self.candidate_id();
+        self.inspected = Some(self.cli(&["candidate", "list"]));
+        self.detail = Some(self.cli(&["candidate", "show", &candidate]));
+        self.outputs.push(self.cli(&[
+            "candidate",
+            "accept",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "review-1",
+        ]));
+        self.retry = Some(self.cli(&[
+            "candidate",
+            "accept",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "review-1",
+        ]));
+        self.outputs.push(self.cli(&[
+            "candidate",
+            "accept",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "review-2",
+        ]));
+        self.outputs
+            .push(self.cli(&["show", "D1", "--source", "--history"]));
+        self.inbox = Some(self.cli(&["inbox", "poll", "--agent", "reader"]));
+        self
+    }
+    pub fn then_review_keeps_provenance_and_accepts_once(self) {
+        let listing = self.inspected.as_ref().unwrap();
+        assert_eq!(listing["schema"], "merl.candidates/v1", "{listing}");
+        assert_eq!(listing["candidates"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            self.inbox.as_ref().unwrap()["entries"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let detail = self.detail.as_ref().unwrap();
+        assert_eq!(detail["assertion"]["subject"], "D1");
+        assert_eq!(detail["dependency_state"], "current");
+        assert_eq!(
+            self.outputs[1]["outcome"], "accepted",
+            "{}",
+            self.outputs[1]
+        );
+        assert_eq!(self.outputs[1], *self.retry.as_ref().unwrap());
+        assert_eq!(self.outputs[2]["outcome"], "conflict");
+        assert_eq!(
+            self.outputs[3]["policy_origin"]["input"]["review"]["candidate"],
+            self.outputs[0]["inputs"][0]["input"]
+        );
+        assert_eq!(
+            self.outputs[3]["policy_origin"]["input"]["review"]["assertion"]["subject"],
+            "D1"
+        );
+        assert_eq!(
+            self.store().project_revision(&id("P1")).unwrap().get(),
+            self.basis + 1
+        );
+    }
+    pub fn when_the_candidate_is_rejected_and_its_reason_is_erased(mut self) -> Self {
+        let candidate = self.candidate_id();
+        self.outputs.push(self.cli(&[
+            "candidate",
+            "reject",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "review-1",
+            "--reason",
+            "The experiment does not measure this effect",
+        ]));
+        self.detail = Some(self.cli(&["candidate", "show", &candidate]));
+        if let Some(reason) = self.detail.as_ref().unwrap()["reviews"][0]["reason_payload"].as_str()
+        {
+            self.store().erase_payload(&id("P1"), &id(reason)).unwrap();
+        }
+        self.inspected = Some(self.cli(&["candidate", "show", &candidate]));
+        self.outputs.push(self.cli(&[
+            "source",
+            "apply",
+            "--run",
+            "ungranted",
+            "--actor",
+            "worker",
+            "--id",
+            "after-reject",
+        ]));
+        self
+    }
+    pub fn then_rejection_survives_without_retaining_reason_text(self) {
+        assert_eq!(
+            self.outputs[1]["outcome"], "accepted",
+            "{}",
+            self.outputs[1]
+        );
+        assert_eq!(self.detail.as_ref().unwrap()["status"], "rejected");
+        let inspected = self.inspected.as_ref().unwrap();
+        assert_eq!(inspected["assertion"]["subject"], "D1");
+        assert_eq!(inspected["reviews"][0]["reason_available"], false);
+        assert!(!inspected.to_string().contains("experiment does not"));
+        assert_eq!(self.outputs[2]["inputs"][0]["outcome"], "rejected");
+        assert!(self.store().object(&id("P1"), &id("D1")).unwrap().is_none());
+    }
+    pub fn when_the_candidate_is_corrected(mut self) -> Self {
+        let candidate = self.candidate_id();
+        self.outputs.push(self.cli(&[
+            "candidate",
+            "correct",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "review-1",
+            "--subject",
+            "Q1",
+            "--kind",
+            "question",
+            "--value",
+            "none",
+            "--reason",
+            "This is an open question",
+        ]));
+        self.detail = Some(self.cli(&["candidate", "show", &candidate]));
+        self.inspected = Some(self.cli(&["show", "Q1", "--source", "--history"]));
+        self
+    }
+    pub fn then_the_accepted_object_expands_to_both_interpretations(self) {
+        assert_eq!(
+            self.outputs[1]["outcome"], "accepted",
+            "{}",
+            self.outputs[1]
+        );
+        let detail = self.detail.as_ref().unwrap();
+        assert_eq!(detail["status"], "corrected");
+        assert_eq!(detail["assertion"]["subject"], "D1");
+        assert_eq!(detail["reviews"][0]["proposal"]["subject"], "Q1");
+        let object = self.inspected.as_ref().unwrap();
+        assert_eq!(object["kind"], "question");
+        assert_eq!(
+            object["policy_origin"]["input"]["review"]["assertion"]["subject"],
+            "D1"
+        );
+        assert!(self.store().object(&id("P1"), &id("D1")).unwrap().is_none());
+    }
+    pub fn when_review_is_attempted_without_permission_then_after_an_edit(mut self) -> Self {
+        let candidate = self.candidate_id();
+        self.outputs.push(self.cli(&[
+            "candidate",
+            "accept",
+            &candidate,
+            "--actor",
+            "alice",
+            "--id",
+            "unauthorized",
+        ]));
+        Self::capture(
+            &mut self.store(),
+            "source-ungranted",
+            "edited",
+            Some("source-ungranted"),
+            Some("bob"),
+        );
+        self.outputs.push(self.cli(&[
+            "candidate",
+            "accept",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "stale",
+        ]));
+        self.retry = Some(self.cli(&[
+            "candidate",
+            "accept",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "stale",
+        ]));
+        self
+    }
+    pub fn then_unauthorized_review_is_rejected_and_stale_review_conflicts(self) {
+        assert_eq!(
+            self.outputs[1]["outcome"], "rejected",
+            "{}",
+            self.outputs[1]
+        );
+        assert_eq!(
+            self.outputs[2]["outcome"], "conflict",
+            "{}",
+            self.outputs[2]
+        );
+        assert_eq!(self.outputs[2], *self.retry.as_ref().unwrap());
+        assert_eq!(
+            self.store().project_revision(&id("P1")).unwrap().get(),
+            self.basis
+        );
+        assert!(self.store().object(&id("P1"), &id("D1")).unwrap().is_none());
+    }
+}
+
+pub struct ReviewCases(Vec<(&'static str, AssertionScenario)>);
+impl ReviewCases {
+    pub fn given_prepared_review_cases() -> Self {
+        Self(
+            [
+                "grant",
+                "edit",
+                "purge",
+                "value",
+                "target",
+                "resolved",
+                "unrelated",
+            ]
+            .into_iter()
+            .map(|case| (case, AssertionScenario::given_a_candidate_for_review()))
+            .collect(),
+        )
+    }
+    pub fn when_dependencies_change_before_commit(mut self) -> Self {
+        for (case, s) in &mut self.0 {
+            s.store()
+                .put_payload(
+                    &id("P1"),
+                    &id("replacement-value"),
+                    b"Reviewed interpretation",
+                )
+                .unwrap();
+            s.store()
+                .put_payload(&id("P1"), &id("review-note"), b"Correct the interpretation")
+                .unwrap();
+            let review = merl_store::CandidateReview {
+                id: id("prepared-review"),
+                candidate: id(&s.candidate_id()),
+                actor: id("agent"),
+                action: if *case == "value" {
+                    merl_store::ReviewAction::Correct {
+                        object: id("D1"),
+                        kind: id("decision"),
+                        payload: Some(id("replacement-value")),
+                    }
+                } else {
+                    merl_store::ReviewAction::Accept
+                },
+                reason: if *case == "value" {
+                    Some(id("review-note"))
+                } else {
+                    None
+                },
+            };
+            let prepared =
+                merl_policy::prepare_candidate_review(&mut s.store(), &id("P1"), &review, NOW + 10)
+                    .unwrap();
+            match *case {
+                "grant" => {
+                    s.cli(&[
+                        "project",
+                        "authority",
+                        "revoke",
+                        "--actor",
+                        "admin",
+                        "--subject",
+                        "agent",
+                        "--permission",
+                        "command_actor",
+                        "--id",
+                        "revoke",
+                        "--reason",
+                        "Responsibility changed",
+                    ]);
+                }
+                "edit" => AssertionScenario::capture(
+                    &mut s.store(),
+                    "source-ungranted",
+                    "edited",
+                    Some("source-ungranted"),
+                    Some("bob"),
+                ),
+                "purge" => {
+                    let payload = s
+                        .store()
+                        .source_version(&id("P1"), &id("source-ungranted"))
+                        .unwrap()
+                        .unwrap()
+                        .payload
+                        .unwrap();
+                    s.store().erase_payload(&id("P1"), &payload).unwrap();
+                }
+                "value" => {
+                    s.store()
+                        .erase_payload(&id("P1"), &id("replacement-value"))
+                        .unwrap();
+                }
+                "target" => s.update_object("D1", "decision"),
+                "resolved" => {
+                    s.cli(&[
+                        "candidate",
+                        "accept",
+                        &s.candidate_id(),
+                        "--actor",
+                        "agent",
+                        "--id",
+                        "other-review",
+                    ]);
+                }
+                "unrelated" => s.update_object("unrelated", "task"),
+                _ => unreachable!(),
+            }
+            s.commit_result = Some(prepared.commit(&mut s.store()));
+            let record = s
+                .store()
+                .policy_evaluation(&id("P1"), &prepared.evaluation.id)
+                .unwrap()
+                .unwrap();
+            s.outputs.push(json!({"outcome":record.inputs[0].disposition.as_str(),"conflict":record.conflict.map(|c|c.reason_code)}));
+        }
+        self
+    }
+    pub fn then_each_changed_dependency_records_a_conflict(self) {
+        for (case, s) in self.0 {
+            if case == "unrelated" {
+                assert!(s.commit_result.as_ref().unwrap().is_ok());
+                assert_eq!(s.outputs[1]["outcome"], "accepted");
+            } else {
+                assert!(
+                    matches!(
+                        s.commit_result,
+                        Some(Err(merl_store::StoreError::PolicyConflict))
+                    ),
+                    "{case}: {:?}",
+                    s.commit_result
+                );
+                assert_eq!(
+                    s.outputs[1]["outcome"], "conflict",
+                    "{case}: {}",
+                    s.outputs[1]
+                );
+                assert!(!s.outputs[1]["conflict"].is_null());
+                if !matches!(case, "target" | "resolved") {
+                    assert!(s.store().object(&id("P1"), &id("D1")).unwrap().is_none());
+                }
+            }
+        }
+    }
+}
+impl AssertionScenario {
+    fn update_object(&self, object: &str, kind: &str) {
+        merl_policy::apply_current(
+            &mut self.store(),
+            &id("P1"),
+            &id("agent"),
+            id("update-eval"),
+            id("update-batch"),
+            NOW + 12,
+            &[merl_policy::Proposal::Command {
+                id: id("update-command"),
+                event: merl_core::DomainEvent::PutObject {
+                    id: id("update-event"),
+                    object: id(object),
+                    kind: id(kind),
+                    payload: None,
+                    issue_scope: Some("issue-1".into()),
+                    lifecycle: merl_core::ObjectLifecycle::Active,
+                },
+            }],
+        )
+        .unwrap();
+    }
+    pub fn when_the_candidate_is_corrected_then_the_object_changes(self) -> Self {
+        let mut s = self.when_the_candidate_is_corrected();
+        s.update_object("Q1", "question");
+        s.inspected = Some(s.cli(&["show", "Q1", "--source", "--history"]));
+        s
+    }
+    pub fn then_history_retains_the_correction_and_original_evidence(self) {
+        let object = self.inspected.unwrap();
+        assert_eq!(object["history"].as_array().unwrap().len(), 2);
+        let evidence = &object["evidence_history"][0];
+        assert_eq!(evidence["assertion"]["subject"], "D1", "{object}");
+        assert_eq!(evidence["review"]["proposal"]["subject"], "Q1");
+        assert_eq!(evidence["assertion"]["evidence"]["status"], "available");
+    }
+}
+
+impl AssertionScenario {
+    pub fn when_review_is_previewed_then_retried_after_revocation_and_rebuild(mut self) -> Self {
+        let candidate = self.candidate_id();
+        self.outputs.push(self.cli(&[
+            "candidate",
+            "correct",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "preview",
+            "--subject",
+            "Q1",
+            "--kind",
+            "question",
+            "--value",
+            "none",
+            "--reason",
+            "Open question",
+            "--dry-run",
+        ]));
+        self.detail = Some(self.cli(&["candidate", "show", &candidate]));
+        self.outputs.push(self.cli(&[
+            "candidate",
+            "accept",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "review-1",
+        ]));
+        self.cli(&[
+            "project",
+            "authority",
+            "revoke",
+            "--actor",
+            "admin",
+            "--subject",
+            "agent",
+            "--permission",
+            "command_actor",
+            "--id",
+            "revoke",
+            "--reason",
+            "Responsibility changed",
+        ]);
+        self.cli(&["project", "rebuild"]);
+        self.outputs.push(self.cli(&[
+            "candidate",
+            "accept",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "review-1",
+        ]));
+        self.outputs.push(self.cli(&[
+            "candidate",
+            "reject",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "review-1",
+            "--reason",
+            "Different intent",
+        ]));
+        self.inspected = Some(self.cli(&["project", "view"]));
+        self.retry = Some(self.cli(&["help", "candidate", "correct"]));
+        let args = [
+            "candidate",
+            "show",
+            &candidate,
+            "--project",
+            "P1",
+            "--database",
+            self.database.0.to_str().unwrap(),
+        ]
+        .map(str::to_owned);
+        self.outputs
+            .push(match merl_cli::run_with_clock(&args, &|| Ok(NOW)) {
+                merl_cli::CliResponse::Success(text) => json!(text),
+                other => panic!("human inspection failed: {other:?}"),
+            });
+        self
+    }
+    pub fn then_preview_is_read_only_and_retry_preserves_the_original_outcome(self) {
+        assert_eq!(
+            self.outputs[1]["schema"],
+            "merl.candidate-review-preview/v1"
+        );
+        assert_eq!(self.outputs[1]["outcome"], "accepted");
+        assert_eq!(self.detail.as_ref().unwrap()["reviews"], json!([]));
+        assert_eq!(self.outputs[2], self.outputs[3]);
+        assert_eq!(self.outputs[4]["code"], "POLICY_INPUT_CONFLICT");
+        assert_eq!(
+            self.store().project_revision(&id("P1")).unwrap().get(),
+            self.basis + 2
+        );
+        assert!(
+            self.store()
+                .candidate_review(&id("P1"), &id("preview"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(self.store().object(&id("P1"), &id("Q1")).unwrap().is_none());
+        assert_eq!(self.retry.as_ref().unwrap()["schema"], "merl.help/v1");
+        let human = self.outputs[5].as_str().unwrap();
+        assert!(
+            human.contains("D1") && human.contains("source-ungranted") && human.contains("agent")
+        );
+        assert!(human.contains("accepted"));
+    }
+}
+
+pub struct ReviewRecoveryCases {
+    cases: Vec<(
+        &'static str,
+        &'static str,
+        AssertionScenario,
+        merl_core::PayloadId,
+    )>,
+}
+impl ReviewRecoveryCases {
+    fn arguments<'a>(operation: &'a str, candidate: &'a str) -> Vec<&'a str> {
+        let mut args = vec![
+            "candidate",
+            operation,
+            candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "interrupted-review",
+            "--reason",
+            "The author left this question open",
+        ];
+        if operation == "correct" {
+            args.extend(["--subject", "Q1", "--kind", "question", "--value", "none"]);
+        }
+        args
+    }
+    pub fn given_review_reasons_without_requests() -> Self {
+        let mut cases = Vec::new();
+        for (operation, state) in [
+            ("reject", "matching"),
+            ("correct", "matching"),
+            ("reject", "different"),
+            ("reject", "erased"),
+        ] {
+            // Obtain the reason reference through public inspection in a separate
+            // database, so this crash fixture does not duplicate the ID algorithm.
+            let reference = AssertionScenario::given_a_candidate_for_review();
+            let candidate = reference.candidate_id();
+            let completed = reference.cli(&Self::arguments(operation, &candidate));
+            assert_eq!(completed["outcome"], "accepted");
+            let detail = reference.cli(&["candidate", "show", &candidate]);
+            let payload = id(detail["reviews"][0]["reason_payload"].as_str().unwrap());
+            let scenario = AssertionScenario::given_a_candidate_for_review();
+            let bytes: &[u8] = if state == "different" {
+                b"Different retained reason"
+            } else {
+                b"The author left this question open"
+            };
+            {
+                let mut store = scenario.store();
+                store.put_payload(&id("P1"), &payload, bytes).unwrap();
+                if state == "erased" {
+                    store.erase_payload(&id("P1"), &payload).unwrap();
+                }
+                assert!(
+                    store
+                        .candidate_review(&id("P1"), &id("interrupted-review"))
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            cases.push((operation, state, scenario, payload));
+        }
+        Self { cases }
+    }
+    pub fn when_the_same_commands_are_retried_after_restart(mut self) -> Self {
+        for (operation, _, scenario, _) in &mut self.cases {
+            let candidate = scenario.candidate_id();
+            let args = Self::arguments(operation, &candidate);
+            scenario.outputs.push(scenario.cli(&args));
+            scenario.outputs.push(scenario.cli(&args));
+        }
+        self
+    }
+    pub fn then_matching_reasons_recover_and_conflicting_or_erased_reasons_stay_unchanged(self) {
+        for (operation, state, scenario, payload) in self.cases {
+            let result = &scenario.outputs[1];
+            assert_eq!(result, &scenario.outputs[2]);
+            let store = scenario.store();
+            if state == "matching" {
+                assert_eq!(result["outcome"], "accepted", "{operation}: {result}");
+                assert_eq!(
+                    store.project_revision(&id("P1")).unwrap().get(),
+                    scenario.basis + 1
+                );
+                assert!(
+                    store
+                        .candidate_review(&id("P1"), &id("interrupted-review"))
+                        .unwrap()
+                        .is_some()
+                );
+                assert_eq!(
+                    store.read_payload(&id("P1"), &payload).unwrap(),
+                    merl_store::PayloadRead::Available(
+                        b"The author left this question open".to_vec()
+                    )
+                );
+            } else {
+                assert_eq!(result["code"], "POLICY_INPUT_CONFLICT", "{state}: {result}");
+                assert_eq!(
+                    store.project_revision(&id("P1")).unwrap().get(),
+                    scenario.basis
+                );
+                assert!(
+                    store
+                        .candidate_review(&id("P1"), &id("interrupted-review"))
+                        .unwrap()
+                        .is_none()
+                );
+                let expected = if state == "erased" {
+                    merl_store::PayloadRead::Unavailable
+                } else {
+                    merl_store::PayloadRead::Available(b"Different retained reason".to_vec())
+                };
+                assert_eq!(store.read_payload(&id("P1"), &payload).unwrap(), expected);
+            }
+        }
+    }
+}

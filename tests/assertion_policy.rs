@@ -67,3 +67,59 @@ fn preview_explains_policy_without_accepting_state() {
         .when_the_application_is_previewed_and_help_is_requested()
         .then_the_preview_explains_outcomes_without_committing();
 }
+
+#[test]
+fn a_reviewer_can_find_and_accept_a_candidate_after_restart() {
+    AssertionScenario::given_a_candidate_for_review()
+        .when_the_candidate_is_inspected_and_accepted()
+        .then_review_keeps_provenance_and_accepts_once();
+}
+
+#[test]
+fn rejection_keeps_the_interpretation_and_an_erasable_reason() {
+    AssertionScenario::given_a_candidate_for_review()
+        .when_the_candidate_is_rejected_and_its_reason_is_erased()
+        .then_rejection_survives_without_retaining_reason_text();
+}
+
+#[test]
+fn correction_preserves_the_original_interpretation() {
+    AssertionScenario::given_a_candidate_for_review()
+        .when_the_candidate_is_corrected()
+        .then_the_accepted_object_expands_to_both_interpretations();
+}
+
+#[test]
+fn review_cannot_bypass_authority_or_changed_evidence() {
+    AssertionScenario::given_a_candidate_for_review()
+        .when_review_is_attempted_without_permission_then_after_an_edit()
+        .then_unauthorized_review_is_rejected_and_stale_review_conflicts();
+}
+
+#[test]
+fn prepared_reviews_cannot_outlive_their_authority_evidence_or_candidate() {
+    assertion_policy::ReviewCases::given_prepared_review_cases()
+        .when_dependencies_change_before_commit()
+        .then_each_changed_dependency_records_a_conflict();
+}
+
+#[test]
+fn corrected_evidence_remains_expandable_after_another_object_update() {
+    AssertionScenario::given_a_candidate_for_review()
+        .when_the_candidate_is_corrected_then_the_object_changes()
+        .then_history_retains_the_correction_and_original_evidence();
+}
+
+#[test]
+fn review_previews_and_retries_preserve_their_public_contract() {
+    AssertionScenario::given_a_candidate_for_review()
+        .when_review_is_previewed_then_retried_after_revocation_and_rebuild()
+        .then_preview_is_read_only_and_retry_preserves_the_original_outcome();
+}
+
+#[test]
+fn interrupted_review_retries_reuse_matching_reasons_without_overwriting_or_restoring_them() {
+    assertion_policy::ReviewRecoveryCases::given_review_reasons_without_requests()
+        .when_the_same_commands_are_retried_after_restart()
+        .then_matching_reasons_recover_and_conflicting_or_erased_reasons_stay_unchanged();
+}

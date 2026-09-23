@@ -1,6 +1,8 @@
 //! SQLite authority for accepted events and independently erasable payloads.
 
 mod authority;
+mod candidates;
+pub use candidates::{Candidate, CandidateReview, ReviewAction};
 
 pub use authority::AuthorityGrants;
 
@@ -16,7 +18,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 21;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -954,6 +956,10 @@ impl Store {
                 transaction.execute_batch(include_str!(
                     "../migrations/0020_assertion_evidence_conflicts.sql"
                 ))?;
+            }
+            if version < 21 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0021_candidate_reviews.sql"))?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -1913,7 +1919,7 @@ impl Store {
         }
         let mut statement = self.connection.prepare(
             "SELECT id,kind FROM objects WHERE project_id=?1
-             AND kind NOT IN ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant')
+             AND kind NOT IN ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review')
              AND lifecycle!='superseded'",
         )?;
         let rows = statement.query_map(params![project.as_str()], |row| {
@@ -2021,7 +2027,7 @@ impl Store {
                 AND domain_event_batches.id = domain_events.batch_id
                WHERE domain_events.project_id = ?1 AND domain_event_batches.revision <= ?2
                  AND domain_events.object_kind NOT IN
-                   ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant')
+                   ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review')
              ) SELECT object_id, payload_id, object_revision FROM history
                WHERE rank = 1 ORDER BY CASE WHEN ?4 IS NOT NULL AND issue_scope_id=?4 THEN 0 ELSE 1 END, object_id LIMIT ?3",
         )?;
@@ -4318,7 +4324,7 @@ impl Store {
         let mut statement = self.connection.prepare(
             "SELECT id FROM objects WHERE project_id=?1 AND issue_scope_id=?2
                AND kind NOT IN
-                 ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant')
+                 ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review')
                ORDER BY id",
         )?;
         let ids = statement
@@ -5120,18 +5126,8 @@ fn validate_policy_dependencies(
     transaction: &Transaction<'_>,
     evaluation: &PolicyEvaluation,
 ) -> Result<Option<PolicyConflictDetail>, StoreError> {
-    for input in &evaluation.inputs {
-        if input.disposition == PolicyDisposition::Accepted
-            && let merl_core::PolicyInput::ObservedAssertion { run, .. } = &input.input
-            && !compilation_evidence_current(transaction, &evaluation.project, run)?
-        {
-            return Ok(Some(PolicyConflictDetail {
-                reason_code: "assertion_evidence_changed".into(),
-                target_id: Some(run.to_string()),
-                expected_revision: None,
-                actual_revision: None,
-            }));
-        }
+    if let Some(conflict) = candidates::validate_reviews(transaction, evaluation)? {
+        return Ok(Some(conflict));
     }
     let basis = to_sql_revision(evaluation.basis_project_revision)?;
     for read in &evaluation.reads {
@@ -5307,6 +5303,7 @@ fn insert_policy_record(
             }
         }
     }
+    candidates::record_review_lineage(transaction, evaluation, conflict.is_none() && !duplicate)?;
     for (index, read) in evaluation.reads.iter().enumerate() {
         let (kind, target, revision) = match read {
             PolicyRead::Object { id, revision } => (
@@ -5386,17 +5383,25 @@ fn record_accepted_support(
     evaluation: &PolicyEvaluation,
     origin: &merl_core::PolicyEventOrigin,
 ) -> Result<(), StoreError> {
-    let Some(merl_core::PolicyInputDecision {
-        input: merl_core::PolicyInput::ObservedAssertion { run, index, .. },
-        ..
-    }) = evaluation.inputs.get(origin.input_index as usize)
-    else {
+    let input = &evaluation
+        .inputs
+        .get(origin.input_index as usize)
+        .ok_or(StoreError::InvalidPolicyEvaluation)?
+        .input;
+    let lineage = match input {
+        merl_core::PolicyInput::ObservedAssertion { run, index, .. } => Some((run.clone(), *index)),
+        merl_core::PolicyInput::Command(id) => {
+            candidates::review_lineage(transaction, &evaluation.project, id)?
+        }
+        _ => None,
+    };
+    let Some((run, index)) = lineage else {
         return Ok(());
     };
     let source: String = transaction.query_row(
         "SELECT source_version_id FROM observed_assertions
          WHERE project_id=?1 AND run_id=?2 AND assertion_index=?3",
-        params![evaluation.project.as_str(), run.as_str(), i64::from(*index)],
+        params![evaluation.project.as_str(), run.as_str(), i64::from(index)],
         |row| row.get(0),
     )?;
     let object: String = transaction.query_row(

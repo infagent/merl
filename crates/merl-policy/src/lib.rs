@@ -2,6 +2,11 @@
 
 mod assertions;
 mod authority;
+mod candidates;
+pub use candidates::{
+    candidate_dependencies_current, candidate_review_evaluation, prepare_candidate_review,
+    preview_candidate_review, review_candidate,
+};
 
 pub use assertions::{apply_assertions, prepare_assertions};
 
@@ -106,7 +111,7 @@ impl PolicyRules {
 
     fn from_grants(grants: merl_store::AuthorityGrants) -> Result<Self, StoreError> {
         Ok(Self {
-            version: PolicyVersion::try_from("authority_v2")
+            version: PolicyVersion::try_from("authority_v3")
                 .map_err(|_| StoreError::CorruptHistory)?,
             decision_authors: grants.decision_authors,
             command_actors: grants.command_actors,
@@ -166,11 +171,14 @@ pub enum PolicyError {
     InvalidProposal,
     /// A run is unfinished or requires explicit promotion before causal application.
     RunIneligible,
+    /// No recorded assertion candidate has this identity in the project.
+    CandidateMissing,
 }
 
 impl fmt::Display for PolicyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CandidateMissing => formatter.write_str("candidate does not exist"),
             Self::Store(error) => write!(formatter, "{error}"),
             Self::RunIneligible => formatter.write_str(
                 "assertion application requires a completed live run without context requests",
