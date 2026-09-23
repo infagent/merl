@@ -283,7 +283,7 @@ The context manifest contains:
 - the renderer version and exact rendered-input digest;
 - a `PayloadRef` to the rendered input when retention policy permits retention.
 
-The context builder starts with the triggering event, materialized state as it existed at the interpretation-basis revision, relevant unresolved objects, and a bounded recent window ending at the observation cutoff. It may include only source observations and accepted state causally available at that position. The first Issue selector puts objects named by a stable handle in the triggering text ahead of other objects, then favors accepted objects attached to that Issue. It records the chosen revisions and whether the budget left objects out. If the named objects cannot fit, context construction fails visibly. Later selectors may expand through relations without crossing the cutoff.
+The context builder starts with the triggering event, materialized state as it existed at the interpretation-basis revision, relevant unresolved objects, and a bounded recent window ending at the observation cutoff. It may include only source observations and accepted state causally available at that position. The `issue_context_v2` selector puts objects named by a stable handle in the triggering text first, then selects accepted objects attached to that Issue or to the project. It leaves other Issues out until the compiler names an object or source in an explicit expansion request. Recorded `issue_context_v1` runs retain their original selection of Issue objects followed by other project objects for replay. It records the chosen revisions and whether the budget left objects out. If the named objects cannot fit, context construction fails visibly. Later selectors may expand through relations without crossing the cutoff.
 
 Late `on_demand` compilation preserves the source's historical meaning. If a source arrived at observation 100 when the project was at revision 72, a compilation requested at revision 500 still uses `interpretation_basis_revision=72` and `source_observation_cutoff=100`. The resulting assertions then enter a new `PolicyEvaluation` with `basis_project_revision=500`. Interpretation asks what the source meant then; policy asks what that assertion may change now. A run that deliberately uses later knowledge to reinterpret the source is `hindsight`, not ordinary on-demand compilation.
 
@@ -292,6 +292,34 @@ Historical bootstrap processes the Issue description and each later source obser
 Some provider APIs expose only the latest body of an edited comment. If Merl lacks the prior versions needed for faithful replay, it labels the run `hindsight`. Hindsight may help analysis, but it cannot count as a live or replay result in the no-future-leakage benchmark or enter accepted state without explicit promotion.
 
 If the input remains ambiguous, the compiler returns an unresolved assertion or a structured request for more context. It does not silently load the full history.
+
+A `context_required` result commits its requested references, next round number,
+and reserved successor run ID in the same transaction. A response that requests
+context contributes no assertions. `compilation expand` prepares one successor
+using the parent's exact input plus the named expansions, then dispatches the
+original compiler configuration. Schema upgrades recover requests from older retained responses and mark erased
+responses as blocked work. The child keeps the original mode, interpretation
+basis, observation cutoff, and all nine limits. Expansion rounds consume the
+initial run's allowance; another invocation cannot reset it.
+
+An expansion can name a semantic object at the recorded project revision or one
+retained source version observed by the cutoff. Explicit source references may
+cross Issue scopes inside the project. Control objects, future or missing
+references, erased bytes, and requests for context already supplied remain
+unresolved. Merl does not substitute current state or load an entire thread.
+The complete input must still fit the original byte, payload, object, and source
+limits. Merl commits a blocked or exhausted work outcome before returning an
+expansion error, without creating a partial child context. Intent insertion rechecks retained
+parent, source, and object bytes under the writer transaction, so a concurrent
+purge cannot leave a new copy of erased content.
+
+Each round has its own immutable intent, result, and context manifest. Restart
+loads a prepared successor's saved bytes; retrying a completed successor reuses
+its outcome. Assertion and object expansion include the contributing run chain.
+Replay records its input's original run so an expanded context can reconstruct
+through the same chain. Purge follows the selected source and object references
+in each round, and can make reconstruction unavailable.
+
 
 Replay uses the recorded manifest, available source bytes, and the run's recorded selector and renderer versions. An older supported selector must rebuild the input it originally chose. An unknown version gets an explicit unsupported-version result; a purge can make exact replay impossible even when the version is supported.
 

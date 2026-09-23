@@ -972,7 +972,14 @@ impl CliIssueHistory {
         assert_eq!(replay.rendered, original.rendered);
         assert_eq!(replay.source_window, original.source_window);
         assert_eq!(replay.objects, original.objects);
-        assert_eq!(rerun.selector_version, "issue_context_v1");
+        assert_eq!(
+            rerun.selector_version,
+            store
+                .compilation_run_status(&project, "recorded-run")
+                .expect("original status")
+                .expect("original run")
+                .selector_version
+        );
     }
 }
 

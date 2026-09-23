@@ -1,5 +1,8 @@
 //! Causal source selection and a bounded, authority-free compiler boundary.
 
+mod expansion;
+pub use expansion::prepare_context_expansion;
+
 use std::{
     collections::BTreeSet,
     error::Error,
@@ -34,6 +37,12 @@ pub enum CompileError {
     InvalidResponse,
     /// The bounded run needs another context round before coverage is complete.
     ContextRequired,
+    /// A named reference is missing, disallowed, or outside the causal basis.
+    ExpansionReference,
+    /// The request repeats context already supplied in an earlier round.
+    ExpansionLoop,
+    /// The compiler used all authorized expansion rounds.
+    ExpansionRoundBudget,
     /// Live on-demand work has no matching accepted spend authorization.
     UnauthorizedCompilation,
     /// This binary cannot reconstruct an older selector or renderer contract.
@@ -56,6 +65,13 @@ impl fmt::Display for CompileError {
                 f.write_str("compiler returned an invalid structured response")
             }
             Self::ContextRequired => f.write_str("compiler requested more context"),
+            Self::ExpansionReference => {
+                f.write_str("requested context is unavailable at the causal basis")
+            }
+            Self::ExpansionLoop => f.write_str("requested context was already supplied"),
+            Self::ExpansionRoundBudget => {
+                f.write_str("compiler expansion round budget is exhausted")
+            }
             Self::UnauthorizedCompilation => {
                 f.write_str("compiler run lacks matching accepted authorization")
             }
@@ -99,6 +115,22 @@ pub struct CompilerLimits {
 }
 
 impl CompilerLimits {
+    /// Restores the limits recorded with an immutable run intent.
+    #[must_use]
+    pub const fn from_array(values: [usize; 9]) -> Self {
+        Self {
+            input_bytes: values[0],
+            output_bytes: values[1],
+            output_tokens: values[2],
+            assertions: values[3],
+            context_requests: values[4],
+            expansion_rounds: values[5],
+            payload_bytes: values[6],
+            source_window: values[7],
+            objects: values[8],
+        }
+    }
+
     /// Returns the stable field order used by run and authorization records.
     #[must_use]
     pub const fn as_array(self) -> [usize; 9] {
@@ -203,6 +235,7 @@ struct ContextPosition {
 enum SelectorVersion {
     ObjectIdPrefixV1,
     IssueContextV1,
+    IssueContextV2,
 }
 
 impl SelectorVersion {
@@ -210,6 +243,7 @@ impl SelectorVersion {
         match version {
             "object_id_prefix_v1" => Ok(Self::ObjectIdPrefixV1),
             "issue_context_v1" => Ok(Self::IssueContextV1),
+            "issue_context_v2" => Ok(Self::IssueContextV2),
             other => Err(CompileError::UnsupportedReplayVersion(other.to_owned())),
         }
     }
@@ -242,7 +276,7 @@ pub fn build_context(
         basis,
         limits,
         false,
-        SelectorVersion::IssueContextV1,
+        SelectorVersion::IssueContextV2,
     )
 }
 
@@ -269,6 +303,9 @@ pub fn rebuild_recorded_context(
         return Err(CompileError::UnsupportedReplayVersion(
             status.renderer_version,
         ));
+    }
+    if status.selector_version == "context_expansion_v1" {
+        return expansion::rebuild(store, project, run_id, limits);
     }
     let selector = SelectorVersion::for_replay(&status.selector_version)?;
     let saved = store
@@ -460,14 +497,14 @@ fn build_context_from_sources(
         SelectorVersion::ObjectIdPrefixV1 => {
             store.objects_at_revision(project, position.basis, limits.objects)?
         }
-        SelectorVersion::IssueContextV1 => select_objects(
+        SelectorVersion::IssueContextV1 | SelectorVersion::IssueContextV2 => select_objects(
             store,
             project,
             position.basis,
-            trigger,
             &source.context_scope_id,
-            &sources,
+            sources.iter().find(|item| item.id == trigger.as_str()),
             limits.objects,
+            matches!(selector, SelectorVersion::IssueContextV2),
         )?,
     };
     let object_context = render_objects(store, project, selection, &mut payload_bytes, limits)?;
@@ -548,7 +585,7 @@ fn build_revalidation_context(
         },
         selected,
         limits,
-        SelectorVersion::IssueContextV1,
+        SelectorVersion::IssueContextV2,
     )
 }
 
@@ -595,14 +632,14 @@ fn select_objects(
     store: &Store,
     project: &ProjectId,
     basis: ProjectRevision,
-    trigger: &SourceVersionId,
     scope: &str,
-    sources: &[RenderedSource],
+    trigger_source: Option<&RenderedSource>,
     budget: usize,
+    restrict_scope: bool,
 ) -> Result<SelectedObjects, CompileError> {
     let mut named = Vec::new();
     let mut seen = BTreeSet::new();
-    if let Some(trigger_source) = sources.iter().find(|item| item.id == trigger.as_str()) {
+    if let Some(trigger_source) = trigger_source {
         for token in trigger_source
             .body
             .as_deref()
@@ -617,7 +654,11 @@ fn select_objects(
                 continue;
             }
             if let Ok(id) = ObjectId::try_from(token)
-                && let Some((revision, payload)) = store.object_at_revision(project, &id, basis)?
+                && let Some((revision, payload)) = if restrict_scope {
+                    store.compiler_object_at_revision(project, &id, basis)?
+                } else {
+                    store.object_at_revision(project, &id, basis)?
+                }
             {
                 named.push((id, revision, payload));
                 if named.len() > budget {
@@ -626,12 +667,21 @@ fn select_objects(
             }
         }
     }
-    let historical = store.objects_at_revision_for_scope(
-        project,
-        basis,
-        budget.saturating_add(named.len()),
-        scope,
-    )?;
+    let historical = if restrict_scope {
+        store.objects_at_revision_for_context(
+            project,
+            basis,
+            budget.saturating_add(named.len()),
+            scope,
+        )?
+    } else {
+        store.objects_at_revision_for_scope(
+            project,
+            basis,
+            budget.saturating_add(named.len()),
+            scope,
+        )?
+    };
     let mut selected = named;
     let total_visible = selected.len()
         + historical
@@ -1042,6 +1092,7 @@ pub struct PreparedCompilation {
 
 #[derive(Clone, Copy)]
 struct ContextVersions<'a> {
+    replay_of: Option<&'a str>,
     renderer: &'a str,
     selector: &'a str,
 }
@@ -1184,7 +1235,7 @@ fn prepare_compilation(
                 store.project_revision(project)?,
                 limits,
                 true,
-                SelectorVersion::IssueContextV1,
+                SelectorVersion::IssueContextV2,
             )?
         }
     } else {
@@ -1198,8 +1249,9 @@ fn prepare_compilation(
         request,
         context,
         ContextVersions {
+            replay_of: None,
             renderer: "json_v1",
-            selector: "issue_context_v1",
+            selector: "issue_context_v2",
         },
     )
 }
@@ -1281,6 +1333,7 @@ pub fn prepare_replay_compilation(
         request,
         rebuilt,
         ContextVersions {
+            replay_of: Some(original_run_id),
             renderer: &original.renderer_version,
             selector: &original.selector_version,
         },
@@ -1329,7 +1382,11 @@ fn persist_compilation(
         max_objects: limits.objects,
         started_at_millis: now_millis,
     };
-    store.prepare_compilation(project, &intent)?;
+    if let Some(original) = versions.replay_of {
+        store.prepare_compilation_replay(project, &intent, original)?;
+    } else {
+        store.prepare_compilation(project, &intent)?;
+    }
     Ok(Some(PreparedCompilation {
         id: run_id.into(),
         context,
@@ -1407,7 +1464,17 @@ pub fn record_compilation_result(
         needs_context,
         completed_at_millis,
     };
-    store.complete_compilation(project, &result)?;
+    let requests = if needs_context {
+        serde_json::from_slice::<CompilerResponse>(response.ok_or(CompileError::InvalidResponse)?)
+            .map_err(|_| CompileError::InvalidResponse)?
+            .context_required
+            .into_iter()
+            .map(|r| r.reference)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    store.complete_compilation_with_requests(project, &result, &requests)?;
     match validated {
         Ok((_, _, true)) => Err(CompileError::ContextRequired),
         Ok(_) => Ok(()),
@@ -1423,6 +1490,9 @@ fn error_code(error: &CompileError) -> &'static str {
         CompileError::NonCausalHistory => "noncausal_history",
         CompileError::MissingEvidence => "missing_evidence",
         CompileError::ContextRequired => "context_required",
+        CompileError::ExpansionReference => "expansion_reference",
+        CompileError::ExpansionLoop => "expansion_loop",
+        CompileError::ExpansionRoundBudget => "expansion_round_budget",
         CompileError::UnauthorizedCompilation => "unauthorized_compilation",
         CompileError::UnsupportedReplayVersion(_) => "unsupported_replay_version",
         CompileError::Store(_) | CompileError::InvalidResponse => "invalid_response",
@@ -1452,7 +1522,6 @@ fn validate_response(
     if response.schema != "merl.compiler-response/v1"
         || response.assertions.len() > limits.assertions
         || response.context_required.len() > limits.context_requests
-        || (!response.context_required.is_empty() && limits.expansion_rounds == 0)
         || response.relations.len() > limits.assertions.saturating_mul(4)
         || response.relations.iter().any(|relation| {
             !valid_id(&relation.subject)
@@ -1530,7 +1599,15 @@ fn validate_response(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok((assertions, needs_context))
+    // A partial interpretation must not escape while the compiler still needs context.
+    Ok((
+        if needs_context {
+            Vec::new()
+        } else {
+            assertions
+        },
+        needs_context,
+    ))
 }
 
 fn source_span_valid(rendered: &serde_json::Value, source: &str, start: usize, end: usize) -> bool {

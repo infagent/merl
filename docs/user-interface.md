@@ -378,9 +378,9 @@ JSON output includes the same meanings, IDs, revision, provenance links, and exp
 Compiler diagnostics show the bounded input used for one run:
 
 ```bash
-merl compilation show CR42
-merl compilation context CR42
-merl compilation context CR42 --rendered
+merl compilation list --project P1 --database project.sqlite
+merl compilation show --project P1 --database project.sqlite --run CR42
+merl compilation context --project P1 --database project.sqlite --run CR42
 ```
 
 ```text
@@ -391,14 +391,46 @@ Source cutoff: observation 771
 Mode: live
 Objects: D18@4 Q32@2 E37@5
 Recent source: SE768 SE769 SE771
-Selector: issue-context/v1, budget 6000 chars
+Selector: issue_context_v2, budget 6000 bytes
 Renderer: issue-compiler-context/v1
 Input digest: sha256:...
 Output budget: assertions=12 bytes=16384 tokens=1200 context_requests=2 expansions=2 payload_bytes=2048
 Output: accepted by protocol, 4 assertions
 ```
 
-The compiler can return `context_required` with a relation, object, or source range it needs. Policy limits the expansion and records a new context. Merl reports unresolved ambiguity when it cannot satisfy the request; it does not load the full thread without recording that choice.
+The first-release compiler can return `context_required` with named object or
+source-version references. Relation traversal and source ranges require a later
+protocol extension. Merl records the request as durable work and keeps required
+coverage open until a successor completes.
+
+`compilation list` pages through 100 requests at a time with `--offset` and JSON
+`next_offset`. It includes pending, running, blocked, exhausted, failed, and
+completed work. `compilation show --run` reports the reserved child run, round,
+references, failure code, and contributing contexts. `compilation context --run`
+reads the exact retained input, including its rendered bytes.
+
+Execute one round with the same executable, arguments, compiler version, model,
+and prompt digest used by the parent:
+
+```bash
+merl compilation expand --project P1 --database project.sqlite --run CR42 \
+  --program ./compiler --compiler-version v1 --model model-a \
+  --prompt-digest sha256:<hex> --json
+```
+
+Repeat that command after interruption to resume its reserved child. If the
+child requests more context, use its run ID for the next round. The command
+inherits the original limits and accepts no budget overrides. It does not
+apply assertions; use `source assertions` and `source apply` on the final run.
+
+An unavailable or disallowed reference reports `COMPILER_EXPANSION_REFERENCE`;
+repeated context reports `COMPILER_EXPANSION_LOOP`. Exhausted rounds report
+`COMPILER_EXPANSION_ROUND_BUDGET`, and input overflow reports
+`COMPILER_INPUT_BUDGET`. Erased evidence reports `MISSING_EVIDENCE`. A changed
+compiler configuration reports `COMPILER_UNAUTHORIZED` and leaves the pending
+work unchanged. Blocked and exhausted requests retain their original response
+and cannot satisfy required coverage. A new compilation attempt needs a new
+run identity and the applicable spend authorization.
 
 The response schema accepts typed assertions, spans, relations, confidence, attribution, `context_required`, and `unresolved`. It does not accept rationale or summary essays, copied source passages, or chain-of-thought. Exceeding an output or expansion limit fails the run with a stable error; Merl does not keep a truncated subset as though compilation succeeded.
 
