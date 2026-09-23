@@ -95,9 +95,9 @@ pub struct MerlPreparationRecord {
     pub capture_phase: bool,
     /// Candidate source revision that built the authority.
     pub candidate_commit: String,
-    /// Executable that produced this authority and receipt.
+    /// Rejects an authority prepared by code outside the frozen candidate.
     pub candidate_preparer_binary_sha256: String,
-    /// Closed authority database produced by that executable.
+    /// Detects replacement of the closed authority after receipt creation.
     pub authority_sha256: String,
     /// Compiler files and run identity.
     pub compiler: CompilerAttestation,
@@ -122,7 +122,7 @@ pub struct PreparationExpectation<'a> {
     pub capture_phase: bool,
     /// Candidate source revision.
     pub candidate_commit: &'a str,
-    /// Hash of the candidate executable that prepared the authority.
+    /// Keeps authority production tied to the candidate selected for this run.
     pub candidate_preparer_binary_sha256: &'a str,
 }
 
