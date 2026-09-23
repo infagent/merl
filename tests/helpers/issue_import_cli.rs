@@ -89,7 +89,11 @@ impl CliIssueHistory {
     }
 
     pub fn when_a_non_administrator_requires_the_note(&mut self) -> &mut Self {
-        self.latest = Some(require_note(&self.database(), "researcher"));
+        self.latest = Some(require_note(
+            &self.database(),
+            "researcher",
+            "Untrusted reason",
+        ));
         self
     }
 
@@ -124,7 +128,7 @@ impl CliIssueHistory {
     }
 
     pub fn when_the_note_is_required_for_the_issue(&mut self) -> &mut Self {
-        let promotion = require_note(&self.database(), "pm");
+        let promotion = require_note(&self.database(), "pm", "Required safety evidence");
         self.first_promotion = Some(promotion.clone());
         self.latest = Some(promotion);
         self
@@ -790,7 +794,7 @@ impl CliIssueHistory {
     }
 }
 
-fn require_note(database: &Path, actor: &str) -> serde_json::Value {
+fn require_note(database: &Path, actor: &str, reason: &str) -> serde_json::Value {
     let output = merl(&[
         "source",
         "require",
@@ -805,7 +809,7 @@ fn require_note(database: &Path, actor: &str) -> serde_json::Value {
         "--actor",
         actor,
         "--reason",
-        "Required safety evidence",
+        reason,
         "--json",
     ]);
     assert!(

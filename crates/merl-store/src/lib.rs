@@ -2150,12 +2150,12 @@ impl Store {
             });
         }
 
-        let reason_id = coverage_reason_id(project, &source, scope)?;
+        let reason_id = coverage_reason_id(project, &source, scope, &digest)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute(
-            "INSERT INTO payloads (project_id,id,digest,bytes) VALUES (?1,?2,?3,?4)",
+            "INSERT OR IGNORE INTO payloads (project_id,id,digest,bytes) VALUES (?1,?2,?3,?4)",
             params![
                 project.as_str(),
                 reason_id.as_str(),
@@ -2164,7 +2164,7 @@ impl Store {
             ],
         )?;
         transaction.execute(
-            "INSERT INTO source_coverage_targets
+            "INSERT OR IGNORE INTO source_coverage_intents
              (project_id,object_id,source_id,scope_id,reason_payload_id,reason_digest)
              VALUES (?1,?2,?3,?4,?5,?6)",
             params![
@@ -4407,8 +4407,12 @@ fn coverage_reason_id(
     project: &ProjectId,
     source: &SourceId,
     scope: &str,
+    reason_digest: &[u8; 32],
 ) -> Result<PayloadId, StoreError> {
-    let digest = Sha256::digest(format!("{project}/{source}/{scope}").as_bytes());
+    let mut hash = Sha256::new();
+    hash.update(format!("{project}/{source}/{scope}").as_bytes());
+    hash.update(reason_digest);
+    let digest = hash.finalize();
     let mut id = String::from("coverage_reason_");
     for byte in digest {
         write!(&mut id, "{byte:02x}").expect("writing a digest is infallible");
@@ -5232,6 +5236,15 @@ fn insert_accepted_batch(
                         return Err(StoreError::InvalidBatch);
                     }
                 }
+                if kind.as_str() == "source_coverage_requirement" {
+                    accept_source_coverage_target(
+                        transaction,
+                        &batch.project,
+                        object,
+                        payload.as_ref().ok_or(StoreError::InvalidBatch)?,
+                        issue_scope.as_deref().ok_or(StoreError::InvalidBatch)?,
+                    )?;
+                }
                 transaction.execute(
                     "INSERT INTO domain_events (project_id, batch_id, id, event_index, event_kind, object_id, object_kind, payload_id, issue_scope_id, lifecycle) VALUES (?1, ?2, ?3, ?4, 'put_object', ?5, ?6, ?7, ?8, ?9)",
                     params![batch.project.as_str(), batch.id.as_str(), id.as_str(), i64::try_from(index).map_err(|_| StoreError::InvalidBatch)?, object.as_str(), kind.as_str(), payload.as_ref().map(PayloadId::as_str), issue_scope, lifecycle.as_str()],
@@ -5270,6 +5283,42 @@ fn insert_accepted_batch(
     transaction.execute(
         "UPDATE projects SET current_revision = ?2 WHERE id = ?1",
         params![batch.project.as_str(), revision],
+    )?;
+    Ok(())
+}
+
+fn accept_source_coverage_target(
+    transaction: &Transaction<'_>,
+    project: &ProjectId,
+    object: &ObjectId,
+    reason: &PayloadId,
+    scope: &str,
+) -> Result<(), StoreError> {
+    type RawIntent = (String, String, Vec<u8>);
+    let intent: Option<RawIntent> = transaction
+        .query_row(
+            "SELECT source_id,scope_id,reason_digest FROM source_coverage_intents
+             WHERE project_id=?1 AND object_id=?2 AND reason_payload_id=?3",
+            params![project.as_str(), object.as_str(), reason.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let (source, stored_scope, digest) = intent.ok_or(StoreError::InvalidBatch)?;
+    if stored_scope != scope {
+        return Err(StoreError::InvalidBatch);
+    }
+    transaction.execute(
+        "INSERT INTO source_coverage_targets
+         (project_id,object_id,source_id,scope_id,reason_payload_id,reason_digest)
+         VALUES (?1,?2,?3,?4,?5,?6)",
+        params![
+            project.as_str(),
+            object.as_str(),
+            source,
+            scope,
+            reason.as_str(),
+            digest
+        ],
     )?;
     Ok(())
 }
