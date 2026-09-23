@@ -331,6 +331,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
         ["help", "show"] => help("show", *json_output),
         ["help", "source"] => help("source", *json_output),
         ["help", "source", "show"] => help("source show", *json_output),
+        ["help", "source", "compile"] => help("source compile", *json_output),
         ["help", "source", "require"] => help("source require", *json_output),
         ["help", "source", "purge"] => help("source purge", *json_output),
         ["help", "source", "purge-audit"] => help("source purge-audit", *json_output),
@@ -595,6 +596,67 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
             })?;
             let store = Store::open(Path::new(database))?;
             render_source(&store, &project, &version, *json_output)
+        }
+        ["source", "compile"] => {
+            let project =
+                parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
+            let database = database.ok_or_else(|| invalid_input("--database is required"))?;
+            let version = SourceVersionId::try_from(
+                version.ok_or_else(|| invalid_input("--version is required"))?,
+            )
+            .map_err(|error| invalid_input(&error.to_string()))?;
+            let run = run_id.ok_or_else(|| invalid_input("--run is required"))?;
+            let adapter = merl_compiler::ProcessCompiler {
+                program: program
+                    .ok_or_else(|| invalid_input("--program is required"))?
+                    .into(),
+                args: compiler_args,
+                version: compiler_version
+                    .ok_or_else(|| invalid_input("--compiler-version is required"))?
+                    .into(),
+                model: model
+                    .ok_or_else(|| invalid_input("--model is required"))?
+                    .into(),
+                prompt_digest: parse_sha256(
+                    prompt_digest.ok_or_else(|| invalid_input("--prompt-digest is required"))?,
+                )?,
+            };
+            let mut store = Store::open(Path::new(database))?;
+            let prepared = merl_compiler::prepare_compilation(
+                &mut store,
+                &project,
+                &version,
+                &adapter,
+                merl_compiler::RunRequest {
+                    id: run,
+                    limits: first_release_compiler_limits(),
+                    mode: merl_compiler::RunMode::Live,
+                    now_millis: utc_now_millis()?,
+                },
+            )?;
+            let outcome = if let Some(prepared) = prepared {
+                let response = merl_compiler::execute_compilation(&prepared, &adapter);
+                merl_compiler::record_compilation_result(
+                    &mut store,
+                    &project,
+                    &prepared,
+                    response,
+                    utc_now_millis()?,
+                )?;
+                "compiled"
+            } else {
+                "unchanged"
+            };
+            let coverage = store.semantic_coverage(&project)?;
+            if *json_output {
+                render_json(&json!({
+                    "schema": "merl.source-compile/v1", "action": "source.compile",
+                    "project": project.as_str(), "source": version.as_str(), "run": run,
+                    "outcome": outcome, "required_gaps": coverage.required_gaps
+                }))
+            } else {
+                Ok(format!("Compiled {version} as {run} ({outcome}).\n"))
+            }
         }
         ["source", "require"] => {
             let project =
@@ -1128,6 +1190,20 @@ where
         write!(&mut value, "{byte:02x}").expect("writing a digest is infallible");
     }
     T::try_from(value.as_str()).map_err(|error| invalid_input(&error.to_string()))
+}
+
+const fn first_release_compiler_limits() -> merl_compiler::CompilerLimits {
+    merl_compiler::CompilerLimits {
+        input_bytes: 64 * 1024,
+        output_bytes: 16 * 1024,
+        output_tokens: 2_048,
+        assertions: 32,
+        context_requests: 8,
+        expansion_rounds: 2,
+        payload_bytes: 48 * 1024,
+        source_window: 16,
+        objects: 32,
+    }
 }
 
 fn render_purge_preview(
@@ -1724,9 +1800,10 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "source" => (
             "merl source <command>",
-            "Commands: show, require, replay, purge, purge-audit.",
+            "Commands: show, compile, require, replay, purge, purge-audit.",
             vec![
                 "source show",
+                "source compile",
                 "source require",
                 "source replay",
                 "source purge",
@@ -1737,6 +1814,11 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             "merl source show --project <id> --database <path> --version <id> [--format json]",
             "Read one captured source version. Erased bytes report unavailable.",
             vec!["show"],
+        ),
+        "source compile" => (
+            "merl source compile --project <id> --database <path> --version <id> --run <id> --program <path> --compiler-version <version> --model <model> --prompt-digest sha256:<hex> [--compiler-arg <arg>] [--format json]",
+            "Compile one retained source through a configured process adapter and record the attempt.",
+            vec!["source show", "issue view"],
         ),
         "source require" => (
             "merl source require --project <id> --database <path> --version <id> --scope <id> --actor <id> --reason <text> [--format json]",

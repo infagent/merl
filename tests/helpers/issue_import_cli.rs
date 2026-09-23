@@ -255,26 +255,50 @@ impl CliIssueHistory {
     }
 
     fn compile_optional_note(&self, version: &str, run: &str) {
-        let mut store = Store::open(&self.database()).expect("authority");
-        let project = ProjectId::try_from("P1").expect("project");
-        let source = SourceVersionId::try_from(version).expect("source version");
-        let prepared = merl_compiler::prepare_compilation(
-            &mut store,
-            &project,
-            &source,
-            &merl_compiler::FakeCompiler,
-            merl_compiler::RunRequest {
-                id: run,
-                limits: test_compiler_limits(),
-                mode: merl_compiler::RunMode::Live,
-                now_millis: 10,
-            },
-        )
-        .expect("prepare compiler")
-        .expect("new run");
-        let response = merl_compiler::execute_compilation(&prepared, &merl_compiler::FakeCompiler);
-        merl_compiler::record_compilation_result(&mut store, &project, &prepared, response, 11)
-            .expect("record compiler response");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let program = self.directory.path.join(format!("compiler-{version}.sh"));
+            let response = format!(
+                "{{\"schema\":\"merl.compiler-response/v1\",\"assertions\":[],\"context_required\":[],\"unresolved\":[{{\"source\":\"{version}\",\"span_start\":0,\"span_end\":0}}],\"relations\":[]}}"
+            );
+            std::fs::write(
+                &program,
+                format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{response}'\n"),
+            )
+            .expect("test compiler program");
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))
+                .expect("make compiler executable");
+            let output = merl(&[
+                "source",
+                "compile",
+                "--project",
+                "P1",
+                "--database",
+                path(&self.database()),
+                "--version",
+                version,
+                "--run",
+                run,
+                "--program",
+                path(&program),
+                "--compiler-version",
+                "v1",
+                "--model",
+                "deterministic-test",
+                "--prompt-digest",
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                "--json",
+            ]);
+            assert!(
+                output.status.success(),
+                "stdout: {} stderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        #[cfg(not(unix))]
+        panic!("the CLI compiler acceptance adapter requires a Unix process");
     }
 
     pub fn given_a_new_project(&mut self) -> &mut Self {
@@ -785,20 +809,6 @@ fn require_note(database: &Path, actor: &str) -> serde_json::Value {
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).expect("require result")
-}
-
-fn test_compiler_limits() -> merl_compiler::CompilerLimits {
-    merl_compiler::CompilerLimits {
-        input_bytes: 4096,
-        output_bytes: 4096,
-        output_tokens: 512,
-        assertions: 4,
-        context_requests: 1,
-        expansion_rounds: 1,
-        payload_bytes: 2048,
-        source_window: 2,
-        objects: 4,
-    }
 }
 
 fn merl(arguments: &[&str]) -> std::process::Output {
