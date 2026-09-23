@@ -1728,7 +1728,9 @@ impl Store {
             return Err(StoreError::InvalidBatch);
         }
         let mut statement = self.connection.prepare(
-            "SELECT id,kind FROM objects WHERE project_id=?1 AND kind!='provider_issue' AND lifecycle!='superseded'",
+            "SELECT id,kind FROM objects WHERE project_id=?1
+             AND kind NOT IN ('provider_issue','source_coverage_requirement','source_compilation_request')
+             AND lifecycle!='superseded'",
         )?;
         let rows = statement.query_map(params![project.as_str()], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -1834,6 +1836,8 @@ impl Store {
                  ON domain_event_batches.project_id = domain_events.project_id
                 AND domain_event_batches.id = domain_events.batch_id
                WHERE domain_events.project_id = ?1 AND domain_event_batches.revision <= ?2
+                 AND domain_events.object_kind NOT IN
+                   ('provider_issue','source_coverage_requirement','source_compilation_request')
              ) SELECT object_id, payload_id, object_revision FROM history
                WHERE rank = 1 ORDER BY CASE WHEN ?4 IS NOT NULL AND issue_scope_id=?4 THEN 0 ELSE 1 END, object_id LIMIT ?3",
         )?;
@@ -3907,7 +3911,9 @@ impl Store {
         }
         let mut statement = self.connection.prepare(
             "SELECT id FROM objects WHERE project_id=?1 AND issue_scope_id=?2
-               AND kind!='provider_issue' ORDER BY id",
+               AND kind NOT IN
+                 ('provider_issue','source_coverage_requirement','source_compilation_request')
+               ORDER BY id",
         )?;
         let ids = statement
             .query_map(params![project.as_str(), scope], |row| {

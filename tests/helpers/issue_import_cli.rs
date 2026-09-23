@@ -154,6 +154,80 @@ impl CliIssueHistory {
         self
     }
 
+    pub fn when_ordinary_project_views_are_read(&mut self) -> &mut Self {
+        let database = self.database();
+        let project_view = merl(&[
+            "project",
+            "view",
+            "--project",
+            "P1",
+            "--database",
+            path(&database),
+            "--role",
+            "pm",
+            "--json",
+        ]);
+        let issue_view = merl(&[
+            "issue",
+            "view",
+            "--project",
+            "P1",
+            "--database",
+            path(&database),
+            "--issue",
+            "issue-204",
+            "--scope",
+            "issue-204",
+            "--role",
+            "researcher",
+            "--json",
+        ]);
+        let delta = merl(&[
+            "project",
+            "delta",
+            "--project",
+            "P1",
+            "--database",
+            path(&database),
+            "--since",
+            "0",
+            "--json",
+        ]);
+        for output in [&project_view, &issue_view, &delta] {
+            assert!(output.status.success(), "view command failed");
+        }
+        self.latest = Some(serde_json::json!({
+            "project": serde_json::from_slice::<serde_json::Value>(&project_view.stdout)
+                .expect("project view"),
+            "issue": serde_json::from_slice::<serde_json::Value>(&issue_view.stdout)
+                .expect("issue view"),
+            "delta": serde_json::from_slice::<serde_json::Value>(&delta.stdout)
+                .expect("project delta")
+        }));
+        self
+    }
+
+    pub fn then_the_coverage_change_is_auditable_but_not_semantic_context(&mut self) -> &mut Self {
+        let views = self.latest.as_ref().expect("views");
+        assert_eq!(views["project"]["project_revision"], 1);
+        assert_eq!(views["issue"]["project_revision"], 1);
+        assert_eq!(
+            views["delta"]["batches"]
+                .as_array()
+                .expect("accepted batches")
+                .len(),
+            1
+        );
+        for view in [&views["project"], &views["issue"]] {
+            let objects = view["objects"].as_array().expect("semantic objects");
+            assert!(objects.iter().all(|object| {
+                object["kind"] != "source_coverage_requirement"
+                    && object["summary"] != "Required safety evidence"
+            }));
+        }
+        self
+    }
+
     pub fn when_the_same_requirement_is_retried(&mut self) -> &mut Self {
         let output = merl(&[
             "source",
