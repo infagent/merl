@@ -588,8 +588,12 @@ impl CliIssueHistory {
         let response = format!(
             "{{\"schema\":\"merl.compiler-response/v1\",\"assertions\":[],\"context_required\":[],\"unresolved\":[{{\"source\":\"{source}\",\"span_start\":0,\"span_end\":0}}],\"relations\":[]}}"
         );
-        std::fs::write(&program, format!("#!/bin/sh\nprintf '%s' '{response}'\n"))
-            .expect("test compiler program");
+        // Reading the request avoids a scheduler-dependent broken pipe in the parent writer.
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{response}'\n"),
+        )
+        .expect("test compiler program");
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))
             .expect("make compiler executable");
         self.compiler_program = Some(program);
