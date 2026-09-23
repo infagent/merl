@@ -2,7 +2,9 @@
 
 Merl needs issue histories where the current answer differs from an earlier answer. A long thread alone does not test that. The visible development set has two public captures awaiting review and three controlled histories that test different failure modes.
 
-The corpus is split by complete issue, never by comment. Development material is visible to implementers. Adversarial cases remain separate. Held-out v3 remains evaluator-only archival and review lineage. It is not an execution artifact for this harness. After maintainers complete the public first-release audit and freeze the product, corpus, and harness contracts, an independent evaluator will construct and review v4 from the same selected sources in the final format. V4 alone will support the release evaluation. Its inputs, identities, answers, scoring keys, and reviewer material stay outside implementation-agent access.
+The corpus is split by complete issue, never by comment. Development material is visible to implementers. Adversarial cases remain separate. Held-out v3 stays with the evaluator as an archive; this harness cannot run it.
+
+We will not build v4 until Merl passes the public first-release audit and the product, corpus format, and harness stop changing. The evaluator will then rebuild the same selected sources in the final format and review the result. Only v4 supports the release evaluation. Its inputs, identities, answers, scoring keys, and reviewer notes stay outside implementation-agent access.
 
 The [benchmark harness](benchmark-harness.md) has a five-reader contract and a separate evaluator-side scoring boundary. It has not run a held-out case. The old v3 manifest commitments do not define the new v4 execution package.
 
