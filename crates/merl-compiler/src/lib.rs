@@ -34,6 +34,8 @@ pub enum CompileError {
     InvalidResponse,
     /// The bounded run needs another context round before coverage is complete.
     ContextRequired,
+    /// Live on-demand work has no matching accepted spend authorization.
+    UnauthorizedCompilation,
     /// This binary cannot reconstruct an older selector or renderer contract.
     UnsupportedReplayVersion(String),
     /// The external compiler process failed to start or complete.
@@ -54,6 +56,9 @@ impl fmt::Display for CompileError {
                 f.write_str("compiler returned an invalid structured response")
             }
             Self::ContextRequired => f.write_str("compiler requested more context"),
+            Self::UnauthorizedCompilation => {
+                f.write_str("compiler run lacks matching accepted authorization")
+            }
             Self::UnsupportedReplayVersion(version) => {
                 write!(f, "unsupported compiler replay version: {version}")
             }
@@ -94,7 +99,9 @@ pub struct CompilerLimits {
 }
 
 impl CompilerLimits {
-    const fn recorded(self) -> [usize; 9] {
+    /// Returns the stable field order used by run and authorization records.
+    #[must_use]
+    pub const fn as_array(self) -> [usize; 9] {
         [
             self.input_bytes,
             self.output_bytes,
@@ -234,7 +241,7 @@ pub fn rebuild_recorded_context(
     let status = store
         .compilation_run_status(project, run_id)?
         .ok_or(CompileError::NonCausalHistory)?;
-    if status.mode == "hindsight" || status.limits != limits.recorded() {
+    if status.mode == "hindsight" || status.limits != limits.as_array() {
         return Err(CompileError::NonCausalHistory);
     }
     if status.renderer_version != "json_v1" {
@@ -703,6 +710,15 @@ pub trait CompilerAdapter {
     fn model(&self) -> &str;
     /// Digest of the adapter's prompt or ruleset.
     fn prompt_digest(&self) -> [u8; 32];
+    /// Digest of the executable artifact and fixed adapter configuration.
+    fn configuration_digest(&self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(self.id().as_bytes());
+        digest.update(self.version().as_bytes());
+        digest.update(self.model().as_bytes());
+        digest.update(self.prompt_digest());
+        digest.finalize().into()
+    }
     /// Runs the compiler and returns encoded structured output.
     ///
     /// # Errors
@@ -735,15 +751,75 @@ pub fn protocol_schemas() -> serde_json::Value {
 #[derive(Debug)]
 pub struct ProcessCompiler {
     /// Executable chosen by the evaluation runner.
-    pub program: String,
+    program: String,
     /// Fixed arguments; the exact context is supplied only on stdin.
-    pub args: Vec<String>,
+    args: Vec<String>,
     /// Stable implementation version.
-    pub version: String,
+    version: String,
     /// Provider/model identity for evaluation provenance.
-    pub model: String,
+    model: String,
     /// Hash of the configured prompt, which remains outside the database.
-    pub prompt_digest: [u8; 32],
+    prompt_digest: [u8; 32],
+    configuration_digest: [u8; 32],
+}
+
+impl ProcessCompiler {
+    /// Freezes a process adapter to the executable bytes and fixed arguments on disk now.
+    ///
+    /// # Errors
+    /// Returns an adapter error when the executable cannot be read.
+    pub fn new(
+        program: impl Into<String>,
+        args: Vec<String>,
+        version: impl Into<String>,
+        model: impl Into<String>,
+        prompt_digest: [u8; 32],
+    ) -> Result<Self, CompileError> {
+        let program = program.into();
+        let artifact = std::fs::read(&program)
+            .map_err(|error| CompileError::Adapter(format!("cannot read compiler: {error}")))?;
+        let configuration_digest = process_configuration_digest(&artifact, &args)?;
+        Ok(Self {
+            program,
+            args,
+            version: version.into(),
+            model: model.into(),
+            prompt_digest,
+            configuration_digest,
+        })
+    }
+
+    fn verify_configuration(&self) -> Result<(), CompileError> {
+        let artifact = std::fs::read(&self.program)
+            .map_err(|error| CompileError::Adapter(format!("cannot read compiler: {error}")))?;
+        if process_configuration_digest(&artifact, &self.args)? != self.configuration_digest {
+            return Err(CompileError::UnauthorizedCompilation);
+        }
+        Ok(())
+    }
+}
+
+fn process_configuration_digest(
+    artifact: &[u8],
+    args: &[String],
+) -> Result<[u8; 32], CompileError> {
+    let mut digest = Sha256::new();
+    digest.update(b"merl.process-compiler-config/v1");
+    digest.update(
+        u64::try_from(artifact.len())
+            .map_err(|_| CompileError::Adapter("compiler artifact is too large".into()))?
+            .to_le_bytes(),
+    );
+    digest.update(artifact);
+    for argument in args {
+        digest.update(
+            u64::try_from(argument.len())
+                .map_err(|_| CompileError::Adapter("compiler argument is too large".into()))?
+                .to_le_bytes(),
+        );
+        digest.update(argument.as_bytes());
+    }
+    Ok(digest.finalize().into())
 }
 
 impl CompilerAdapter for ProcessCompiler {
@@ -759,7 +835,12 @@ impl CompilerAdapter for ProcessCompiler {
     fn prompt_digest(&self) -> [u8; 32] {
         self.prompt_digest
     }
+    fn configuration_digest(&self) -> [u8; 32] {
+        self.configuration_digest
+    }
     fn compile(&self, context: &[u8], limits: CompilerLimits) -> Result<Vec<u8>, CompileError> {
+        // Queued work may outlive the file originally authorized at this path.
+        self.verify_configuration()?;
         let context_value: serde_json::Value =
             serde_json::from_slice(context).map_err(|_| CompileError::InvalidResponse)?;
         let request = serde_json::to_vec(&ProcessRequest {
@@ -903,6 +984,7 @@ pub struct PreparedCompilation {
     compiler_version: String,
     model_id: String,
     prompt_digest: [u8; 32],
+    adapter_config_digest: [u8; 32],
 }
 
 #[derive(Clone, Copy)]
@@ -919,6 +1001,62 @@ impl PreparedCompilation {
     }
 }
 
+/// Persists eager source work selected by the source's capture policy.
+///
+/// # Errors
+/// Rejects non-eager sources and non-live requests before creating a run.
+pub fn prepare_eager_compilation(
+    store: &mut Store,
+    project: &ProjectId,
+    source: &SourceVersionId,
+    adapter: &impl CompilerAdapter,
+    request: RunRequest<'_>,
+) -> Result<Option<PreparedCompilation>, CompileError> {
+    let captured = store
+        .source_version(project, source)?
+        .ok_or(CompileError::NonCausalHistory)?;
+    if request.mode != RunMode::Live
+        || captured.compilation_mode != merl_core::CompilationMode::Eager
+    {
+        return Err(CompileError::UnauthorizedCompilation);
+    }
+    prepare_compilation(store, project, source, adapter, request)
+}
+
+/// Persists a corpus-evaluation attempt that cannot satisfy live coverage.
+///
+/// # Errors
+/// Rejects non-evaluation requests and invalid compiler context.
+pub fn prepare_evaluation_compilation(
+    store: &mut Store,
+    project: &ProjectId,
+    source: &SourceVersionId,
+    adapter: &impl CompilerAdapter,
+    request: RunRequest<'_>,
+) -> Result<Option<PreparedCompilation>, CompileError> {
+    if request.mode != RunMode::Eval {
+        return Err(CompileError::InvalidResponse);
+    }
+    prepare_compilation(store, project, source, adapter, request)
+}
+
+/// Persists deliberate reinterpretation using current accepted state.
+///
+/// # Errors
+/// Rejects non-hindsight requests and invalid compiler context.
+pub fn prepare_hindsight_compilation(
+    store: &mut Store,
+    project: &ProjectId,
+    source: &SourceVersionId,
+    adapter: &impl CompilerAdapter,
+    request: RunRequest<'_>,
+) -> Result<Option<PreparedCompilation>, CompileError> {
+    if request.mode != RunMode::Hindsight {
+        return Err(CompileError::InvalidResponse);
+    }
+    prepare_compilation(store, project, source, adapter, request)
+}
+
 /// Persists an immutable run intent before external compiler work begins.
 ///
 /// `None` means this identity already has a successful result. A pending
@@ -926,7 +1064,7 @@ impl PreparedCompilation {
 ///
 /// # Errors
 /// Fails on missing causal history, a previous failed result, or an incompatible run ID.
-pub fn prepare_compilation(
+fn prepare_compilation(
     store: &mut Store,
     project: &ProjectId,
     source: &SourceVersionId,
@@ -946,7 +1084,8 @@ pub fn prepare_compilation(
             || existing.compiler_version != adapter.version()
             || existing.model_id != adapter.model()
             || existing.prompt_digest != adapter.prompt_digest()
-            || existing.limits != limits.recorded()
+            || existing.adapter_config_digest != adapter.configuration_digest()
+            || existing.limits != limits.as_array()
         {
             return Err(CompileError::InvalidResponse);
         }
@@ -975,6 +1114,7 @@ pub fn prepare_compilation(
             compiler_version: adapter.version().into(),
             model_id: adapter.model().into(),
             prompt_digest: adapter.prompt_digest(),
+            adapter_config_digest: existing.adapter_config_digest,
         }));
     }
     if mode == RunMode::Replay {
@@ -1009,6 +1149,36 @@ pub fn prepare_compilation(
             selector: "issue_context_v1",
         },
     )
+}
+
+/// Persists live on-demand work only after policy accepted the exact compiler request.
+///
+/// # Errors
+/// Rejects missing or mismatched authorization before a compiler run is created.
+pub fn prepare_authorized_compilation(
+    store: &mut Store,
+    project: &ProjectId,
+    source: &SourceVersionId,
+    adapter: &impl CompilerAdapter,
+    request: RunRequest<'_>,
+) -> Result<Option<PreparedCompilation>, CompileError> {
+    if request.mode != RunMode::Live {
+        return Err(CompileError::UnauthorizedCompilation);
+    }
+    let Some(authorization) = store.compilation_authorization(project, request.id)? else {
+        return Err(CompileError::UnauthorizedCompilation);
+    };
+    if authorization.source != *source
+        || authorization.compiler_id != adapter.id()
+        || authorization.compiler_version != adapter.version()
+        || authorization.model_id != adapter.model()
+        || authorization.prompt_digest != adapter.prompt_digest()
+        || authorization.adapter_config_digest != adapter.configuration_digest()
+        || authorization.limits != request.limits.as_array()
+    {
+        return Err(CompileError::UnauthorizedCompilation);
+    }
+    prepare_compilation(store, project, source, adapter, request)
 }
 
 /// Persists a new replay attempt with the exact input verified for an earlier run.
@@ -1093,6 +1263,7 @@ fn persist_compilation(
         compiler_version: adapter.version(),
         model_id: adapter.model(),
         prompt_digest: adapter.prompt_digest(),
+        adapter_config_digest: adapter.configuration_digest(),
         mode: mode.as_str(),
         max_input_bytes: limits.input_bytes,
         max_output_bytes: limits.output_bytes,
@@ -1114,6 +1285,7 @@ fn persist_compilation(
         compiler_version: adapter.version().into(),
         model_id: adapter.model().into(),
         prompt_digest: adapter.prompt_digest(),
+        adapter_config_digest: adapter.configuration_digest(),
     }))
 }
 
@@ -1129,8 +1301,9 @@ pub fn execute_compilation(
         || prepared.compiler_version != adapter.version()
         || prepared.model_id != adapter.model()
         || prepared.prompt_digest != adapter.prompt_digest()
+        || prepared.adapter_config_digest != adapter.configuration_digest()
     {
-        return Err(CompileError::InvalidResponse);
+        return Err(CompileError::UnauthorizedCompilation);
     }
     adapter.compile(&prepared.context.rendered, prepared.limits)
 }
@@ -1197,6 +1370,7 @@ fn error_code(error: &CompileError) -> &'static str {
         CompileError::NonCausalHistory => "noncausal_history",
         CompileError::MissingEvidence => "missing_evidence",
         CompileError::ContextRequired => "context_required",
+        CompileError::UnauthorizedCompilation => "unauthorized_compilation",
         CompileError::UnsupportedReplayVersion(_) => "unsupported_replay_version",
         CompileError::Store(_) | CompileError::InvalidResponse => "invalid_response",
     }
@@ -1327,8 +1501,14 @@ fn valid_id(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompilationContext, CompileError, CompilerLimits, validate_response};
+    use super::{
+        CompilationContext, CompileError, CompilerLimits, ProcessCompiler,
+        process_configuration_digest, validate_response,
+    };
     use merl_core::{ProjectRevision, SourceVersionId};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMPORARY_COMPILER_ID: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn prose_fields_and_out_of_range_spans_cannot_enter_assertions() {
@@ -1390,5 +1570,37 @@ mod tests {
                 Err(CompileError::InvalidResponse)
             ));
         }
+    }
+
+    #[test]
+    fn process_identity_changes_with_the_executable_or_fixed_arguments() {
+        let base =
+            process_configuration_digest(b"compiler-a", &["--strict".into()]).expect("base digest");
+        let other_artifact = process_configuration_digest(b"compiler-b", &["--strict".into()])
+            .expect("artifact digest");
+        let other_arguments = process_configuration_digest(b"compiler-a", &["--fast".into()])
+            .expect("argument digest");
+
+        assert_ne!(base, other_artifact);
+        assert_ne!(base, other_arguments);
+    }
+
+    #[test]
+    fn process_adapter_rejects_an_executable_replaced_after_construction() {
+        let id = TEMPORARY_COMPILER_ID.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "merl-compiler-configuration-{}-{id}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"compiler-a").expect("initial compiler");
+        let compiler =
+            ProcessCompiler::new(path.to_string_lossy(), Vec::new(), "v1", "model-a", [1; 32])
+                .expect("process compiler");
+        std::fs::write(&path, b"compiler-b").expect("replacement compiler");
+
+        let result = compiler.verify_configuration();
+
+        let _ = std::fs::remove_file(path);
+        assert!(matches!(result, Err(CompileError::UnauthorizedCompilation)));
     }
 }

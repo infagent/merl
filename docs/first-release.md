@@ -134,6 +134,7 @@ The release is ready when:
 - a view with required cold, pending, failed, purged, or excluded sources distinguishes "no accepted blocker" from a complete claim that no blocker exists;
 - optional cold sources do not create coverage gaps, while structurally linked optional sources remain visible as expandable attachments;
 - coverage requirement is selected without reading cold payload text, and only an authorized policy action can promote an optional source to required;
+- live on-demand compiler work requires an accepted request for the same project, source version, run, compiler and version, executable configuration, model, prompt digest, and work limits before Merl records or dispatches it;
 - direct commands reach policy evaluation without fabricated source events or compilation runs;
 - a structured command with supplemental prose records semantic lineage to the command, accepted batch, and affected objects; later compilation may enrich the action but cannot create a duplicate task or decision;
 - every accepted object expands to its policy evaluation and typed derivation inputs;

@@ -219,9 +219,13 @@ Coverage requirement is based on trusted structural metadata such as source bind
 
 An authorized administrative policy action may promote an optional source to required for a recorded scope and reason. The requirement belongs to the stable source identity, so an edited successor remains required until Merl processes that version. A sender cannot promote its own prose or otherwise force a compiler expense. `capture_only` with `required` is valid, but the affected scope remains incomplete until an authorized action compiles or excludes the source.
 
+Once that requirement exists, another identical `source require` call reads the accepted requirement and returns it unchanged, even when a different actor makes the call. It does not create a second authorization attempt. A call that asks for different requirement content still goes through policy.
+
 Structured commands bypass compilation because they already carry typed semantics. Trusted provider state changes use deterministic `ProviderObservation` inputs. Merl-generated notifications and projections are marked by origin and never compile. Deterministic extractors may still process structured artifacts without a model call.
 
 `on_demand` triggers are explicit and auditable: an authorized `source compile` command, selection of the source as evidence for a semantic command, or an authorized backfill after policy changes. A compile request records its actor, protected reason, source version, run, compiler, model, and prompt digest before the adapter starts. Rejected requests spend no compiler tokens. Reading the raw payload does not silently compile it. The first implementation will not estimate future readership or automatically spend tokens at a predicted break-even point.
+
+The compiler API keeps these purposes separate. On-demand preparation checks the accepted request against the project, source version, run, compiler and version, executable configuration, model, prompt digest, and every work limit before it records work. Eager preparation accepts only sources captured as `eager`. Replay, evaluation, and hindsight use separate entry points. Fixture setup must use one of those real policies; the production API has no bootstrap bypass.
 
 Coverage requirements and compile requests advance accepted revision and appear in deltas, but they are control state. Role views and compiler context selectors exclude these administrative objects and their protected reasons from ordinary semantic context.
 
