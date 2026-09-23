@@ -141,6 +141,9 @@ The release is ready when:
 - every accepted object expands to its policy evaluation and typed derivation inputs;
 - extracted objects also expand through their assertions and compilation runs to available source content;
 - one compound comment may yield several assertions with independent policy dispositions and precise source spans;
+- public `source assertions` and `source apply` commands connect completed live compiler output to policy, one accepted revision, and one inbox batch without caller-supplied provenance;
+- automatic decision-author acceptance is limited to direct, positive, reported `decision` directives with act `request`; other requests and quoted authority remain candidates;
+- assertion application retries preserve recorded outcomes, new attempts deduplicate accepted run/index pairs, and concurrent grant or evidence changes cannot accept stale work;
 - assertion speech act, epistemic basis, polarity, confidence, source author, assertion speaker, and attributed actor remain separate fields;
 - quoted or relayed authority remains unverified unless it links to an authenticated original source;
 - `unable_to_determine` remains a compiler outcome rather than a fabricated assertion;

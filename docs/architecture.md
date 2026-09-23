@@ -386,9 +386,32 @@ If a later poll confirms the same provider facts, Merl records an append-only si
 
 Replay and evaluation results do not enter accepted state on their own. Promotion creates a new policy evaluation against current state. The original inputs remain unchanged.
 
+### Applying recorded assertions
+
+`source assertions` exposes a run's assertions, unresolved spans, and context requests. `source apply` evaluates a completed live run through `merl-policy`. The application loads the run and source records itself; callers supply a run ID, evaluation request ID, and audit actor. They cannot supply an assertion author, source span, or proposed event.
+
+The first-release object mapping uses the assertion subject as the object ID and its predicate as the kind. Supported predicates are `decision`, `requirement`, `question`, `fact`, `blocker`, `finding`, `hypothesis`, `claim`, `task`, `experiment`, and `next_action`. A value names a retained project payload, or `none` for no object payload. Other predicates and unavailable value references receive a rejected disposition. The mapping creates active objects scoped to the recorded source conversation. It cannot change an existing object's kind or scope. Typed relations await #66.
+
+The `decision_author` grant has this bounded meaning:
+
+| Assertion from the recorded source author | Automatic disposition |
+| --- | --- |
+| `decision` + `request` + `reported` + positive, with a current grant and no attribution | Accepted |
+| Other supported predicates or speech acts, inferred or observed basis, or negative polarity | Candidate |
+| Quoted or relayed attribution, missing author, or missing decision-author grant | Candidate |
+| Provider facts, control records, or unsupported predicates | Rejected |
+
+For `decision`, `request` means an explicit directive to adopt the stated decision. A task request, proposed decision, or report that someone decided something does not meet that rule. The compiler must classify those separately. `command_actor` confers no authority over prose, and quoting another actor does not transfer that actor's grant.
+
+Each assertion keeps its own outcome and stable input identity, derived from project, run, and index. Accepted inputs share one atomic batch, revision, and inbox entry per subscriber. If several otherwise acceptable assertions target one object, policy marks those inputs conflicted instead of choosing by response order. Other inputs retain their independent dispositions.
+
+An application request ID identifies one evaluation attempt. An identical retry returns the recorded result after restart or a grant change. A new request ID reevaluates candidates with current grants; accepted assertions return duplicate without another event. Empty successful runs create no evaluation or revision. Replay, eval, hindsight, pending, failed, and context-requesting runs cannot use this path; promotion requires a later explicit policy action.
+
+Before accepting new support, policy checks that the source window includes the latest observed version of each source and that source, context, and response bytes remain available. The accepted-state transaction repeats the evidence check alongside grant and object guards. An edit or purge between preparation and commit records `assertion_evidence_changed` without accepting any part of the batch. Historical assertions and prior outcomes remain inspectable.
+
 ### Durable semantic authority
 
-The local authority stores project-scoped `decision_author` and `command_actor` grants alongside its bootstrap administrators. Public application paths load the same grant snapshot when evaluating provider observations, source requirements, compiler-spend requests, and authority changes. `authority_v1` identifies the rules; a canonical digest records the effective actor sets used by each evaluation. The explicit-rule evaluator remains a controlled kernel seam for policy tests, while application entry points use durable grants.
+The local authority stores project-scoped `decision_author` and `command_actor` grants alongside its bootstrap administrators. Public application paths load the same grant snapshot when evaluating provider observations, source requirements, compiler-spend requests, and authority changes. `authority_v2` identifies the rules; a canonical digest records the effective actor sets used by each evaluation. The explicit-rule evaluator remains a controlled kernel seam for policy tests, while application entry points use durable grants.
 
 An administrator grants or revokes a semantic permission through an administrative policy input. The accepted batch records the actor, reason payload, policy evaluation, and project revision, then reaches the normal delta and inbox stream. Each actor/permission pair has an immutable structural target and a rebuildable `authority_grant` object. An active object grants the permission; an invalidated object records revocation. A target created for a rejected request grants nothing. Grant objects stay out of semantic views and compiler context.
 
