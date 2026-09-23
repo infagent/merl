@@ -386,6 +386,14 @@ If a later poll confirms the same provider facts, Merl records an append-only si
 
 Replay and evaluation results do not enter accepted state on their own. Promotion creates a new policy evaluation against current state. The original inputs remain unchanged.
 
+### Durable semantic authority
+
+The local authority stores project-scoped `decision_author` and `command_actor` grants alongside its bootstrap administrators. Public application paths load the same grant snapshot when evaluating provider observations, source requirements, compiler-spend requests, and authority changes. `authority_v1` identifies the rules; a canonical digest records the effective actor sets used by each evaluation. The explicit-rule evaluator remains a controlled kernel seam for policy tests, while application entry points use durable grants.
+
+An administrator grants or revokes a semantic permission through an administrative policy input. The accepted batch records the actor, reason payload, policy evaluation, and project revision, then reaches the normal delta and inbox stream. Each actor/permission pair has an immutable structural target and a rebuildable `authority_grant` object. An active object grants the permission; an invalidated object records revocation. A target created for a rejected request grants nothing. Grant objects stay out of semantic views and compiler context.
+
+Evaluations record the grant collection revision as a read dependency. A concurrent grant or revocation invalidates prepared work before acceptance. Historical evaluations retain their original configuration digest and disposition. Application retries return their recorded outcome when the actor and input content match, even after grants change. Replaying an earlier grant request cannot restore a revoked permission, and retrying a completed compiler request cannot dispatch its work again. Changing request content under the same ID conflicts.
+
 ### Actors and commands
 
 A client asks the project authority to act by submitting a `Command`. Commands include semantic operations such as resolving a question, assigning a task, or recording an experiment result. They are requests for evaluation, not accepted events.

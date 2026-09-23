@@ -7,14 +7,14 @@ use std::{error::Error, fmt, fmt::Write as _};
 use merl_core::{
     ActorId, BatchId, CapturePolicyVersion, CompilationMode, CoverageRequirement, DomainEvent,
     DomainEventBatch, EventId, ObjectId, ObjectKind, PayloadId, PolicyEvaluationId, PolicyInputId,
-    PolicyVersion, ProjectId, ProviderIssueState, ProviderObservation, SourceBindingId, SourceId,
-    SourceKind, SourceProvider, SourceVersionId,
+    ProjectId, ProviderIssueState, ProviderObservation, SourceBindingId, SourceId, SourceKind,
+    SourceProvider, SourceVersionId,
 };
 use merl_corpus::fixture::{
     BodyAvailability, Fixture, MissingBodyReason, ObservationKind, ValidationError,
     body_availability, validate,
 };
-use merl_policy::{PolicyError, PolicyRules, Proposal, evaluate};
+use merl_policy::{PolicyError, Proposal, evaluate_current};
 use merl_store::{MissingSourceBody, PayloadRead, SourceBinding, SourceCapture, Store, StoreError};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -497,7 +497,7 @@ fn accept_provider_snapshot(
     observation: ProviderObservation,
     identity: &str,
 ) -> Result<bool, ImportError> {
-    let prepared = evaluate(
+    let prepared = evaluate_current(
         store,
         project,
         &batch.actor,
@@ -505,13 +505,6 @@ fn accept_provider_snapshot(
             .map_err(|_| ImportError::InvalidIdentity)?,
         batch.id.clone(),
         batch.occurred_at_millis,
-        &PolicyRules {
-            version: PolicyVersion::try_from("fixture_provider_v1")
-                .map_err(|_| ImportError::InvalidIdentity)?,
-            decision_authors: Vec::new(),
-            command_actors: Vec::new(),
-            administrators: Vec::new(),
-        },
         &[Proposal::ProviderObservation {
             observation,
             event: batch.events[0].clone(),

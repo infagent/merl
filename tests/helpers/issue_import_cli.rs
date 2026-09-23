@@ -395,6 +395,51 @@ impl CliIssueHistory {
         self
     }
 
+    pub fn when_a_semantic_grant_changes(&mut self) -> &mut Self {
+        let output = merl(&[
+            "project",
+            "authority",
+            "grant",
+            "--project",
+            "P1",
+            "--database",
+            path(&self.database()),
+            "--id",
+            "grant_after_compile",
+            "--actor",
+            "pm",
+            "--subject",
+            "researcher",
+            "--permission",
+            "command_actor",
+            "--reason",
+            "Assign project role",
+            "--json",
+        ]);
+        assert!(output.status.success(), "grant failed: {output:?}");
+        self
+    }
+
+    pub fn then_the_completed_compilation_is_reused(&mut self) -> &mut Self {
+        assert_eq!(
+            self.latest.as_ref().expect("compile retry")["outcome"],
+            "unchanged"
+        );
+        let store = Store::open(&self.database()).expect("authority");
+        let project = ProjectId::try_from("P1").expect("project");
+        assert_eq!(store.project_revision(&project).expect("revision").get(), 3);
+        assert_eq!(
+            store
+                .compilation_run_count(
+                    &project,
+                    &SourceVersionId::try_from("optional-note-v1").expect("source")
+                )
+                .expect("runs"),
+            1
+        );
+        self
+    }
+
     fn compile_optional_note(&self, version: &str, run: &str, actor: &str) -> serde_json::Value {
         #[cfg(unix)]
         {

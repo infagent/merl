@@ -295,6 +295,50 @@ pub struct PolicyInputDecision {
     pub reason: ReasonCode,
 }
 
+/// Semantic permission an administrator can grant within one project.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthorityPermission {
+    /// The source author may make explicit decisions under assertion policy.
+    DecisionAuthor,
+    /// The actor may submit structured semantic commands.
+    CommandActor,
+}
+
+impl AuthorityPermission {
+    /// Stable value used by the CLI and stored grant records.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DecisionAuthor => "decision_author",
+            Self::CommandActor => "command_actor",
+        }
+    }
+}
+
+impl TryFrom<&str> for AuthorityPermission {
+    type Error = InvalidAuthorityPermission;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "decision_author" => Ok(Self::DecisionAuthor),
+            "command_actor" => Ok(Self::CommandActor),
+            _ => Err(InvalidAuthorityPermission),
+        }
+    }
+}
+
+/// The requested permission is outside the first-release semantic grant set.
+#[derive(Debug)]
+pub struct InvalidAuthorityPermission;
+
+impl std::fmt::Display for InvalidAuthorityPermission {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("permission must be decision_author or command_actor")
+    }
+}
+
+impl std::error::Error for InvalidAuthorityPermission {}
+
 /// Accepted-state dependency read while policy made its decision.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PolicyRead {

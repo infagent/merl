@@ -1,5 +1,9 @@
 //! Deterministic first-release authority rules over typed, provenance-backed inputs.
 
+mod authority;
+
+pub use authority::{AuthorityChange, change_authority};
+
 use std::{collections::HashSet, error::Error, fmt};
 
 use merl_core::{
@@ -88,6 +92,25 @@ pub struct PolicyRules {
 }
 
 impl PolicyRules {
+    /// Loads the effective grants shared by public application entry points.
+    ///
+    /// # Errors
+    /// Returns an error when the project or its stored grants cannot be read.
+    pub fn from_store(store: &Store, project: &ProjectId) -> Result<Self, StoreError> {
+        let grants = store.authority_grants(project)?;
+        Self::from_grants(grants)
+    }
+
+    fn from_grants(grants: merl_store::AuthorityGrants) -> Result<Self, StoreError> {
+        Ok(Self {
+            version: PolicyVersion::try_from("authority_v1")
+                .map_err(|_| StoreError::CorruptHistory)?,
+            decision_authors: grants.decision_authors,
+            command_actors: grants.command_actors,
+            administrators: grants.administrators,
+        })
+    }
+
     /// Hashes the exact grants used to decide an evaluation.
     #[must_use]
     pub fn configuration_digest(&self) -> [u8; 32] {
@@ -159,7 +182,107 @@ impl From<StoreError> for PolicyError {
     }
 }
 
+/// Applies application work with durable grants, preserving outcomes on identical retries.
+///
+/// A retry returns its recorded evaluation even if grants or the clock have changed.
+/// A caller seeking reevaluation must use a new evaluation ID. The input content and
+/// actor still have to match, including rejected requests.
+///
+/// # Errors
+/// Returns an identity conflict for changed retry content, or an evaluation or commit failure.
+pub fn apply_current(
+    store: &mut Store,
+    project: &ProjectId,
+    actor: &ActorId,
+    evaluation_id: PolicyEvaluationId,
+    batch_id: BatchId,
+    occurred_at_millis: i64,
+    proposals: &[Proposal],
+) -> Result<merl_store::RecordedPolicyEvaluation, PolicyError> {
+    if let Some(record) = recorded_outcome(store, project, actor, &evaluation_id, proposals)? {
+        return Ok(record);
+    }
+    let prepared = evaluate_current(
+        store,
+        project,
+        actor,
+        evaluation_id,
+        batch_id,
+        occurred_at_millis,
+        proposals,
+    )?;
+    prepared.commit(store)?;
+    store
+        .policy_evaluation(project, &prepared.evaluation.id)?
+        .ok_or(PolicyError::Store(StoreError::CorruptHistory))
+}
+
+fn recorded_outcome(
+    store: &Store,
+    project: &ProjectId,
+    actor: &ActorId,
+    evaluation: &PolicyEvaluationId,
+    proposals: &[Proposal],
+) -> Result<Option<merl_store::RecordedPolicyEvaluation>, PolicyError> {
+    let record = store.policy_evaluation(project, evaluation)?;
+    if let Some(record) = &record
+        && (record.actor != *actor
+            || record.inputs.len() != proposals.len()
+            || record
+                .inputs
+                .iter()
+                .zip(proposals)
+                .any(|(input, proposal)| {
+                    input.input != proposal.input()
+                        || input.input_digest != input_digest(proposal, actor)
+                }))
+    {
+        return Err(StoreError::PolicyInputConflict.into());
+    }
+    Ok(record)
+}
+
+/// Evaluates application work using the project's durable authority grants.
+///
+/// A grant-collection dependency prevents work prepared before a revocation from
+/// committing under stale authority. Callers supply proposals, never actor lists.
+///
+/// # Errors
+/// Returns provenance, grant lookup, or policy validation failures.
+pub fn evaluate_current(
+    store: &Store,
+    project: &ProjectId,
+    actor: &ActorId,
+    evaluation_id: PolicyEvaluationId,
+    batch_id: BatchId,
+    occurred_at_millis: i64,
+    proposals: &[Proposal],
+) -> Result<PreparedPolicy, PolicyError> {
+    let grants = store.authority_grants(project)?;
+    let revision = grants.revision;
+    let rules = PolicyRules::from_grants(grants)?;
+    let mut prepared = evaluate(
+        store,
+        project,
+        actor,
+        evaluation_id,
+        batch_id,
+        occurred_at_millis,
+        &rules,
+        proposals,
+    )?;
+    prepared.evaluation.reads.push(PolicyRead::KindCollection {
+        kind: merl_core::ObjectKind::try_from("authority_grant")
+            .map_err(|_| PolicyError::InvalidProposal)?,
+        latest_project_revision: revision,
+    });
+    Ok(prepared)
+}
+
 /// Evaluates typed inputs against the current accepted state without mutating it.
+///
+/// This explicit-rule seam supports controlled policy tests. Application entry points
+/// use [`evaluate_current`] to load and guard durable grants.
 ///
 /// One evaluation can assign different dispositions to several assertions.
 /// The store checks its recorded reads and writes again at commit time.
@@ -315,6 +438,16 @@ fn disposition_for(
                 .is_some_and(|current| current.kind.as_str() == "provider_issue"))
     {
         return Err(PolicyError::InvalidProposal);
+    }
+    if let DomainEvent::PutObject { object, kind, .. } = proposal.event()
+        && (kind.as_str() == "authority_grant"
+            || store
+                .object(project, object)?
+                .is_some_and(|current| current.kind.as_str() == "authority_grant"))
+        && (!matches!(proposal, Proposal::AdministrativeAction { .. })
+            || kind.as_str() != "authority_grant")
+    {
+        return Ok((PolicyDisposition::Rejected, "administrator_required"));
     }
     match proposal {
         Proposal::Command { .. } => Ok(if rules.command_actors.contains(actor) {

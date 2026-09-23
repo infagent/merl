@@ -92,6 +92,7 @@ The release includes:
 - versioned `CompilationContext`, `CompilationRun`, and `ObservedAssertion` records with source spans, assertion axes, and attribution;
 - a bounded compiler-response protocol with typed output and explicit budget failures;
 - typed policy inputs for assertions, direct semantic commands, and provider observations;
+- durable project decision-author and command-actor grants, administered through the CLI;
 - deterministic policy evaluation with recorded read dependencies and write sets;
 - append-only domain events, project revisions, and rebuildable projections;
 - evidence-impact records and support revalidation after source edits or deletions;
@@ -154,6 +155,9 @@ The release is ready when:
 - Merl owns derived fields such as requirements, blockers, decisions, and research claims;
 - a Merl command cannot report a provider-owned field changed until GitHub reports that change;
 - a trusted provider observation follows deterministic policy, advances the same project revision as semantic changes, and appears through the same delta and inbox cursor;
+- an administrator can list, grant, and revoke decision-author and command-actor authority through public commands; unauthorized attempts leave effective grants and accepted revision unchanged;
+- policy entry points share durable grants and record their configuration digest; grant changes invalidate prepared work that depended on the old configuration;
+- semantic grants survive restart and projection rebuild, and request retries preserve the original outcome without reapplying a revoked grant;
 - policy evaluation records object, relation, collection, or predicate dependencies that affected its decision;
 - an unrelated project revision does not require recompilation and does not invalidate an evaluation whose dependencies remain unchanged;
 - a changed dependency or write conflict forces reevaluation or returns a conflict;

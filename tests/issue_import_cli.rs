@@ -114,3 +114,15 @@ fn required_coverage_follows_the_source_across_edits() {
         .when_the_required_edit_is_compiled()
         .then_required_coverage_is_complete_with_an_authorization_record();
 }
+
+#[cfg(unix)]
+#[test]
+fn a_compilation_retry_keeps_its_original_authorization_after_grants_change() {
+    CliIssueHistory::new()
+        .given_an_optional_issue_note_and_project_administrator()
+        .when_the_note_is_required_for_the_issue()
+        .when_the_required_note_is_compiled()
+        .when_a_semantic_grant_changes()
+        .when_the_required_note_is_compiled()
+        .then_the_completed_compilation_is_reused();
+}
