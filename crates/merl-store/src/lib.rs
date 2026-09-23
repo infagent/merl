@@ -12,7 +12,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -448,6 +448,17 @@ pub struct SourceBinding {
     pub provider_namespace_id: String,
     /// Digest of the provider's immutable repository or namespace identity.
     pub namespace_digest: [u8; 32],
+}
+
+/// Compilation timing and coverage chosen when a live binding is established.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BindingCapturePolicy {
+    /// Timing for newly observed prose.
+    pub mode: CompilationMode,
+    /// Whether unprocessed prose leaves a completeness gap.
+    pub coverage: CoverageRequirement,
+    /// Version of the rule that selected these values.
+    pub version: CapturePolicyVersion,
 }
 
 /// Reason exact source bytes could not be captured.
@@ -924,6 +935,11 @@ impl Store {
             if version < 17 {
                 transaction.execute_batch(include_str!(
                     "../migrations/0017_compilation_authorization_bounds.sql"
+                ))?;
+            }
+            if version < 18 {
+                transaction.execute_batch(include_str!(
+                    "../migrations/0018_binding_capture_policy.sql"
                 ))?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -1496,6 +1512,82 @@ impl Store {
         )?;
         transaction.commit()?;
         Ok(true)
+    }
+
+    /// Establishes a binding's capture policy or returns its existing policy.
+    ///
+    /// Refresh callers cannot replace a durable policy by supplying new defaults.
+    ///
+    /// # Errors
+    /// Returns an error for a missing project, conflicting binding, or storage failure.
+    pub fn resolve_capture_policy(
+        &mut self,
+        project: &ProjectId,
+        binding: &SourceBinding,
+        default: &BindingCapturePolicy,
+    ) -> Result<BindingCapturePolicy, StoreError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_source_binding(&transaction, project, binding)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO binding_capture_policies VALUES (?1,?2,?3,?4,?5)",
+            params![
+                project.as_str(),
+                binding.id.as_str(),
+                default.mode.as_str(),
+                default.coverage.as_str(),
+                default.version.as_str()
+            ],
+        )?;
+        let policy = read_capture_policy(&transaction, project, &binding.id)?
+            .ok_or(StoreError::CorruptHistory)?;
+        transaction.commit()?;
+        Ok(policy)
+    }
+
+    /// Reads a binding's durable live capture policy without establishing one.
+    ///
+    /// # Errors
+    /// Returns an error for invalid stored policy metadata or failed storage access.
+    pub fn capture_policy(
+        &self,
+        project: &ProjectId,
+        binding: &SourceBindingId,
+    ) -> Result<Option<BindingCapturePolicy>, StoreError> {
+        read_capture_policy(&self.connection, project, binding)
+    }
+
+    /// Returns the latest version of each entity in one Issue binding.
+    ///
+    /// Includes observed deletions so a repeated refresh can recognize them.
+    ///
+    /// # Errors
+    /// Returns an error if stored source metadata is invalid or storage fails.
+    pub fn latest_sources_in_scope(
+        &self,
+        project: &ProjectId,
+        binding: &SourceBindingId,
+        scope: &str,
+    ) -> Result<Vec<StoredSourceVersion>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT s.id FROM source_versions s WHERE s.project_id=?1 AND s.binding_id=?2 AND s.context_scope_id=?3
+             AND NOT EXISTS (SELECT 1 FROM source_versions later WHERE later.project_id=s.project_id AND later.source_id=s.source_id AND later.sequence>s.sequence)
+             ORDER BY s.sequence",
+        )?;
+        let ids = statement
+            .query_map(params![project.as_str(), binding.as_str(), scope], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|id| {
+                let id = SourceVersionId::try_from(id.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?;
+                self.source_version(project, &id)?
+                    .ok_or(StoreError::CorruptHistory)
+            })
+            .collect()
     }
 
     /// Returns the latest observed source sequence for a project.
@@ -5970,6 +6062,37 @@ fn apply_relation(
         ],
     )?;
     Ok(())
+}
+
+fn read_capture_policy(
+    connection: &Connection,
+    project: &ProjectId,
+    binding: &SourceBindingId,
+) -> Result<Option<BindingCapturePolicy>, StoreError> {
+    let row: Option<(String, String, String)> = connection.query_row(
+            "SELECT compilation_mode,coverage_requirement,policy_version FROM binding_capture_policies WHERE project_id=?1 AND binding_id=?2",
+            params![project.as_str(), binding.as_str()],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
+        ).optional()?;
+    let Some((mode, coverage, version)) = row else {
+        return Ok(None);
+    };
+    let policy = BindingCapturePolicy {
+        mode: match mode.as_str() {
+            "eager" => CompilationMode::Eager,
+            "capture_only" => CompilationMode::CaptureOnly,
+            "on_demand" => CompilationMode::OnDemand,
+            _ => return Err(StoreError::CorruptHistory),
+        },
+        coverage: match coverage.as_str() {
+            "required" => CoverageRequirement::Required,
+            "optional" => CoverageRequirement::Optional,
+            _ => return Err(StoreError::CorruptHistory),
+        },
+        version: CapturePolicyVersion::try_from(version.as_str())
+            .map_err(|_| StoreError::CorruptHistory)?,
+    };
+    Ok(Some(policy))
 }
 
 fn ensure_source_binding(

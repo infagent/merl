@@ -1,5 +1,7 @@
 //! The public command-line boundary for local Merl projects.
 
+mod capture;
+
 use std::{
     collections::BTreeSet, error::Error, fmt, fmt::Write as _, fs::File, io::Read, path::Path,
 };
@@ -78,6 +80,10 @@ impl From<ImportError> for CliError {
     fn from(error: ImportError) -> Self {
         match error {
             ImportError::Store(error) => Self::from(error),
+            ImportError::CompilerRequired => Self {
+                code: "COMPILER_REQUIRED",
+                message: error.to_string(),
+            },
             ImportError::InvalidIdentity => Self {
                 code: "INVALID_ID",
                 message: error.to_string(),
@@ -143,14 +149,27 @@ pub enum CliResponse {
     JsonError(CliError),
 }
 
-/// Parses and runs one command without network access.
+/// Parses and runs one command through its configured local or provider boundary.
 ///
 /// The parser keeps the chosen output mode with an error, so the executable
 /// does not have to inspect the arguments again after a failure.
 #[must_use]
 pub fn run(arguments: &[String]) -> CliResponse {
+    run_with_clock(arguments, &utc_now_millis)
+}
+
+/// Runs a command with the authority clock supplied by an embedded host.
+///
+/// The clock returns UTC milliseconds since the Unix epoch. Acceptance drivers
+/// use a fixed clock to exercise the CLI without giving callers a timestamp flag.
+/// The standalone executable supplies its node clock through [`run`].
+#[must_use]
+pub fn run_with_clock(
+    arguments: &[String],
+    clock: &impl Fn() -> Result<i64, CliError>,
+) -> CliResponse {
     let mut json_output = false;
-    match execute(arguments, &mut json_output) {
+    match execute(arguments, &mut json_output, clock) {
         Ok(output) => CliResponse::Success(output),
         Err(error) if json_output => CliResponse::JsonError(error),
         Err(error) => CliResponse::HumanError(error),
@@ -161,11 +180,16 @@ pub fn run(arguments: &[String]) -> CliResponse {
     clippy::too_many_lines,
     reason = "the CLI keeps option parsing and explicit command dispatch in one boundary"
 )]
-fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliError> {
+fn execute(
+    arguments: &[String],
+    json_output: &mut bool,
+    clock: &impl Fn() -> Result<i64, CliError>,
+) -> Result<String, CliError> {
     let mut positional = Vec::new();
     let mut database = None;
     let mut id = None;
     let mut project = None;
+    let mut capture_options = capture::Options::default();
     let mut fixture_path = None;
     let mut issue = None;
     let mut scope = None;
@@ -215,6 +239,12 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
             "--project" => {
                 index += 1;
                 project = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--repository" | "--github-program" | "--mode" | "--coverage" => {
+                let option = arguments[index].as_str();
+                index += 1;
+                let value = arguments.get(index).ok_or_else(missing_value)?.as_str();
+                capture_options.set(option, value);
             }
             "--fixture" => {
                 index += 1;
@@ -424,6 +454,45 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
             let offset = parse_offset(offset)?;
             let store = Store::open(Path::new(database))?;
             render_batch_page(&store, &project, &batch, offset, *json_output)
+        }
+        ["help", "issue", "capture"] | ["issue", "capture", "help"] => {
+            help("issue capture", *json_output)
+        }
+        ["issue", "capture"] => {
+            let project =
+                parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
+            let database = database.ok_or_else(|| invalid_input("--database is required"))?;
+            let number = issue
+                .ok_or_else(|| invalid_input("--issue is required"))?
+                .parse::<u64>()
+                .map_err(|_| invalid_input("--issue must be a positive number"))?;
+            if number == 0 {
+                return Err(invalid_input("--issue must be a positive number"));
+            }
+            let adapter = if let Some(program) = program {
+                Some(merl_compiler::ProcessCompiler::new(
+                    program,
+                    compiler_args,
+                    compiler_version
+                        .ok_or_else(|| invalid_input("--compiler-version is required"))?,
+                    model.ok_or_else(|| invalid_input("--model is required"))?,
+                    parse_sha256(
+                        prompt_digest
+                            .ok_or_else(|| invalid_input("--prompt-digest is required"))?,
+                    )?,
+                )?)
+            } else {
+                None
+            };
+            capture::execute(
+                Path::new(database),
+                &project,
+                number,
+                &capture_options,
+                adapter.as_ref(),
+                *json_output,
+                clock,
+            )
         }
         ["issue", "import-fixture"] => {
             let id = parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
@@ -682,7 +751,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 &actor,
                 stable_id("source_compile_evaluation", &identity)?,
                 stable_id("source_compile_batch", &identity)?,
-                utc_now_millis()?,
+                clock()?,
                 &rules,
                 &[proposal],
             )?;
@@ -712,7 +781,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                     id: run,
                     limits,
                     mode: merl_compiler::RunMode::Live,
-                    now_millis: utc_now_millis()?,
+                    now_millis: clock()?,
                 },
             )?;
             let outcome = if let Some(prepared) = prepared {
@@ -722,7 +791,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                     &project,
                     &prepared,
                     response,
-                    utc_now_millis()?,
+                    clock()?,
                 )?;
                 "compiled"
             } else {
@@ -811,7 +880,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 command_actors: Vec::new(),
                 administrators: store.administrators(&project)?,
             };
-            let now = utc_now_millis()?;
+            let now = clock()?;
             let prepared = evaluate(
                 &store,
                 &project,
@@ -884,7 +953,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 let digest = parse_sha256(
                     confirm_digest.ok_or_else(|| invalid_input("--confirm-digest is required"))?,
                 )?;
-                let now_millis = utc_now_millis()?;
+                let now_millis = clock()?;
                 let audit = store.purge_source(
                     &project,
                     &version,
@@ -980,7 +1049,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                             .ok_or_else(|| invalid_input("--prompt-digest is required"))?,
                     )?,
                 )?;
-                let now = utc_now_millis()?;
+                let now = clock()?;
                 if let Some(prepared) = merl_compiler::prepare_replay_compilation(
                     &mut store,
                     &project,
@@ -1000,7 +1069,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                         &project,
                         &prepared,
                         response,
-                        utc_now_millis()?,
+                        clock()?,
                     )?;
                 }
                 rerun_id = Some(new_id);
@@ -1838,8 +1907,8 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "issue" => (
             "merl issue <command>",
-            "Commands: import-fixture, view.",
-            vec!["issue import-fixture", "issue view"],
+            "Commands: capture, import-fixture, view.",
+            vec!["issue capture", "issue import-fixture", "issue view"],
         ),
         "issue view" => (
             "merl issue view --project <id> --database <path> --issue <id> --scope <provider-id> [--role researcher|engineer|pm] [--format json]",
@@ -1918,6 +1987,11 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             "Rebuild a causal compiler input and check its digest. A configured process compiler creates a new replay run without accepting state.",
             vec!["source show", "project rebuild"],
         ),
+        "issue capture" => (
+            "merl issue capture --project <id> --database <path> --repository <owner/name> --issue <number> [--mode eager|capture_only|on_demand] [--coverage required|optional] [--program <path> --compiler-version <version> --model <id> --prompt-digest sha256:<hex>] [--github-program <path>] [--format json]",
+            "Capture or refresh a GitHub Issue. Install gh and authenticate with gh auth login. A new binding defaults to eager/required; refresh reuses its durable policy. Eager work needs a configured compiler. Outcomes: captured, unchanged, failed, incomplete. Partial provider responses never imply deletions.",
+            vec!["issue view", "source show", "source replay", "inbox poll"],
+        ),
         "issue import-fixture" => (
             "merl issue import-fixture --project <id> --database <path> --fixture <path> [--format json]",
             "Import a versioned Issue fixture without GitHub access. The fixture must pass corpus validation.",
@@ -1941,6 +2015,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         }
         "project batch" => Some(
             "merl project batch --project P1 --database project.sqlite --batch DB42 --offset 20 --json",
+        ),
+        "issue capture" => Some(
+            "merl issue capture --project P1 --database project.sqlite --repository acme/project --issue 204 --mode capture_only --coverage optional --json",
         ),
         "issue import-fixture" => Some(
             "merl issue import-fixture --project P1 --database project.sqlite --fixture issue.json --json",
@@ -1981,7 +2058,19 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         _ => None,
     };
     if json_output {
-        let errors = if command == "issue import-fixture" {
+        let errors = if command == "issue capture" {
+            vec![
+                "INVALID_INPUT",
+                "PROJECT_NOT_FOUND",
+                "COMPILER_REQUIRED",
+                "AUTHORITY_BUSY",
+                "IO_ERROR",
+                "COMPILER_ADAPTER_ERROR",
+                "SOURCE_CONFLICT",
+                "STALE_PROVIDER_OBSERVATION",
+                "STORAGE_ERROR",
+            ]
+        } else if command == "issue import-fixture" {
             vec![
                 "INVALID_INPUT",
                 "INVALID_ID",

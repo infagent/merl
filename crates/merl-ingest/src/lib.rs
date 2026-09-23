@@ -1,4 +1,6 @@
-//! Offline Issue-history ingestion into a project's source log.
+//! Issue observations enter the source log and deterministic provider policy.
+
+pub mod live;
 
 use std::{error::Error, fmt, fmt::Write as _};
 
@@ -28,6 +30,8 @@ pub enum ImportError {
     InvalidTimestamp,
     /// The provider snapshot does not contain a known Issue state.
     InvalidProviderState,
+    /// Eager capture needs a compiler before Merl records new source work.
+    CompilerRequired,
     /// A typed provider snapshot could not be encoded behind a payload reference.
     Serialization(String),
     /// The local project authority rejected or could not store a capture.
@@ -43,6 +47,9 @@ impl fmt::Display for ImportError {
             Self::InvalidIdentity => formatter.write_str("invalid provider identity"),
             Self::InvalidTimestamp => formatter.write_str("invalid provider timestamp"),
             Self::InvalidProviderState => formatter.write_str("invalid provider Issue state"),
+            Self::CompilerRequired => {
+                formatter.write_str("eager capture requires --program and compiler configuration")
+            }
             Self::Serialization(error) => write!(formatter, "snapshot encoding failed: {error}"),
             Self::Store(error) => write!(formatter, "{error}"),
             Self::Policy(error) => write!(formatter, "{error}"),
@@ -84,7 +91,7 @@ pub struct ImportReport {
 }
 
 /// The fixed capture policy used by the offline first-release fixture importer.
-/// General source-binding policy selection belongs to the compiler slice.
+/// Live capture selects its durable binding policy through [`live::capture_issue`].
 pub const FIXTURE_CAPTURE_POLICY_VERSION: &str = "fixture_import_v1";
 
 /// Imports source versions in fixture order without treating their prose as accepted state.
