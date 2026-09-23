@@ -71,9 +71,9 @@ Guidance keeps its scope, author, authority, provenance, priority, and lifecycle
 
 ## Tasks, assignments, and handoffs
 
-A Task remains knowledge-plane state. An Assignment connects one logical agent and session to that Task for a period of work.
+A Task remains knowledge-plane state. An Assignment connects one logical Agent to that Task for a period of responsibility. The Assignment can exist before a process starts and survives session replacement.
 
-Phase 4 supports direct assignment by an authorized human and self-claim where project policy allows it. It records assignment history rather than rewriting ownership in place. An execution lease prevents two sessions from acting as the same worker on one assignment.
+Phase 4 supports direct assignment by an authorized human and self-claim where project policy allows it. It records assignment history rather than rewriting ownership in place. An `AgentSession` may hold the Assignment's execution lease. The lease prevents two sessions from acting as the same worker, but its expiry does not end the Assignment.
 
 The task keeps its independent planning facets:
 
@@ -136,7 +136,7 @@ Every writable assignment gets an isolated workspace. The default local strategy
   workspaces/<project>/<task>-<agent>/
 ```
 
-The workspace record links the source, Task, Assignment, agent, session, path, Git identity, branch, base revision, access mode, creation time, and lease state.
+The workspace record links the source, Task, Assignment, logical agent, path, Git identity, branch, base revision, access mode, creation time, and lease state. It belongs to the durable work, not to one disposable session. The current session may hold its execution lease.
 
 Merl canonicalizes paths and inspects Git worktree identity before granting a lease. Two writers cannot hold leases for the same working tree. Review work uses a detached read-only worktree at a pinned commit unless the reviewer needs a separate writable branch.
 
@@ -153,7 +153,7 @@ merl agent attach --agent project-a-dev --task T52
 merl session resume --agent project-a-dev --format json
 ```
 
-Assignment returns the workspace path, branch, and bootstrap line. The human starts the process in that path. Attach binds the external process to a new session and verifies that it is using the assigned workspace.
+Assignment returns the workspace path, branch, and bootstrap line. The human starts the process in that path. Attach binds the external process to a new session, verifies that it is using the assigned workspace, and acquires the Assignment's execution lease. A replacement session reuses the Assignment and workspace after the previous lease closes or expires.
 
 ## Inbox and direct coordination
 
@@ -206,18 +206,22 @@ merl session close \
 
 A later session receives a new generation ID. Resume uses active guidance and current task state without replaying the prior transcript.
 
-## Token evidence
+## Team evidence
 
-Phase 4 measures the cost of operating a team rather than stopping at the size of a rendered view. Each assignment records, where the host makes the data available:
+Phase 4 measures whether a team can work reliably with less repeated context. Each Assignment records, where the host makes the data available:
 
 - resume and delta tokens;
 - object and source expansions;
 - direct-note payload reads;
 - compiler work caused by agent prose;
 - checkpoint and restart cost;
-- model usage and task outcome.
+- model usage and task outcome;
+- missed blockers, requirements, and stale-state mistakes;
+- handoff or restart failures;
+- review findings caught, missed, or rediscovered;
+- unnecessary source and history rereads.
 
-The report compares Merl with a transcript-oriented workflow for the same scenario. It shows repeated context sent to several agents and the cost of restarting an agent on unfinished work.
+The report compares Merl with a transcript-oriented team running the same scenario. Merl succeeds only if the team completes the workflow at least as reliably while consuming substantially less repeated project context. The report includes failures and disagreements rather than treating low token use as success by itself.
 
 ## Deliverables
 
@@ -237,7 +241,7 @@ Phase 4 includes:
 - pull request capture, review-focused context, and provider-owned merge state;
 - branch publication and sparse GitHub status or comment output;
 - packaged local CLI and daemon artifacts with a documented install path;
-- token and context accounting across agents and restarts;
+- correctness, continuity, token, and context evidence across agents and restarts;
 - a CLI-only multi-agent behavior scenario.
 
 ## Acceptance criteria
@@ -254,7 +258,8 @@ Phase 4 is complete when:
 - unrelated backlog prose does not enter compilation merely because its repository is attached;
 - logical agent identity survives process restart and model-context replacement;
 - project role and membership come from durable policy rather than runtime claims;
-- one active session owns a logical agent's actionable inbox cursor and execution lease;
+- one active session holds a logical agent's actionable inbox and Assignment execution leases;
+- ending or replacing that session does not end the Assignment or discard its workspace;
 - an authorized human can assign a Task, while an allowed agent can claim eligible work;
 - assignment history survives reassignment, pause, deferral, completion, and cancellation;
 - two agents assigned different Tasks receive different default context without supplying `--focus`;
@@ -278,29 +283,31 @@ Phase 4 is complete when:
 - an ambiguous GitHub write cannot duplicate a pull request, status update, or comment after reconciliation;
 - task-scoped closure commits checkpoint and lease state before any host reset;
 - unsupported host reset produces an honest pending or manual result;
-- a restarted session can continue unfinished work without the previous transcript;
+- a restarted session can acquire the existing Assignment and workspace and continue unfinished work without the previous transcript;
+- two manually started agents using different supported host adapters can attach to the same project and coordinate through the same accepted state and inbox path;
 - the acceptance scenario runs through public CLI commands without private Rust or SQLite access;
-- the report accounts for rendered context, expansions, restarts, and measured host usage where available.
+- the report accounts for correctness, missed state, review outcomes, rendered context, expansions, restarts, and measured host usage where available;
+- the Merl team completes the reference workflow at least as reliably as the transcript-oriented comparison while reducing repeated project-context consumption.
 
 ## Acceptance scenario
 
-The release scenario uses an existing GitHub repository plus a PM, an engineer, and a researcher that a human starts and attaches.
+The release scenario uses an existing GitHub repository plus a PM, an engineer, and a researcher that a human starts and attaches. At least two workers use different supported host adapters; they may also use different model families.
 
 1. A human attaches the repository and selects its active milestone and agent-work labels.
 2. Merl catalogs the repository, captures selected existing Issues, and leaves unrelated backlog prose out of compiler input.
 3. A later sync records one new comment and one provider-state change without duplicating earlier work.
 4. The PM assigns separate accepted Tasks to the engineer and researcher.
 5. Merl creates an isolated writable worktree for each Task that needs repository access.
-6. Each agent resumes into a different assignment-focused context.
+6. The engineer and researcher attach through different host adapters and resume into different assignment-focused contexts.
 7. The researcher records a finding that changes the engineer's Task.
 8. The engineer receives a compact delta and expands only the finding and its evidence.
 9. The engineer sends a supplemental note linked to a structured Task transition; Merl does not create duplicate work from that note.
 10. The engineer publishes its assignment branch as a pull request.
 11. A reviewer opens the reviewed commit in a separate read-only workspace and records a finding.
 12. GitHub reports the final merge state through the project revision and inbox.
-13. Both workers checkpoint and close.
-14. Fresh sessions resume from current state and referenced objects without receiving the prior transcripts.
-15. Merl reports the context and token cost for the team workflow.
+13. Both workers checkpoint and close while their Assignments and workspaces remain durable.
+14. Fresh sessions acquire the existing execution leases and resume from current state and referenced objects without receiving the prior transcripts.
+15. Merl reports task correctness, missed state, review outcomes, continuity failures, rereads, and context cost for both the Merl and transcript-oriented teams.
 
 ## Deferred work
 

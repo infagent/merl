@@ -39,7 +39,14 @@ These are staffing requirements. Product requirements, decisions, contracts, and
 
 Each active session advertises its provider, model, effort, capabilities, availability, context-reset support, and relative cost. Merl records whether each field came from the host, an operator, or the agent itself. A self-reported capability never becomes an authenticated permission.
 
-Candidate selection removes ineligible sessions before ordering the rest. The result explains every exclusion and tradeoff. A cost preference may choose the least expensive eligible runtime; it cannot waive a hard capability or review requirement.
+Staffing considers two kinds of candidate:
+
+- A reuse candidate is an already-ready `AgentSession`. Its current advertisement supplies observed runtime capability, availability, and cost.
+- A provision candidate is an allowed `AgentTemplate` version. It describes the bounds within which Merl may ask a host to create a session.
+
+Merl never presents a template declaration as a host-attested runtime advertisement. A provision candidate remains potential capacity until the host reports a ready session with its own advertisement.
+
+Eligibility runs against the evidence each candidate kind can provide. The combined result tags every candidate as `reuse` or `provision` and explains exclusions and tradeoffs. A cost preference may choose the least expensive eligible option; it cannot waive a hard capability or review requirement.
 
 ## Templates and delegation
 
@@ -60,16 +67,20 @@ Changing a template or delegation requires the same authority as creating it. A 
 
 ```mermaid
 flowchart TB
-    M[Manager chooses Task and template] --> P[Commit SpawnRequest and reservations]
+    M[Manager chooses staffing candidate] --> Q{Candidate kind}
+    Q -->|reuse| U[Assign ready session through Phase 4 path]
+    Q -->|provision| P[Commit SpawnRequest and reservations]
     P --> H[Host adapter provisions process]
     H --> A[Record ProvisioningAttempt]
-    A --> Q{Host result}
-    Q -->|ready| S[Attach session to Phase 4 path]
-    Q -->|failed| F[Release or retain resources by policy]
-    Q -->|unknown| R[Reconcile before retry]
+    A --> Z{Host result}
+    Z -->|ready| S[Attach session to Phase 4 path]
+    Z -->|failed| F[Release or retain resources by policy]
+    Z -->|unknown| R[Reconcile before retry]
 ```
 
-The authority commits the spawn request and resource reservations before it calls the host. The host worker runs after commit. A ready response creates or selects a logical agent, records its session advertisement, leases the Phase 4 workspace, and activates the assignment.
+A reuse candidate needs no spawn request. The authorized staffing decision creates or updates the Assignment, and the ready session acquires its Phase 4 execution lease.
+
+For a provision candidate, the authority commits the spawn request and resource reservations before it calls the host. The accepted transition creates or selects a logical agent and durable Assignment, then prepares its Phase 4 workspace. The host worker runs after commit. A ready response records a new session advertisement and lets that session acquire the existing Assignment and workspace leases.
 
 A duplicate spawn ID returns the original result. If the host times out after starting a process, Merl reconciles the external handle before retrying. It does not start a second worker because the first response was ambiguous.
 
@@ -110,7 +121,7 @@ Phase 5 includes:
 
 - versioned agent templates and human-controlled delegation grants;
 - durable runtime advertisements with provenance and expiry;
-- Task staffing requirements and explainable candidate ranking;
+- Task staffing requirements and explainable ranking across reuse and provision candidates;
 - idempotent spawn requests, provisioning attempts, and reconciliation;
 - host adapter contracts for provision, inspect, interrupt, and stop, extending the Phase 4 attach, wake, and reset boundary;
 - resource reservations and enforcement of delegated limits;
@@ -124,9 +135,13 @@ Phase 5 is complete when:
 
 - only an authorized human can create or widen a template or delegation;
 - a manager can use only granted template versions and cannot select unapproved credentials;
-- candidate selection rejects sessions missing a hard capability, access, reasoning, or review requirement;
-- every candidate result explains eligibility, ranking, advertisement provenance, and policy version;
+- candidate selection distinguishes ready-session reuse from template-backed provisioning;
+- a reuse candidate is rejected when its advertisement misses a hard capability, access, reasoning, or review requirement;
+- a provision candidate is rejected when its template bounds cannot produce an eligible runtime;
+- template declarations never appear as host-attested session capabilities;
+- every candidate result explains its kind, eligibility, ranking, evidence provenance, and policy version;
 - a manager can choose a candidate without granting it new project authority;
+- choosing an eligible reuse candidate activates the Phase 4 path without creating a SpawnRequest;
 - an accepted spawn reserves concurrency, workspace storage, and configured budget before host execution;
 - retrying one spawn ID cannot start two agents;
 - an ambiguous host response is reconciled before another provisioning attempt;
@@ -143,14 +158,15 @@ Phase 5 is complete when:
 ## Acceptance scenario
 
 1. A human creates two templates with different model, cost, and concurrency limits.
-2. The human delegates limited use of both templates to a PM.
-3. The PM records staffing requirements for a difficult Task and inspects eligible candidates.
-4. The PM accepts the suggested template and submits a spawn request.
-5. Merl reserves resources, provisions the process, creates its Phase 4 workspace, and activates the assignment only after readiness.
-6. The worker resumes, completes the Task, checkpoints, and closes.
-7. The PM drains another worker and issues an urgent stop after the drain cannot finish.
-8. A simulated host-delivery failure survives restart and later completes without duplicating the process or losing the pending action.
-9. Merl reports the selection reason, resource use, context cost, and Task outcome.
+2. The human delegates limited use of both templates to a PM, while one compatible session is already ready.
+3. The PM records staffing requirements and sees the ready session as a reuse candidate and each allowed template as a separate provision candidate.
+4. The PM assigns one Task to the reuse candidate without creating a spawn request.
+5. For a second Task, the PM chooses a provision candidate and submits a spawn request.
+6. Merl reserves resources, prepares the durable Assignment and workspace, provisions the process, and grants the ready session its execution lease.
+7. The worker resumes, completes the Task, checkpoints, and closes.
+8. The PM drains another worker and issues an urgent stop after the drain cannot finish.
+9. A simulated host-delivery failure survives restart and later completes without duplicating the process or losing the pending action.
+10. Merl reports candidate kind, selection reason, resource use, context cost, and Task outcome.
 
 ## Deferred work
 
