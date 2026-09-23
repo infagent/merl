@@ -4,6 +4,7 @@ mod assertions;
 mod authority;
 mod candidates;
 mod capture;
+mod commands;
 
 use std::{
     collections::BTreeSet, error::Error, fmt, fmt::Write as _, fs::File, io::Read, path::Path,
@@ -121,6 +122,7 @@ impl From<merl_policy::PolicyError> for CliError {
                 code: "ASSERTION_RUN_INELIGIBLE",
                 message: error.to_string(),
             },
+            merl_policy::PolicyError::InvalidCommand(message) => invalid_input(message),
             error @ merl_policy::PolicyError::InvalidProposal => Self {
                 code: "POLICY_ERROR",
                 message: error.to_string(),
@@ -199,6 +201,7 @@ fn execute(
     json_output: &mut bool,
     clock: &impl Fn() -> Result<i64, CliError>,
 ) -> Result<String, CliError> {
+    let mut command_options = commands::Options::default();
     let mut candidate_kind = None;
     let mut candidate_value = None;
     let mut candidate_after = None;
@@ -237,6 +240,17 @@ fn execute(
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
+            "--summary" | "--statement" | "--note" | "--note-file" | "--review-at" => {
+                let option = arguments[index].as_str();
+                index += 1;
+                let value = arguments.get(index).ok_or_else(missing_value)?.as_str();
+                match option {
+                    "--summary" | "--statement" => command_options.summary = Some(value),
+                    "--note" => command_options.note = Some(value),
+                    "--note-file" => command_options.note_file = Some(value),
+                    _ => command_options.review_at = Some(value),
+                }
+            }
             "--format" => {
                 index += 1;
                 let format = arguments.get(index).ok_or_else(missing_value)?;
@@ -389,6 +403,59 @@ fn execute(
     }
 
     match positional.as_slice() {
+        ["help", group] | [group, "help"] if commands::is_group(group) => {
+            commands::help(group, None, *json_output)
+        }
+        ["help", group, operation] | [group, operation, "help"] if commands::is_group(group) => {
+            commands::help(group, Some(operation), *json_output)
+        }
+        [group, operation, tail @ ..] if commands::is_group(group) => {
+            let project = ProjectId::try_from(project.ok_or_else(missing_value)?)
+                .map_err(|_| invalid_input("invalid project"))?;
+            let create = matches!(*operation, "create" | "request");
+            if (create && !tail.is_empty())
+                || (!create && (tail.len() != 1 || subject.is_some()))
+                || (*operation == "request" && *group != "task")
+            {
+                return Err(invalid_input("invalid command target"));
+            }
+            let operation = merl_store::CommandOperation::try_from(if *operation == "request" {
+                "create"
+            } else {
+                operation
+            })
+            .map_err(|_| invalid_input("unknown semantic operation"))?;
+            let command = merl_policy::SemanticCommand {
+                id: merl_core::PolicyInputId::try_from(id.ok_or_else(missing_value)?)
+                    .map_err(|_| invalid_input("invalid request"))?,
+                actor: merl_core::ActorId::try_from(actor.ok_or_else(missing_value)?)
+                    .map_err(|_| invalid_input("invalid actor"))?,
+                operation,
+                object: ObjectId::try_from(if create {
+                    subject.ok_or_else(missing_value)?
+                } else {
+                    tail[0]
+                })
+                .map_err(|_| invalid_input("invalid object"))?,
+                kind: merl_core::ObjectKind::try_from(*group)
+                    .map_err(|_| invalid_input("invalid kind"))?,
+                issue_scope: issue.map(str::to_owned),
+                summary: command_options.summary.map(str::to_owned),
+                reason: reason.map(str::to_owned),
+                review_at: command_options.review_at.map(str::to_owned),
+                note: commands::note(&command_options)?,
+            };
+            let mut store = Store::open(Path::new(database.ok_or_else(missing_value)?))?;
+            commands::execute(
+                &mut store,
+                &project,
+                &command,
+                dry_run,
+                clock()?,
+                *json_output,
+            )
+        }
+
         ["help", "candidate"] | ["candidate", "help"] => candidates::help(None, *json_output),
         ["help", "candidate", operation] | ["candidate", operation, "help"] => {
             candidates::help(Some(operation), *json_output)
@@ -1260,6 +1327,7 @@ fn object_view_value(
             PayloadRead::Available(_) => value["summary_status"] = json!("expand_for_detail"),
         }
     }
+    commands::decorate(store, project, &object.id, &mut value)?;
     Ok(value)
 }
 
@@ -1334,6 +1402,7 @@ fn render_project_view(
                     .unwrap_or(object["id"].as_str().unwrap_or("?"))
             )
             .expect("String write");
+            output.push_str(&commands::view_lines(object));
         }
         if truncated {
             output.push_str("More objects available by ID.\n");
@@ -1389,8 +1458,15 @@ fn render_source(
     if body["status"] == "unavailable" {
         body = unavailable_source_json(store, project, version)?;
     }
+    let command = store.source_command(project, version)?;
+    let lineage = command
+        .as_ref()
+        .map(|c| commands::lineage(store, project, c, false))
+        .transpose()?
+        .unwrap_or(Value::Null);
     if json_output {
         render_json(&json!({
+            "semantic_origin":lineage["id"],"supplements":lineage["supplements"],"batch":lineage["batch"],
             "schema": "merl.source/v1", "project": project.as_str(), "version": version.as_str(),
             "source": source.source.as_str(), "kind": source.kind.as_str(),
             "observation": source.sequence,
@@ -1400,9 +1476,13 @@ fn render_source(
         }))
     } else if body["status"] == "available" {
         Ok(format!(
-            "{} observation {}\n{}\n",
+            "{} observation {}\n{}{}\n",
             version,
             source.sequence,
+            command.as_ref().map_or(String::new(), |command| format!(
+                "Semantic origin: {}; supplements: {}; batch: {}\n",
+                command.id, lineage["supplements"], lineage["batch"]
+            )),
             body["text"].as_str().unwrap_or("")
         ))
     } else {
@@ -1539,22 +1619,7 @@ fn render_object(
         message: "object does not exist".to_owned(),
     })?;
     let origin = store.object_policy_origin(project, object)?;
-    let mut origin_json = Value::Null;
-    if let Some(origin) = &origin {
-        let input = &origin.input;
-        let mut input_json = json!({"kind": input.kind(), "id": input.id().as_str()});
-        if let PolicyInput::ObservedAssertion { run, index, .. } = input {
-            input_json["assertion"] = assertion_json(store, project, run, *index, expand_source)?;
-        }
-        if let PolicyInput::Command(id) = input
-            && let Some(review) = store.candidate_review(project, id)?
-        {
-            input_json["review"] = candidates::review_json(store, project, &review, expand_source)?;
-        }
-        origin_json = json!({
-            "event": origin.event.as_str(), "evaluation": origin.evaluation.as_str(), "input": input_json
-        });
-    }
+    let origin_json = object_origin_json(store, project, origin.as_ref(), expand_source)?;
     let history_entries = if history || expand_source {
         store.object_history(project, object)?
     } else {
@@ -1575,11 +1640,19 @@ fn render_object(
             "payload_ref": state.payload.as_ref().map(merl_core::PayloadId::as_str),
             "policy_origin": origin_json
         });
+        commands::decorate(store, project, object, &mut result)?;
+        result["content"] = state
+            .payload
+            .as_ref()
+            .map(|p| payload_json(store, project, p))
+            .transpose()?
+            .unwrap_or(Value::Null);
         if history {
             result["history"] = history_json.expect("history requested");
         }
         if expand_source {
             result["evidence_history"] = json!(evidence_history);
+            result["command_history"] = json!(commands::history(store, project, &history_entries)?);
         }
         render_json(&result)
     } else {
@@ -1590,6 +1663,19 @@ fn render_object(
             state.lifecycle.as_str(),
             support_name(state.support)
         );
+        output.push_str(&commands::object_details(store, project, &state)?);
+        if expand_source {
+            for command in commands::history(store, project, &history_entries)? {
+                if !command["note"].is_null() {
+                    writeln!(
+                        output,
+                        "Supplemental note ({}): {}",
+                        command["id"], command["note"]
+                    )
+                    .expect("String write");
+                }
+            }
+        }
         if let Some(origin) = origin {
             writeln!(
                 output,
@@ -1893,6 +1979,7 @@ fn render_issue_view(
                 object["support"].as_str().unwrap_or("unknown")
             )
             .expect("String write");
+            output.push_str(&commands::view_lines(object));
         }
         if objects_truncated {
             output.push_str("More objects available by ID.\n");
@@ -1974,8 +2061,21 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
     let (usage, summary, related) = match command {
         "" => (
             "merl <group> <command>",
-            "Groups: project, issue, source, candidate, inbox, show. Run `merl help <group>` for commands.",
-            vec!["project", "issue", "source", "candidate", "inbox", "show"],
+            "Groups: project, issue, source, candidate, decision, question, finding, hypothesis, claim, task, inbox, show. Run `merl help <group>` for commands.",
+            vec![
+                "project",
+                "issue",
+                "source",
+                "candidate",
+                "decision",
+                "question",
+                "finding",
+                "hypothesis",
+                "claim",
+                "task",
+                "inbox",
+                "show",
+            ],
         ),
         "project" => (
             "merl project <command>",
@@ -2309,4 +2409,34 @@ fn render_json(value: &Value) -> Result<String, CliError> {
             code: "SERIALIZATION_ERROR",
             message: error.to_string(),
         })
+}
+
+fn object_origin_json(
+    store: &Store,
+    project: &ProjectId,
+    origin: Option<&merl_store::ObjectPolicyOrigin>,
+    expand_source: bool,
+) -> Result<Value, CliError> {
+    let mut origin_json = Value::Null;
+    if let Some(origin) = origin {
+        let input = &origin.input;
+        let mut input_json = json!({"kind": input.kind(), "id": input.id().as_str()});
+        if let PolicyInput::ObservedAssertion { run, index, .. } = input {
+            input_json["assertion"] = assertion_json(store, project, run, *index, expand_source)?;
+        }
+        if let PolicyInput::Command(id) = input
+            && let Some(review) = store.candidate_review(project, id)?
+        {
+            input_json["review"] = candidates::review_json(store, project, &review, expand_source)?;
+        }
+        if let PolicyInput::Command(id) = input
+            && let Some(command) = store.semantic_command(project, id)?
+        {
+            input_json["command"] = commands::lineage(store, project, &command, expand_source)?;
+        }
+        origin_json = json!({
+            "event": origin.event.as_str(), "evaluation": origin.evaluation.as_str(), "input": input_json
+        });
+    }
+    Ok(origin_json)
 }

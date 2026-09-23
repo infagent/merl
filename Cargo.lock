@@ -278,6 +278,7 @@ dependencies = [
  "merl-core",
  "merl-store",
  "sha2",
+ "time",
 ]
 
 [[package]]

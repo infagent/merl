@@ -3,9 +3,14 @@
 mod assertions;
 mod authority;
 mod candidates;
+mod commands;
 pub use candidates::{
     candidate_dependencies_current, candidate_review_evaluation, prepare_candidate_review,
     preview_candidate_review, review_candidate,
+};
+pub use commands::{
+    MAX_COMMAND_TEXT_BYTES, SemanticCommand, prepare_semantic_command, preview_semantic_command,
+    semantic_command_evaluation, submit_semantic_command,
 };
 
 pub use assertions::{apply_assertions, prepare_assertions};
@@ -111,7 +116,7 @@ impl PolicyRules {
 
     fn from_grants(grants: merl_store::AuthorityGrants) -> Result<Self, StoreError> {
         Ok(Self {
-            version: PolicyVersion::try_from("authority_v3")
+            version: PolicyVersion::try_from("authority_v4")
                 .map_err(|_| StoreError::CorruptHistory)?,
             decision_authors: grants.decision_authors,
             command_actors: grants.command_actors,
@@ -173,11 +178,14 @@ pub enum PolicyError {
     RunIneligible,
     /// No recorded assertion candidate has this identity in the project.
     CandidateMissing,
+    /// Structured command arguments violate the public content or date contract.
+    InvalidCommand(&'static str),
 }
 
 impl fmt::Display for PolicyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidCommand(message) => formatter.write_str(message),
             Self::CandidateMissing => formatter.write_str("candidate does not exist"),
             Self::Store(error) => write!(formatter, "{error}"),
             Self::RunIneligible => formatter.write_str(

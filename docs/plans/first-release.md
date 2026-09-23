@@ -137,6 +137,9 @@ The release is ready when:
 - coverage requirement is selected without reading cold payload text, and only an authorized policy action can promote an optional source to required;
 - live on-demand compiler work requires an accepted request for the same project, source version, run, compiler and version, executable configuration, model, prompt digest, and work limits before Merl records or dispatches it;
 - direct commands reach policy evaluation without fabricated source events or compilation runs;
+- decision, question, finding, hypothesis, claim, and task commands accept protected semantic content through the CLI under durable command authority;
+- command content and supplemental notes commit with an immutable receipt; interrupted retries preserve that receipt, reject changed content, and cannot restore erased bytes;
+- task requests, acceptance, deferral, start, and completion preserve independent commitment, scheduling, and execution, including `accepted + deferred + not_started` with a reason and review date;
 - a structured command with supplemental prose records semantic lineage to the command, accepted batch, and affected objects; later compilation may enrich the action but cannot create a duplicate task or decision;
 - every accepted object expands to its policy evaluation and typed derivation inputs;
 - extracted objects also expand through their assertions and compilation runs to available source content;
