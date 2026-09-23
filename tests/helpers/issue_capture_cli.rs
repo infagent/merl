@@ -157,8 +157,6 @@ print(json.dumps({'schema':'merl.compiler-response/v1','assertions':assertions})
             "capture_only",
             "--coverage",
             "optional",
-            "--observed-at",
-            "2026-01-02T00:00:01Z",
             "--json"
         ]);
         self.script("gh", &format!(r"#!/usr/bin/python3
@@ -197,8 +195,6 @@ print((root/'pages.json').read_text())
                 "17",
                 "--github-program",
                 self.directory.join("gh").to_str().unwrap(),
-                "--observed-at",
-                "2026-01-02T00:00:00Z",
                 "--json",
             ])
             .output()
@@ -227,16 +223,12 @@ print((root/'pages.json').read_text())
             serde_json::to_vec(&self.pages).unwrap(),
         )
         .unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_merl"))
-            .args(&self.last_args)
-            .args([
-                "--database",
-                self.directory.join("project.sqlite").to_str().unwrap(),
-                "--json",
-            ])
-            .output()
-            .unwrap();
-        self.latest = serde_json::from_slice(&output.stdout).unwrap();
+        self.latest = match self.capture_response(&self.last_args, true) {
+            merl_cli::CliResponse::JsonError(error) => {
+                serde_json::from_str(&error.as_json()).unwrap()
+            }
+            other => panic!("expected a stale-source error, got {other:?}"),
+        };
         self.latest["expected_head"] = head;
         self.latest["view"] = self.command(&["project", "view", "--project", "P1"]);
         self
@@ -251,6 +243,42 @@ print((root/'pages.json').read_text())
             self.latest["view"]["coverage"]["observation_head"],
             self.latest["expected_head"]
         );
+        self
+    }
+    pub fn when_a_future_observation_time_is_supplied(mut self) -> Self {
+        fs::write(
+            self.directory.join("pages.json"),
+            serde_json::to_vec(&self.pages).unwrap(),
+        )
+        .unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_merl"))
+            .args([
+                "--json",
+                "issue",
+                "capture",
+                "--project",
+                "P1",
+                "--database",
+                self.directory.join("project.sqlite").to_str().unwrap(),
+                "--repository",
+                "example/project",
+                "--issue",
+                "17",
+                "--github-program",
+                self.directory.join("gh").to_str().unwrap(),
+                "--mode",
+                "capture_only",
+                "--observed-at",
+                "2099-01-01T00:00:00Z",
+            ])
+            .output()
+            .unwrap();
+        self.latest = serde_json::from_slice(&output.stdout).unwrap();
+        self
+    }
+    pub fn then_rejects_the_observation_time_override(self) -> Self {
+        assert_eq!(self.latest["code"], "INVALID_INPUT");
+        assert_eq!(self.latest["message"], "unknown option --observed-at");
         self
     }
     fn script(&self, name: &str, text: &str) {
@@ -307,6 +335,20 @@ print((root/'pages.json').read_text())
     fn read_changes(&self) -> Value {
         json!({"delta": self.command(&["project", "delta", "--project", "P1", "--since", "0"]), "inbox": self.command(&["inbox", "poll", "--project", "P1", "--agent", "reader"])})
     }
+    fn capture_response(&self, args: &[String], json_output: bool) -> merl_cli::CliResponse {
+        // The provider fixture ends on January 1; each capture advances this fixed clock.
+        const CAPTURE_EPOCH_MILLIS: i64 = 1_767_312_000_000;
+        let now = CAPTURE_EPOCH_MILLIS + i64::from(self.tick) * 1_000;
+        let mut args = args.to_vec();
+        args.extend([
+            "--database".into(),
+            self.directory.join("project.sqlite").display().to_string(),
+        ]);
+        if json_output {
+            args.push("--json".into());
+        }
+        merl_cli::run_with_clock(&args, &|| Ok(now))
+    }
     fn capture(mut self, json_output: bool) -> Self {
         self.changes_before = self.read_changes();
         fs::write(
@@ -327,8 +369,6 @@ print((root/'pages.json').read_text())
             "17".into(),
             "--github-program".into(),
             self.directory.join("gh").display().to_string(),
-            "--observed-at".into(),
-            format!("2026-01-02T00:00:{:02}Z", self.tick),
             "--program".into(),
             self.directory.join("compiler").display().to_string(),
             "--compiler-version".into(),
@@ -340,24 +380,15 @@ print((root/'pages.json').read_text())
         ];
         args.extend(self.flags.clone());
         self.last_args.clone_from(&args);
+        let output = match self.capture_response(&args, json_output) {
+            merl_cli::CliResponse::Success(output) => output,
+            other => panic!("capture failed: {other:?}"),
+        };
         if !json_output {
-            let output = Command::new(env!("CARGO_BIN_EXE_merl"))
-                .args(&args)
-                .args([
-                    "--database",
-                    self.directory.join("project.sqlite").to_str().unwrap(),
-                ])
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            self.human = Some(String::from_utf8(output.stdout).unwrap());
+            self.human = Some(output);
             return self;
         }
-        self.latest = self.command(&args.iter().map(String::as_str).collect::<Vec<_>>());
+        self.latest = serde_json::from_str(&output).unwrap();
         self.changes_after = self.read_changes();
         if self.first_binding.is_none() {
             self.first_binding = Some(self.latest["binding"].clone());

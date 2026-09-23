@@ -13,7 +13,6 @@ use std::{fmt::Write as _, path::Path};
 pub(super) struct Options<'a> {
     repository: Option<&'a str>,
     github_program: Option<&'a str>,
-    observed_at: Option<&'a str>,
     mode: Option<&'a str>,
     coverage: Option<&'a str>,
 }
@@ -47,7 +46,6 @@ impl<'a> Options<'a> {
         match option {
             "--repository" => self.repository = Some(value),
             "--github-program" => self.github_program = Some(value),
-            "--observed-at" => self.observed_at = Some(value),
             "--mode" => self.mode = Some(value),
             "--coverage" => self.coverage = Some(value),
             _ => unreachable!("capture option came from the CLI parser"),
@@ -62,6 +60,7 @@ pub(super) fn execute(
     options: &Options<'_>,
     adapter: Option<&merl_compiler::ProcessCompiler>,
     json_output: bool,
+    clock: &impl Fn() -> Result<i64, CliError>,
 ) -> Result<String, CliError> {
     let repository = options
         .repository
@@ -73,21 +72,20 @@ pub(super) fn execute(
         return Err(invalid_input("--repository must be owner/name"));
     }
     let default = options.policy()?;
-    let now = time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .map_err(|error| invalid_input(&error.to_string()))?;
-    let observed_at = options.observed_at.unwrap_or(&now);
-    time::OffsetDateTime::parse(observed_at, &time::format_description::well_known::Rfc3339)
-        .map_err(|_| invalid_input("--observed-at must be RFC3339"))?;
     let mut store = Store::open(database)?;
 
     let _capture_lock = lock_capture(database)?;
     let revision = store.project_revision(project)?.get();
+    let observed_at =
+        time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(clock()?) * 1_000_000)
+            .map_err(|error| invalid_input(&error.to_string()))?
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|error| invalid_input(&error.to_string()))?;
     let fixture = match fetch_issue(
         Path::new(options.github_program.unwrap_or("gh")),
         repository,
         number,
-        observed_at,
+        &observed_at,
     ) {
         Ok(fixture) => fixture,
         Err(error) => {

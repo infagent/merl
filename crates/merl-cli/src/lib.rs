@@ -155,8 +155,21 @@ pub enum CliResponse {
 /// does not have to inspect the arguments again after a failure.
 #[must_use]
 pub fn run(arguments: &[String]) -> CliResponse {
+    run_with_clock(arguments, &utc_now_millis)
+}
+
+/// Runs a command with the authority clock supplied by an embedded host.
+///
+/// The clock returns UTC milliseconds since the Unix epoch. Acceptance drivers
+/// use a fixed clock to exercise the CLI without giving callers a timestamp flag.
+/// The standalone executable supplies its node clock through [`run`].
+#[must_use]
+pub fn run_with_clock(
+    arguments: &[String],
+    clock: &impl Fn() -> Result<i64, CliError>,
+) -> CliResponse {
     let mut json_output = false;
-    match execute(arguments, &mut json_output) {
+    match execute(arguments, &mut json_output, clock) {
         Ok(output) => CliResponse::Success(output),
         Err(error) if json_output => CliResponse::JsonError(error),
         Err(error) => CliResponse::HumanError(error),
@@ -167,7 +180,11 @@ pub fn run(arguments: &[String]) -> CliResponse {
     clippy::too_many_lines,
     reason = "the CLI keeps option parsing and explicit command dispatch in one boundary"
 )]
-fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliError> {
+fn execute(
+    arguments: &[String],
+    json_output: &mut bool,
+    clock: &impl Fn() -> Result<i64, CliError>,
+) -> Result<String, CliError> {
     let mut positional = Vec::new();
     let mut database = None;
     let mut id = None;
@@ -223,7 +240,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 index += 1;
                 project = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
             }
-            "--repository" | "--github-program" | "--observed-at" | "--mode" | "--coverage" => {
+            "--repository" | "--github-program" | "--mode" | "--coverage" => {
                 let option = arguments[index].as_str();
                 index += 1;
                 let value = arguments.get(index).ok_or_else(missing_value)?.as_str();
@@ -474,6 +491,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 &capture_options,
                 adapter.as_ref(),
                 *json_output,
+                clock,
             )
         }
         ["issue", "import-fixture"] => {
@@ -733,7 +751,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 &actor,
                 stable_id("source_compile_evaluation", &identity)?,
                 stable_id("source_compile_batch", &identity)?,
-                utc_now_millis()?,
+                clock()?,
                 &rules,
                 &[proposal],
             )?;
@@ -763,7 +781,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                     id: run,
                     limits,
                     mode: merl_compiler::RunMode::Live,
-                    now_millis: utc_now_millis()?,
+                    now_millis: clock()?,
                 },
             )?;
             let outcome = if let Some(prepared) = prepared {
@@ -773,7 +791,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                     &project,
                     &prepared,
                     response,
-                    utc_now_millis()?,
+                    clock()?,
                 )?;
                 "compiled"
             } else {
@@ -862,7 +880,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 command_actors: Vec::new(),
                 administrators: store.administrators(&project)?,
             };
-            let now = utc_now_millis()?;
+            let now = clock()?;
             let prepared = evaluate(
                 &store,
                 &project,
@@ -935,7 +953,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 let digest = parse_sha256(
                     confirm_digest.ok_or_else(|| invalid_input("--confirm-digest is required"))?,
                 )?;
-                let now_millis = utc_now_millis()?;
+                let now_millis = clock()?;
                 let audit = store.purge_source(
                     &project,
                     &version,
@@ -1031,7 +1049,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                             .ok_or_else(|| invalid_input("--prompt-digest is required"))?,
                     )?,
                 )?;
-                let now = utc_now_millis()?;
+                let now = clock()?;
                 if let Some(prepared) = merl_compiler::prepare_replay_compilation(
                     &mut store,
                     &project,
@@ -1051,7 +1069,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                         &project,
                         &prepared,
                         response,
-                        utc_now_millis()?,
+                        clock()?,
                     )?;
                 }
                 rerun_id = Some(new_id);
@@ -1970,7 +1988,7 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             vec!["source show", "project rebuild"],
         ),
         "issue capture" => (
-            "merl issue capture --project <id> --database <path> --repository <owner/name> --issue <number> [--mode eager|capture_only|on_demand] [--coverage required|optional] [--program <path> --compiler-version <version> --model <id> --prompt-digest sha256:<hex>] [--github-program <path>] [--observed-at <RFC3339>] [--format json]",
+            "merl issue capture --project <id> --database <path> --repository <owner/name> --issue <number> [--mode eager|capture_only|on_demand] [--coverage required|optional] [--program <path> --compiler-version <version> --model <id> --prompt-digest sha256:<hex>] [--github-program <path>] [--format json]",
             "Capture or refresh a GitHub Issue. Install gh and authenticate with gh auth login. A new binding defaults to eager/required; refresh reuses its durable policy. Eager work needs a configured compiler. Outcomes: captured, unchanged, failed, incomplete. Partial provider responses never imply deletions.",
             vec!["issue view", "source show", "source replay", "inbox poll"],
         ),

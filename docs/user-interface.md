@@ -89,8 +89,9 @@ merl issue capture --project project-a --database project.sqlite \
 Install GitHub CLI (`gh`) and authenticate with `gh auth login` or its supported
 environment credentials. Merl invokes `gh api graphql` and keeps credentials out
 of project records. `--github-program` selects a compatible executable for a
-controlled provider; `--observed-at` supplies an RFC 3339 observation time for
-repeatable captures. Without that option, Merl uses the node clock.
+controlled provider. Merl records observation time from the node clock; callers
+cannot supply it as an argument. Acceptance drivers inject a deterministic clock
+through the CLI's Rust entry point.
 
 The first capture establishes a binding by immutable repository ID and records
 `github_capture_v1` policy. The defaults are `--mode eager --coverage required`.

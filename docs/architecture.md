@@ -196,8 +196,10 @@ sources receive compiler work; a failed interpretation does not create a require
 coverage gap. Changing a binding policy requires a separate authorized action.
 
 A live capture records the latest exposed body of each entity at the current
-Merl observation position. Provider edit IDs and times remain provenance; they
-do not move the interpretation basis into the past. Merl preserves observed
+Merl observation position. The authority supplies observation time from its clock;
+the public command accepts no timestamp override. Acceptance drivers substitute
+a deterministic clock at the CLI boundary. Provider edit IDs and times remain
+provenance; they do not move the interpretation basis into the past. Merl preserves observed
 versions across refreshes without claiming historical replay of uncaptured
 bodies. The offline corpus path retains its existing historical-fidelity rules.
 

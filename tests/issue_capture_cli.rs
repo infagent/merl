@@ -169,3 +169,12 @@ fn optional_eager_failures_do_not_create_required_coverage_gaps() {
         .then_reports_the_same_failure_without_dispatch()
         .then_optional_work_leaves_required_coverage_complete();
 }
+
+#[test]
+fn callers_cannot_set_merls_observation_time() {
+    Capture::given_a_new_project()
+        .when_a_future_observation_time_is_supplied()
+        .then_rejects_the_observation_time_override()
+        .when_the_issue_is_captured()
+        .then_captures_and_compiles(1);
+}
