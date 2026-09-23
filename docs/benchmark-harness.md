@@ -16,7 +16,7 @@ An edit replaces the version shown by the raw and recent readers at that cutoff 
 
 ## Running a development case
 
-Prepare one Merl authority database per paired trial and source cutoff. Import only observations through that cutoff. Historical compilation withholds bodies known only from terminal capture, even at the final observation; it must not retroactively interpret old prose with newly captured bytes. The terminal reader can see those bytes at capture time, while Merl reports the resulting semantic gap. Compile and evaluate policy against admissible evidence, then close and checkpoint the database. The harness rejects a nonempty WAL and checks that the database bytes do not change while readers use it. Keep the provider-reported input and output tokens for every compiler call, including retries and corrections. The harness cannot infer that cost from the size of a stored context.
+Prepare one Merl authority database per paired trial and source cutoff with the candidate preparer named in the plan. Import only observations through that cutoff. Historical compilation withholds bodies known only from terminal capture, even at the final observation; it must not retroactively interpret old prose with newly captured bytes. The terminal reader can see those bytes at capture time, while Merl reports the resulting semantic gap. Compile and evaluate policy against admissible evidence, then close and checkpoint the database. The preparer writes a receipt containing its own executable digest and the digest of the closed database. The harness checks both before any reader runs. It also rejects a nonempty WAL and checks that the database bytes do not change while readers use it. Keep the provider-reported input and output tokens for every compiler call, including retries and corrections. The harness cannot infer that cost from the size of a stored context.
 
 Run:
 
@@ -26,7 +26,7 @@ cargo run --locked -p merl-eval -- run --plan /path/to/development-plan.json
 
 `merl-eval inspect --plan /path/to/plan.json` prints the exact artifact digests the freeze record needs. It does not invoke the model or scorer. Run it only in the evaluator environment when the plan names sealed material.
 
-The plan uses `merl.eval-plan/v1`. It names the fixture, questions, shared model configuration, model and scorer programs, compiler artifacts, process byte limits, and prepared Merl trials. Each preparation record must match the candidate commit and evaluator binary, the exact compiler program/prompt/rules/configuration hashes, and every recorded compiler run. The run modes must be causal (`live` or `replay`), never `hindsight` or `eval`. Its measured call ledger includes retries and corrections. The harness records SHA-256 digests of the receipt and database and reads the Issue through Merl's public CLI.
+The plan uses `merl.eval-plan/v1`. It names the fixture, questions, shared model configuration, model and scorer programs, the candidate preparer executable, compiler artifacts, process byte limits, and prepared Merl trials. Each preparation record must match the candidate commit, candidate preparer, closed authority database, exact compiler program/prompt/rules/configuration hashes, and every recorded compiler run. The run modes must be causal (`live` or `replay`), never `hindsight` or `eval`. Its measured call ledger includes retries and corrections. The evaluator binary has a separate freeze digest because it verifies and reads the authority; it does not claim to have produced it.
 
 Questions at the same cutoff and capture phase share one rolling summary and Merl preparation within a paired trial. Their answer calls remain separate. The report charges each shared preparation once, not once per question. A different cutoff needs a different prepared authority and summary. One plan cannot mix observation-only and terminal-capture questions at the same cutoff; split them into separate plans so neither phase inherits the other's evidence.
 
@@ -59,6 +59,7 @@ A development plan looks like this, with paths supplied by the evaluator:
   },
   "model_program": "/path/to/model-adapter",
   "scorer_program": "/path/to/development-scorer",
+  "candidate_preparer_program": "/path/to/frozen-merl-preparer",
   "candidate_commit": "40-character-candidate-git-sha",
   "compiler_artifacts": {
     "program": "/path/to/compiler-adapter",
@@ -93,7 +94,7 @@ A development plan looks like this, with paths supplied by the evaluator:
 }
 ```
 
-The evaluator writes one `merl.eval-preparation/v1` record for each prepared authority. It names the paired trial, project, cutoff, candidate commit and evaluator binary digest. Its `compiler` section gives the compiler ID/version/model, SHA-256 of each of the four artifacts, and a domain-separated contract digest. `merl-eval inspect` prints that digest; it must be the `prompt_digest` recorded on every contributing compiler run. The `runs` array lists every run in durable attempt order with its mode, cutoff, selector, and renderer. The `calls` array lists each provider call with a stable call ID, run ID, phase (`compile`, `retry`, `correction`, or `revalidation`), and reported input/output tokens. `total_usage` is their sum. Do not estimate usage from text length.
+The candidate preparer writes one `merl.eval-preparation/v1` record for each prepared authority. It names the paired trial, project, cutoff, candidate commit, preparer executable digest, and closed database digest. Its `compiler` section gives the compiler ID/version/model, SHA-256 of each of the four artifacts, and a domain-separated contract digest. `merl-eval inspect` prints that digest; it must be the `prompt_digest` recorded on every contributing compiler run. The `runs` array lists every run in durable attempt order with its mode, cutoff, selector, and renderer. The `calls` array lists each provider call with a stable call ID, run ID, phase (`compile`, `retry`, `correction`, or `revalidation`), and reported input/output tokens. `total_usage` is their sum. Do not estimate usage from text length.
 
 ```json
 {
@@ -103,7 +104,8 @@ The evaluator writes one `merl.eval-preparation/v1` record for each prepared aut
   "source_cutoff": 4,
   "capture_phase": false,
   "candidate_commit": "40-character-candidate-git-sha",
-  "candidate_binary_sha256": "sha256:...",
+  "candidate_preparer_binary_sha256": "sha256:...",
+  "authority_sha256": "sha256:...",
   "compiler": {
     "id": "configured-compiler",
     "version": "v1",
@@ -139,7 +141,9 @@ Reports use `merl.eval-report/v1`. They retain every summary call and answer/too
 
 ## Held-out gate
 
-The implementation team should run development and visible adversarial cases only. An independent evaluator keeps the held-out package and scorer outside this repository. Before a held-out run, the plan requires a freeze record naming the candidate commit and binding the evaluator binary, approved corpus manifest, fixture, questions, model configuration, model program, scorer program, scoring specification, preparation records, and prepared databases by SHA-256. The runner checks those artifact hashes before it invokes the model. The evaluator must also confirm that the fixture and questions belong to the approved manifest and that the binary came from the named commit; the runner cannot prove either fact from an opaque manifest and a commit string.
+The implementation team should run development and visible adversarial cases only. An independent evaluator keeps the held-out package and scorer outside this repository. Before a held-out run, the plan requires a freeze record naming the candidate commit and binding both the evaluator and candidate preparer binaries, approved corpus manifest, fixture, questions, model configuration, model program, scorer program, scoring specification, preparation records, and prepared databases by SHA-256. The freeze contains one receipt and database digest for every trial/cutoff authority. The runner checks those hashes before it invokes the model. The evaluator must also confirm that the fixture and questions belong to the approved manifest and that both binaries came from the named commit; the runner cannot prove either fact from an opaque manifest and a commit string.
+
+Fresh GitHub captures mark retained terminal bodies `at_capture`. A v4 migration may promote a body to `at_observation` only when the evaluator can document that the exact bytes were retained at that historical position. Otherwise the body stays terminal-only and earlier readers see a gap.
 
 Held-out v3 remains evaluator-only archival material. The independent evaluator will build, review, and freeze v4 against the final corpus and harness contracts. No implementation agent should inspect v3 or v4 cases while finishing #24.
 

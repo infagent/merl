@@ -27,6 +27,7 @@ struct Plan {
     config: BenchmarkConfig,
     model_program: PathBuf,
     scorer_program: PathBuf,
+    candidate_preparer_program: PathBuf,
     candidate_commit: String,
     compiler_artifacts: CompilerArtifacts,
     merl: MerlPlan,
@@ -65,7 +66,8 @@ struct ProcessLimits {
 #[serde(deny_unknown_fields)]
 struct FreezeRecord {
     candidate_commit: String,
-    candidate_binary_sha256: String,
+    evaluator_binary_sha256: String,
+    candidate_preparer_binary_sha256: String,
     approved_manifest: PathBuf,
     approved_manifest_sha256: String,
     fixture_sha256: String,
@@ -132,6 +134,7 @@ fn inspect(path: &PathBuf) -> Result<String, String> {
         "config_sha256": digest(&serde_json::to_vec(&plan.config).map_err(|error| error.to_string())?),
         "model_program_sha256": digest(&fs::read(&plan.model_program).map_err(|error| error.to_string())?),
         "scorer_program_sha256": digest(&fs::read(&plan.scorer_program).map_err(|error| error.to_string())?),
+        "candidate_preparer_binary_sha256": digest(&fs::read(&plan.candidate_preparer_program).map_err(|error| error.to_string())?),
         "compiler_program_sha256": digest(&fs::read(&plan.compiler_artifacts.program).map_err(|error| error.to_string())?),
         "compiler_prompt_sha256": digest(&fs::read(&plan.compiler_artifacts.prompt).map_err(|error| error.to_string())?),
         "compiler_rules_sha256": digest(&fs::read(&plan.compiler_artifacts.rules).map_err(|error| error.to_string())?),
@@ -200,7 +203,8 @@ fn run(path: &PathBuf) -> Result<String, String> {
         "merl_database_sha256": prepared.database_digests,
         "freeze": plan.freeze.as_ref().map(|freeze| json!({
             "candidate_commit": freeze.candidate_commit,
-            "candidate_binary_sha256": freeze.candidate_binary_sha256,
+            "evaluator_binary_sha256": freeze.evaluator_binary_sha256,
+            "candidate_preparer_binary_sha256": freeze.candidate_preparer_binary_sha256,
             "approved_manifest_sha256": freeze.approved_manifest_sha256,
             "fixture_sha256": freeze.fixture_sha256,
             "question_sha256": freeze.question_sha256,
@@ -226,9 +230,9 @@ fn verify_trial_artifacts(plan: &Plan, fixture: &Fixture) -> Result<VerifiedTria
     if cutoffs.is_empty() || plan.merl.trials.len() != plan.config.trials.len() * cutoffs.len() {
         return Err("one prepared Merl authority is required per trial and cutoff".to_owned());
     }
-    let candidate_binary_sha256 = digest(
-        &fs::read(env::current_exe().map_err(|error| error.to_string())?)
-            .map_err(|error| error.to_string())?,
+    let candidate_preparer_binary_sha256 = digest(
+        &fs::read(&plan.candidate_preparer_program)
+            .map_err(|error| format!("could not read candidate preparer: {error}"))?,
     );
     let mut result = VerifiedTrials {
         artifacts: Vec::new(),
@@ -267,7 +271,7 @@ fn verify_trial_artifacts(plan: &Plan, fixture: &Fixture) -> Result<VerifiedTria
                 source_cutoff: *cutoff,
                 capture_phase: *capture_phase,
                 candidate_commit: &plan.candidate_commit,
-                candidate_binary_sha256: &candidate_binary_sha256,
+                candidate_preparer_binary_sha256: &candidate_preparer_binary_sha256,
             },
         )?;
         result.record_digests.push(digest(&bytes));
@@ -323,7 +327,8 @@ fn verify_freeze(plan: &Plan, fixture_bytes: &[u8]) -> Result<(), String> {
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
         || !valid_digest(&freeze.approved_manifest_sha256)
-        || !valid_digest(&freeze.candidate_binary_sha256)
+        || !valid_digest(&freeze.evaluator_binary_sha256)
+        || !valid_digest(&freeze.candidate_preparer_binary_sha256)
         || !valid_digest(&freeze.fixture_sha256)
         || !valid_digest(&freeze.question_sha256)
         || !valid_digest(&freeze.config_sha256)
@@ -342,8 +347,13 @@ fn verify_freeze(plan: &Plan, fixture_bytes: &[u8]) -> Result<(), String> {
         .map_err(|error| format!("could not locate evaluator binary: {error}"))?;
     let executable_bytes = fs::read(executable)
         .map_err(|error| format!("could not read evaluator binary: {error}"))?;
-    if digest(&executable_bytes) != freeze.candidate_binary_sha256 {
+    if digest(&executable_bytes) != freeze.evaluator_binary_sha256 {
         return Err("evaluator binary changed after freeze".to_owned());
+    }
+    let preparer = fs::read(&plan.candidate_preparer_program)
+        .map_err(|error| format!("could not read candidate preparer: {error}"))?;
+    if digest(&preparer) != freeze.candidate_preparer_binary_sha256 {
+        return Err("candidate preparer changed after freeze".to_owned());
     }
     if digest(fixture_bytes) != freeze.fixture_sha256 {
         return Err("fixture changed after freeze".to_owned());
@@ -399,6 +409,10 @@ mod tests {
     use merl_eval::{CompilerArtifacts, RandomnessControl, TrialIdentity};
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one freeze scenario mutates each bound artifact in sequence"
+    )]
     fn held_out_execution_requires_unchanged_frozen_artifacts() {
         let location =
             std::env::temp_dir().join(format!("merl-eval-freeze-{}", std::process::id()));
@@ -406,10 +420,12 @@ mod tests {
         let manifest = location.join("approved.json");
         let scorer = location.join("scorer");
         let model = location.join("model");
+        let candidate_preparer = location.join("candidate-preparer");
         let scoring_spec = location.join("scoring.json");
         std::fs::write(&manifest, b"approved manifest").expect("manifest");
         std::fs::write(&scorer, b"scorer program").expect("scorer");
         std::fs::write(&model, b"model program").expect("model");
+        std::fs::write(&candidate_preparer, b"candidate preparer").expect("candidate preparer");
         std::fs::write(&scoring_spec, b"frozen scoring rubric").expect("scoring rubric");
         let fixture = b"frozen fixture";
         let question = EvaluationQuestion {
@@ -452,6 +468,7 @@ mod tests {
             config,
             model_program: model.clone(),
             scorer_program: scorer.clone(),
+            candidate_preparer_program: candidate_preparer.clone(),
             candidate_commit: "a".repeat(40),
             compiler_artifacts: CompilerArtifacts {
                 program: model.clone(),
@@ -486,10 +503,11 @@ mod tests {
         assert!(verify_freeze(&plan, fixture).is_err());
         plan.freeze = Some(FreezeRecord {
             candidate_commit: "a".repeat(40),
-            candidate_binary_sha256: digest(
+            evaluator_binary_sha256: digest(
                 &std::fs::read(std::env::current_exe().expect("test binary path"))
                     .expect("test binary"),
             ),
+            candidate_preparer_binary_sha256: digest(b"candidate preparer"),
             approved_manifest: manifest.clone(),
             approved_manifest_sha256: digest(b"approved manifest"),
             fixture_sha256: digest(fixture),
@@ -513,11 +531,16 @@ mod tests {
             ],
         });
         assert!(verify_freeze(&plan, fixture).is_ok());
+        std::fs::write(&candidate_preparer, b"changed candidate producer")
+            .expect("change producer");
+        assert!(verify_freeze(&plan, fixture).is_err());
+        std::fs::write(&candidate_preparer, b"candidate preparer").expect("restore producer");
         std::fs::write(&scoring_spec, b"changed scoring rubric").expect("change rubric");
         assert!(verify_freeze(&plan, fixture).is_err());
         std::fs::remove_file(&manifest).expect("remove manifest");
         std::fs::remove_file(&scorer).expect("remove scorer");
         std::fs::remove_file(&model).expect("remove model");
+        std::fs::remove_file(&candidate_preparer).expect("remove candidate preparer");
         std::fs::remove_file(&scoring_spec).expect("remove rubric");
         std::fs::remove_dir(&location).expect("remove temporary location");
     }
