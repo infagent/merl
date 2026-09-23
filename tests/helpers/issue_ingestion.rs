@@ -1,9 +1,11 @@
 use merl_core::{
-    CapturePolicyVersion, CompilationMode, CoverageRequirement, ProjectId, SourceBindingId,
-    SourceId, SourceKind, SourceProvider, SourceVersionId,
+    ActorId, CapturePolicyVersion, CompilationMode, CoverageRequirement, ProjectId,
+    SourceBindingId, SourceId, SourceKind, SourceProvider, SourceVersionId,
 };
 use merl_ingest::import_fixture;
-use merl_store::{PayloadRead, SourceBinding, SourceCapture, Store};
+use merl_store::{
+    PayloadRead, SourceBinding, SourceCapture, Store, StoreError, StoredSourceVersion,
+};
 use sha2::{Digest, Sha256};
 
 pub fn report_format_issue() -> merl_corpus::fixture::Fixture {
@@ -32,6 +34,8 @@ pub struct IssueHistory {
     fixture: Option<merl_corpus::fixture::Fixture>,
     retry_capture: Option<SourceCapture<'static>>,
     retry_was_new: Option<bool>,
+    author_retry_result: Option<Result<bool, StoreError>>,
+    first_capture: Option<StoredSourceVersion>,
 }
 
 impl IssueHistory {
@@ -46,6 +50,8 @@ impl IssueHistory {
             fixture: None,
             retry_capture: None,
             retry_was_new: None,
+            author_retry_result: None,
+            first_capture: None,
         }
     }
 
@@ -202,6 +208,14 @@ impl IssueHistory {
     }
 
     pub fn given_a_captured_source(&mut self) -> &mut Self {
+        self.given_a_source_with_author(None)
+    }
+
+    pub fn given_a_source_with_alice_as_author_and_bob_as_version_actor(&mut self) -> &mut Self {
+        self.given_a_source_with_author(Some("alice"))
+    }
+
+    fn given_a_source_with_author(&mut self, author: Option<&'static str>) -> &mut Self {
         let binding = SourceBinding {
             id: SourceBindingId::try_from("binding").unwrap(),
             provider: SourceProvider::try_from("github").unwrap(),
@@ -222,10 +236,10 @@ impl IssueHistory {
             occurred_at_millis: 1,
             upstream_updated_at_millis: Some(1),
             observed_at_millis: 2,
-            actor: None,
-            provider_actor_id: None,
-            source_author: None,
-            provider_source_author_id: None,
+            actor: Some(ActorId::try_from("bob").unwrap()),
+            provider_actor_id: Some("bob"),
+            source_author: author.map(|id| ActorId::try_from(id).unwrap()),
+            provider_source_author_id: author,
             body: Some(b"Use fixed gain."),
             edit_diff: None,
             edit_deleted_at_millis: None,
@@ -239,6 +253,10 @@ impl IssueHistory {
                 .capture_source_version(&self.project, &first)
                 .unwrap()
         );
+        self.first_capture = self
+            .store
+            .source_version(&self.project, &first.version)
+            .expect("captured source metadata");
         let retry = SourceCapture {
             observed_at_millis: 3,
             upstream_updated_at_millis: Some(2),
@@ -248,6 +266,49 @@ impl IssueHistory {
             ..first
         };
         self.retry_capture = Some(retry);
+        self
+    }
+
+    pub fn when_the_source_is_retried_with_author(
+        &mut self,
+        author: Option<&'static str>,
+    ) -> &mut Self {
+        let retry = self.retry_capture.as_mut().expect("first capture");
+        retry.provider_source_author_id = author;
+        retry.source_author = author.map(|id| ActorId::try_from(id).unwrap());
+        self.author_retry_result = Some(self.store.capture_source_version(&self.project, retry));
+        self
+    }
+
+    pub fn then_the_retry_reports_an_author_conflict(&mut self) -> &mut Self {
+        assert!(
+            matches!(
+                self.author_retry_result,
+                Some(Err(StoreError::SourceConflict))
+            ),
+            "a different entity author must conflict: {:?}",
+            self.author_retry_result
+        );
+        self
+    }
+
+    pub fn then_the_retry_is_a_no_op(&mut self) -> &mut Self {
+        assert!(matches!(self.author_retry_result, Some(Ok(false))));
+        self
+    }
+
+    pub fn then_the_source_provenance_is_unchanged(&mut self) -> &mut Self {
+        let first = self.first_capture.as_ref().expect("first capture");
+        let current = self
+            .store
+            .source_version(&self.project, &first.id)
+            .expect("source metadata")
+            .expect("captured source");
+        assert_eq!(&current, first);
+        assert_eq!(
+            self.store.source_observation_head(&self.project).unwrap(),
+            1
+        );
         self
     }
 

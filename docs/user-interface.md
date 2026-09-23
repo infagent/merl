@@ -84,6 +84,8 @@ merl issue import-fixture --project project-a --database project.sqlite --fixtur
 
 It reports the number of new source versions, the observation head, and the accepted revision. A repeat import does not create another observation or accepted provider snapshot. The fixture's terminal provider facts enter at capture time; Merl does not place them at earlier historical cutoffs.
 
+A retry of the same source version and body must preserve its entity author. If the stored capture and retry provide different stable provider author IDs, Merl reports a source conflict. A matching ID, or a missing ID on either side, leaves the first capture unchanged. Older captures with no recorded author remain unknown, even if a retry supplies one. An edit by another person remains valid: the entity author and version editor are separate identities.
+
 With `--format json`, every command returns one result envelope. The envelope identifies the schema, action, outcome, project, accepted revision if one exists, affected objects, warnings, and error details. For example:
 
 ```json

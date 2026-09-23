@@ -186,6 +186,8 @@ A source event contains:
 
 Merl never edits a source event. If a user edits GitHub comment 771, Merl captures a new event with the same external entity ID, a new content hash, and a `supersedes` link to the previous capture. The pair `(external identity, source version or content hash)` provides the ingestion idempotency key.
 
+Capture retries must also agree on the entity author's stable provider ID when both captures include one. Merl checks those IDs after the existing identity and content digest and returns `SourceConflict` on disagreement. The entity author may differ from the actor who edited the version. Merl keeps author fields out of the capture digest for compatibility with older captures, preserves the first capture's author, and leaves unknown authors unknown. It does not infer authorship from a login, edit actor, or source text.
+
 Merl normally retains captured content because upstream content can change or disappear. An external URL alone is not enough for replay or audit. The metadata record and the retained bytes have different lifetimes: source metadata is append-only, while policy may require deletion or redaction of the content.
 
 An authorized administrative purge removes the retained payload or destroys its encryption key. Merl keeps a tombstone with the source identity, digest, actor, time, scope, and reason. It also marks dependent derivations as having unavailable evidence and reports that affected history can no longer be replayed from the retained store. Purge is an audited exception to byte retention, not a rewrite that pretends the source never existed.
