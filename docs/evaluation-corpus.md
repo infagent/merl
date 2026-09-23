@@ -38,6 +38,15 @@ New GitHub captures use `merl.corpus-fixture/v3`. They keep the v2 provider IDs 
 
 The body and ordering checks are separate. Passing the body check does not turn a `terminal_snapshot_only` capture into exact historical observation. The validator also cannot establish that a human label is correct. Gold states for natural fixtures need independent labeling before they count toward correctness. A second annotator should label a useful subset without seeing the first annotation; keep both and record disagreements before adjudication.
 
+Create the second annotator's packet without exposing the checked-in gold states:
+
+```sh
+cargo run --locked -p merl-corpus -- review-packet \
+  corpus/adversarial/ADV-C1.json /outside/the/repository/ADV-C1-review.json
+```
+
+The packet retains the source history, replaces the answers with a blank submission, and binds the review to the exact fixture SHA-256. Keep the completed submission separate until the reviewer finishes. Comparing labels while the review is in progress would make the exercise an adjudication, not an independent annotation.
+
 ## Capture dependency
 
 `capture-github` invokes the [GitHub CLI](https://cli.github.com/) as an external program. Install `gh` separately and authenticate with [`gh auth login`](https://cli.github.com/manual/gh_auth_login), or provide [`GH_TOKEN`](https://cli.github.com/manual/gh_help_environment) in automation. Run `gh auth status` to check the account. This repository has no installer that supplies `gh`. Fixture validation and ordinary Rust builds do not need it.

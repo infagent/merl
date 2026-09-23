@@ -10,6 +10,7 @@ pub struct CorpusFixture {
     future_support_validation: Option<Result<(), ValidationError>>,
     invalid_variant_results: Vec<Result<(), ValidationError>>,
     deferred_task_validation: Vec<Result<(), ValidationError>>,
+    review_packet: Option<serde_json::Value>,
 }
 
 impl CorpusFixture {
@@ -21,7 +22,47 @@ impl CorpusFixture {
             future_support_validation: None,
             invalid_variant_results: Vec::new(),
             deferred_task_validation: Vec::new(),
+            review_packet: None,
         }
+    }
+
+    pub fn when_an_independent_review_packet_is_built(mut self) -> Self {
+        self.review_packet = Some(
+            merl_corpus::review::independent_review_packet(
+                &serde_json::to_vec(&self.fixture).expect("fixture bytes"),
+            )
+            .expect("review packet"),
+        );
+        self
+    }
+
+    pub fn then_the_source_history_remains_visible(self) -> Self {
+        let packet = self.review_packet.as_ref().expect("review packet");
+        assert_eq!(
+            packet["input"]["observations"].as_array().map(Vec::len),
+            Some(self.fixture.observations.len())
+        );
+        self
+    }
+
+    pub fn then_existing_gold_labels_are_absent(self) -> Self {
+        let packet = self.review_packet.as_ref().expect("review packet");
+        assert!(packet["input"].get("gold_states").is_none());
+        assert_eq!(packet["submission"]["gold_states"], serde_json::json!([]));
+        let encoded = serde_json::to_string(packet).expect("packet JSON");
+        assert!(!encoded.contains("remove-retention-claim"));
+        assert!(!encoded.contains("keep-retention-checks"));
+        self
+    }
+
+    pub fn then_the_blank_submission_is_bound_to_the_exact_fixture(self) {
+        let packet = self.review_packet.as_ref().expect("review packet");
+        assert_eq!(packet["fixture_id"], self.fixture.id);
+        assert!(
+            packet["fixture_sha256"]
+                .as_str()
+                .is_some_and(|digest| digest.starts_with("sha256:") && digest.len() == 71)
+        );
     }
 
     pub fn given_valid_fixture(self) -> Self {

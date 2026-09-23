@@ -113,3 +113,13 @@ fn tomorrow_is_a_review_date_while_pr_merge_remains_a_condition() {
         )
         .then_task_is_reviewed_at("parser-trace", "2026-01-03T09:00:00Z");
 }
+
+#[test]
+fn an_independent_reviewer_receives_sources_without_existing_gold_labels() {
+    CorpusFixture::from_json(include_str!("../corpus/adversarial/ADV-C1.json"))
+        .given_valid_fixture()
+        .when_an_independent_review_packet_is_built()
+        .then_the_source_history_remains_visible()
+        .then_existing_gold_labels_are_absent()
+        .then_the_blank_submission_is_bound_to_the_exact_fixture();
+}
