@@ -11,6 +11,7 @@ pub struct CorpusFixture {
     invalid_variant_results: Vec<Result<(), ValidationError>>,
     deferred_task_validation: Vec<Result<(), ValidationError>>,
     review_packet: Option<serde_json::Value>,
+    review_verification: Option<Result<(), String>>,
 }
 
 impl CorpusFixture {
@@ -23,6 +24,7 @@ impl CorpusFixture {
             invalid_variant_results: Vec::new(),
             deferred_task_validation: Vec::new(),
             review_packet: None,
+            review_verification: None,
         }
     }
 
@@ -62,6 +64,36 @@ impl CorpusFixture {
             packet["fixture_sha256"]
                 .as_str()
                 .is_some_and(|digest| digest.starts_with("sha256:") && digest.len() == 71)
+        );
+        assert!(
+            packet["input_sha256"]
+                .as_str()
+                .is_some_and(|digest| digest.starts_with("sha256:") && digest.len() == 71)
+        );
+        merl_corpus::review::verify_independent_review(
+            &serde_json::to_vec(&self.fixture).expect("fixture bytes"),
+            packet,
+        )
+        .expect("unchanged blinded input");
+    }
+
+    pub fn when_a_changed_blinded_input_is_returned(mut self) -> Self {
+        let fixture_bytes = serde_json::to_vec(&self.fixture).expect("fixture bytes");
+        let mut packet =
+            merl_corpus::review::independent_review_packet(&fixture_bytes).expect("review packet");
+        packet["input"]["id"] = serde_json::json!("changed-after-blinding");
+        self.review_verification = Some(merl_corpus::review::verify_independent_review(
+            &fixture_bytes,
+            &packet,
+        ));
+        self
+    }
+
+    pub fn then_the_review_is_rejected(self) {
+        assert!(
+            self.review_verification
+                .expect("verification result")
+                .is_err()
         );
     }
 

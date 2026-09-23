@@ -45,7 +45,16 @@ cargo run --locked -p merl-corpus -- review-packet \
   corpus/adversarial/ADV-C1.json /outside/the/repository/ADV-C1-review.json
 ```
 
-The packet retains the source history, replaces the answers with a blank submission, and binds the review to the exact fixture SHA-256. Keep the completed submission separate until the reviewer finishes. Comparing labels while the review is in progress would make the exercise an adjudication, not an independent annotation.
+The packet retains the source history and replaces the answers with a blank submission. It records one digest for the original fixture and another for the blinded input the reviewer received. Keep the completed submission separate until the reviewer finishes. Comparing labels while the review is in progress would make the exercise an adjudication, not an independent annotation.
+
+Verify the returned packet before comparing its labels with the checked-in gold states:
+
+```sh
+cargo run --locked -p merl-corpus -- review-verify \
+  corpus/adversarial/ADV-C1.json /outside/the-repository/ADV-C1-review.json
+```
+
+Verification permits changes inside `submission` and rejects changes to the fixture identity, either digest, or the blinded input.
 
 ## Capture dependency
 

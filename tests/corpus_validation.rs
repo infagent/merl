@@ -123,3 +123,11 @@ fn an_independent_reviewer_receives_sources_without_existing_gold_labels() {
         .then_existing_gold_labels_are_absent()
         .then_the_blank_submission_is_bound_to_the_exact_fixture();
 }
+
+#[test]
+fn a_returned_review_cannot_change_the_blinded_input() {
+    CorpusFixture::from_json(include_str!("../corpus/adversarial/ADV-C1.json"))
+        .given_valid_fixture()
+        .when_a_changed_blinded_input_is_returned()
+        .then_the_review_is_rejected();
+}
