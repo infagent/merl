@@ -265,16 +265,68 @@ impl CliIssueHistory {
     }
 
     pub fn when_the_required_note_is_compiled(&mut self) -> &mut Self {
-        self.compile_optional_note("optional-note-v1", "optional-note-run-v1");
+        self.latest =
+            Some(self.compile_optional_note("optional-note-v1", "optional-note-run-v1", "pm"));
         self
     }
 
-    pub fn then_required_coverage_is_complete(&mut self) -> &mut Self {
+    pub fn when_a_non_administrator_compiles_the_required_note(&mut self) -> &mut Self {
+        self.latest = Some(self.compile_optional_note(
+            "optional-note-v1",
+            "rejected-optional-note-run",
+            "researcher",
+        ));
+        self
+    }
+
+    pub fn then_the_compile_request_is_rejected_without_spending_compiler_work(
+        &mut self,
+    ) -> &mut Self {
+        assert_eq!(
+            self.latest.as_ref().expect("compile result")["outcome"],
+            "rejected"
+        );
         let store = Store::open(&self.database()).expect("authority");
+        let project = ProjectId::try_from("P1").expect("project");
+        let source = SourceVersionId::try_from("optional-note-v1").expect("source");
+        assert_eq!(
+            store
+                .compilation_run_count(&project, &source)
+                .expect("compiler runs"),
+            0
+        );
+        self
+    }
+
+    pub fn then_required_coverage_is_complete_with_an_authorization_record(&mut self) -> &mut Self {
+        assert_eq!(
+            self.latest.as_ref().expect("compile result")["outcome"],
+            "compiled"
+        );
+        let store = Store::open(&self.database()).expect("authority");
+        let project = ProjectId::try_from("P1").expect("project");
         let coverage = store
-            .semantic_coverage_in_scope(&ProjectId::try_from("P1").expect("project"), "issue-204")
+            .semantic_coverage_in_scope(&project, "issue-204")
             .expect("coverage");
         assert_eq!(coverage.required_gaps, 0);
+        let run = self.latest.as_ref().expect("compile result")["run"]
+            .as_str()
+            .expect("run");
+        let authorization = store
+            .compilation_authorization(&project, run)
+            .expect("authorization lookup")
+            .expect("authorization");
+        assert_eq!(authorization.actor.as_str(), "pm");
+        assert_eq!(authorization.compiler_id, "process");
+        assert_eq!(authorization.compiler_version, "v1");
+        assert_eq!(authorization.model_id, "deterministic-test");
+        assert_eq!(authorization.prompt_digest, [0; 32]);
+        assert_eq!(
+            store
+                .read_payload(&project, &authorization.reason)
+                .expect("authorization reason"),
+            merl_store::PayloadRead::Available(b"Required compiler processing".to_vec())
+        );
         self
     }
 
@@ -333,11 +385,12 @@ impl CliIssueHistory {
     }
 
     pub fn when_the_required_edit_is_compiled(&mut self) -> &mut Self {
-        self.compile_optional_note("optional-note-v2", "optional-note-run-v2");
+        self.latest =
+            Some(self.compile_optional_note("optional-note-v2", "optional-note-run-v2", "pm"));
         self
     }
 
-    fn compile_optional_note(&self, version: &str, run: &str) {
+    fn compile_optional_note(&self, version: &str, run: &str, actor: &str) -> serde_json::Value {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -363,6 +416,10 @@ impl CliIssueHistory {
                 version,
                 "--run",
                 run,
+                "--actor",
+                actor,
+                "--reason",
+                "Required compiler processing",
                 "--program",
                 path(&program),
                 "--compiler-version",
@@ -379,6 +436,7 @@ impl CliIssueHistory {
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
+            serde_json::from_slice(&output.stdout).expect("compile result")
         }
         #[cfg(not(unix))]
         panic!("the CLI compiler acceptance adapter requires a Unix process");

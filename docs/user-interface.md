@@ -763,7 +763,8 @@ The recipient can read the source without compiling it, or request semantic extr
 ```bash
 merl message read M91
 merl source compile --project P1 --database project.sqlite --version SE91 \
-  --run CR91 --program ./compiler-adapter --compiler-version v1 \
+  --run CR91 --actor pm --reason 'Required for T42' \
+  --program ./compiler-adapter --compiler-version v1 \
   --model MODEL --prompt-digest sha256:DIGEST
 ```
 
@@ -775,11 +776,12 @@ An optional note does not block a completeness claim, even when structural metad
 merl source require --project P1 --database project.sqlite --version SE91 \
   --scope task:T42 --actor pm --reason 'Required safety evidence'
 merl source compile --project P1 --database project.sqlite --version SE91 \
-  --run CR91 --program ./compiler-adapter --compiler-version v1 \
+  --run CR91 --actor pm --reason 'Required for T42' \
+  --program ./compiler-adapter --compiler-version v1 \
   --model MODEL --prompt-digest sha256:DIGEST
 ```
 
-The first command passes through administrative policy. An untrusted actor receives a rejection and cannot change coverage. An accepted requirement follows later versions of the same source. Coverage reports each current version as a required gap until the authority compiles it or an authorized policy action excludes it. Project-significant actions should normally use structured commands rather than rely on optional prose.
+Both commands pass through administrative policy. An untrusted actor cannot change coverage or start the compiler. An accepted requirement follows later versions of the same source. An accepted compile request records the actor, reason, source version, run, compiler, model, and prompt digest before external work begins. Coverage reports each current version as a required gap until the authority compiles it or an authorized policy action excludes it. Project-significant actions should normally use structured commands rather than rely on optional prose.
 
 `in_reply_to` preserves conversation history but does not close a question, finding, or task. Those objects change only through semantic commands or accepted assertions such as `answers Q41`, `updates T45`, or `disputes C9`. One note may address several objects, and several notes may address one object.
 
