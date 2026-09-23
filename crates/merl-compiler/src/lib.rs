@@ -34,6 +34,8 @@ pub enum CompileError {
     InvalidResponse,
     /// The bounded run needs another context round before coverage is complete.
     ContextRequired,
+    /// Live on-demand work has no matching accepted spend authorization.
+    UnauthorizedCompilation,
     /// This binary cannot reconstruct an older selector or renderer contract.
     UnsupportedReplayVersion(String),
     /// The external compiler process failed to start or complete.
@@ -54,6 +56,9 @@ impl fmt::Display for CompileError {
                 f.write_str("compiler returned an invalid structured response")
             }
             Self::ContextRequired => f.write_str("compiler requested more context"),
+            Self::UnauthorizedCompilation => {
+                f.write_str("compiler run lacks matching accepted authorization")
+            }
             Self::UnsupportedReplayVersion(version) => {
                 write!(f, "unsupported compiler replay version: {version}")
             }
@@ -1011,6 +1016,34 @@ pub fn prepare_compilation(
     )
 }
 
+/// Persists live on-demand work only after policy accepted the exact compiler request.
+///
+/// # Errors
+/// Rejects missing or mismatched authorization before a compiler run is created.
+pub fn prepare_authorized_compilation(
+    store: &mut Store,
+    project: &ProjectId,
+    source: &SourceVersionId,
+    adapter: &impl CompilerAdapter,
+    request: RunRequest<'_>,
+) -> Result<Option<PreparedCompilation>, CompileError> {
+    if request.mode != RunMode::Live {
+        return Err(CompileError::UnauthorizedCompilation);
+    }
+    let Some(authorization) = store.compilation_authorization(project, request.id)? else {
+        return Err(CompileError::UnauthorizedCompilation);
+    };
+    if authorization.source != *source
+        || authorization.compiler_id != adapter.id()
+        || authorization.compiler_version != adapter.version()
+        || authorization.model_id != adapter.model()
+        || authorization.prompt_digest != adapter.prompt_digest()
+    {
+        return Err(CompileError::UnauthorizedCompilation);
+    }
+    prepare_compilation(store, project, source, adapter, request)
+}
+
 /// Persists a new replay attempt with the exact input verified for an earlier run.
 ///
 /// # Errors
@@ -1197,6 +1230,7 @@ fn error_code(error: &CompileError) -> &'static str {
         CompileError::NonCausalHistory => "noncausal_history",
         CompileError::MissingEvidence => "missing_evidence",
         CompileError::ContextRequired => "context_required",
+        CompileError::UnauthorizedCompilation => "unauthorized_compilation",
         CompileError::UnsupportedReplayVersion(_) => "unsupported_replay_version",
         CompileError::Store(_) | CompileError::InvalidResponse => "invalid_response",
     }

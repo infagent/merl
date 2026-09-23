@@ -1,14 +1,17 @@
 use merl_compiler::{
     CompilerLimits, FakeCompiler, ProcessCompiler, RunMode, RunRequest, SequentialReplay,
-    build_context, execute_compilation, prepare_compilation, prepare_replay_compilation,
-    rebuild_recorded_context, record_compilation_result,
+    build_context, execute_compilation, prepare_authorized_compilation, prepare_compilation,
+    prepare_replay_compilation, rebuild_recorded_context, record_compilation_result,
 };
 use merl_core::{
     ActorId, BatchId, CapturePolicyVersion, CompilationMode, CoverageRequirement, DomainEvent,
     DomainEventBatch, EventId, ObjectId, ObjectKind, ProjectId, SourceBindingId, SourceId,
     SourceKind, SourceProvider, SourceVersionId,
 };
-use merl_store::{CompilationIntent, SemanticCoverage, SourceBinding, SourceCapture, Store};
+use merl_store::{
+    CompilationAuthorizationConfig, CompilationIntent, SemanticCoverage, SourceBinding,
+    SourceCapture, Store,
+};
 use sha2::{Digest, Sha256};
 
 fn limits() -> CompilerLimits {
@@ -38,6 +41,196 @@ fn run_compiler(
         record_compilation_result(store, project, &prepared, raw, completed_at)?;
     }
     Ok(())
+}
+
+pub struct CompilationAuthorizationScenario {
+    store: Store,
+    project: ProjectId,
+    source: SourceVersionId,
+    other_source: SourceVersionId,
+    exact_prepared: bool,
+    rejected_attempts: usize,
+}
+
+impl CompilationAuthorizationScenario {
+    pub fn given_an_on_demand_source_with_one_accepted_request() -> Self {
+        let project = ProjectId::try_from("CompileAuthorization").expect("project ID");
+        let mut store = Store::open_in_memory().expect("store");
+        store.create_project(&project).expect("project");
+        let mut scenario = Self {
+            store,
+            project,
+            source: SourceVersionId::try_from("optional-v1").expect("source"),
+            other_source: SourceVersionId::try_from("other-v1").expect("other source"),
+            exact_prepared: false,
+            rejected_attempts: 0,
+        };
+        scenario.capture_on_demand("optional-v1");
+        scenario.capture_on_demand("other-v1");
+
+        let prompt_digest = [7; 32];
+        let intent = scenario
+            .store
+            .prepare_compilation_authorization(
+                &scenario.project,
+                &scenario.source,
+                "authorized-run",
+                b"Needed for the assigned task",
+                CompilationAuthorizationConfig {
+                    compiler_id: "process",
+                    compiler_version: "v1",
+                    model_id: "model-a",
+                    prompt_digest,
+                },
+            )
+            .expect("authorization intent");
+        scenario
+            .store
+            .commit_unchecked_bootstrap(&DomainEventBatch {
+                id: BatchId::try_from("accept-compile-request").expect("batch"),
+                project: scenario.project.clone(),
+                actor: ActorId::try_from("pm").expect("actor"),
+                occurred_at_millis: 20,
+                events: vec![DomainEvent::PutObject {
+                    id: EventId::try_from("accept-compile-request-event").expect("event"),
+                    object: intent.object,
+                    kind: ObjectKind::try_from("source_compilation_request").expect("kind"),
+                    payload: Some(intent.reason),
+                    issue_scope: Some("issue-1".into()),
+                    lifecycle: merl_core::ObjectLifecycle::Active,
+                }],
+            })
+            .expect("accepted authorization");
+        scenario
+    }
+
+    pub fn when_low_level_preparation_is_attempted(&mut self) -> &mut Self {
+        let exact = process_compiler("v1", "model-a", [7; 32]);
+        let attempts = [
+            (
+                &self.source,
+                "missing-run",
+                process_compiler("v1", "model-a", [7; 32]),
+            ),
+            (
+                &self.other_source,
+                "authorized-run",
+                process_compiler("v1", "model-a", [7; 32]),
+            ),
+            (
+                &self.source,
+                "authorized-run",
+                process_compiler("v2", "model-a", [7; 32]),
+            ),
+            (
+                &self.source,
+                "authorized-run",
+                process_compiler("v1", "model-b", [7; 32]),
+            ),
+            (
+                &self.source,
+                "authorized-run",
+                process_compiler("v1", "model-a", [8; 32]),
+            ),
+        ];
+        for (source, run, adapter) in attempts {
+            let result = prepare_authorized_compilation(
+                &mut self.store,
+                &self.project,
+                source,
+                &adapter,
+                RunRequest {
+                    id: run,
+                    limits: limits(),
+                    mode: RunMode::Live,
+                    now_millis: 30,
+                },
+            );
+            if matches!(
+                result,
+                Err(merl_compiler::CompileError::UnauthorizedCompilation)
+            ) {
+                self.rejected_attempts += 1;
+            }
+        }
+        self.exact_prepared = prepare_authorized_compilation(
+            &mut self.store,
+            &self.project,
+            &self.source,
+            &exact,
+            RunRequest {
+                id: "authorized-run",
+                limits: limits(),
+                mode: RunMode::Live,
+                now_millis: 31,
+            },
+        )
+        .expect("authorized preparation")
+        .is_some();
+        self
+    }
+
+    pub fn then_only_the_exact_authorized_run_is_prepared(&mut self) -> &mut Self {
+        assert_eq!(self.rejected_attempts, 5);
+        assert!(self.exact_prepared);
+        assert_eq!(
+            self.store
+                .compilation_run_ids(&self.project)
+                .expect("compiler runs"),
+            vec!["authorized-run"]
+        );
+        self
+    }
+
+    fn capture_on_demand(&mut self, version: &'static str) {
+        let binding = SourceBinding {
+            id: SourceBindingId::try_from("authorization-binding").expect("binding"),
+            provider: SourceProvider::try_from("controlled").expect("provider"),
+            provider_namespace_id: "authorization".into(),
+            namespace_digest: Sha256::digest(b"authorization").into(),
+        };
+        self.store
+            .capture_source_version(
+                &self.project,
+                &SourceCapture {
+                    binding,
+                    source: SourceId::try_from(version).expect("source"),
+                    provider_entity_id: version,
+                    context_scope_id: "issue-1",
+                    version: SourceVersionId::try_from(version).expect("version"),
+                    provider_version_id: version,
+                    kind: SourceKind::try_from("note").expect("kind"),
+                    supersedes: None,
+                    ambiguous_order_with_previous: false,
+                    created_at_millis: 10,
+                    occurred_at_millis: 10,
+                    upstream_updated_at_millis: None,
+                    observed_at_millis: 10,
+                    actor: None,
+                    provider_actor_id: None,
+                    source_author: None,
+                    provider_source_author_id: None,
+                    body: Some(b"Optional note"),
+                    edit_diff: None,
+                    edit_deleted_at_millis: None,
+                    missing_body_reason: None,
+                    compilation_mode: CompilationMode::OnDemand,
+                    coverage_requirement: CoverageRequirement::Optional,
+                    policy_version: CapturePolicyVersion::try_from("test-v1").expect("policy"),
+                },
+            )
+            .expect("capture");
+    }
+}
+
+fn process_compiler(version: &str, model: &str, prompt_digest: [u8; 32]) -> ProcessCompiler {
+    ProcessCompiler {
+        program: "unused".into(),
+        args: Vec::new(),
+        version: version.into(),
+        model: model.into(),
+        prompt_digest,
+    }
 }
 
 pub struct HistoricalIssue {

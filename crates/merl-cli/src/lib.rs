@@ -118,6 +118,7 @@ impl From<merl_compiler::CompileError> for CliError {
             merl_compiler::CompileError::OutputBudget => "COMPILER_OUTPUT_BUDGET",
             merl_compiler::CompileError::InvalidResponse => "INVALID_COMPILER_RESPONSE",
             merl_compiler::CompileError::ContextRequired => "COMPILER_CONTEXT_REQUIRED",
+            merl_compiler::CompileError::UnauthorizedCompilation => "COMPILER_UNAUTHORIZED",
             merl_compiler::CompileError::UnsupportedReplayVersion(_) => {
                 "UNSUPPORTED_REPLAY_VERSION"
             }
@@ -699,7 +700,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                     ))
                 };
             }
-            let prepared = merl_compiler::prepare_compilation(
+            let prepared = merl_compiler::prepare_authorized_compilation(
                 &mut store,
                 &project,
                 &version,

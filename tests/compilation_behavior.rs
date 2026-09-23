@@ -1,7 +1,16 @@
 #[path = "helpers/compilation_behavior.rs"]
 mod compilation_behavior;
 
-use compilation_behavior::{CompilationScenario, HistoricalIssue};
+use compilation_behavior::{
+    CompilationAuthorizationScenario, CompilationScenario, HistoricalIssue,
+};
+
+#[test]
+fn on_demand_compilation_requires_the_exact_accepted_authorization() {
+    CompilationAuthorizationScenario::given_an_on_demand_source_with_one_accepted_request()
+        .when_low_level_preparation_is_attempted()
+        .then_only_the_exact_authorized_run_is_prepared();
+}
 
 #[test]
 fn late_compilation_keeps_the_authors_world_separate_from_today() {
