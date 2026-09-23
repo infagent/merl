@@ -6,11 +6,11 @@ This document owns the scope and acceptance criteria for Phase 4. It follows the
 
 ## Goal
 
-Phase 4 makes Merl useful to a team of agents working in one project. A human chooses when to start each process. Merl prepares its stable identity, accepted assignment, isolated workspace, and bounded project view before launch.
+Phase 4 makes Merl useful to a team of agents working in one project. A human attaches the repository once and chooses when to start each process. Merl keeps the selected project surfaces current, then prepares each agent's stable identity, accepted assignment, isolated workspace, and bounded project view before launch.
 
 The phase tests a larger version of the original token claim: several agents should coordinate through current state and compact deltas instead of sending each other full histories or rebuilding context after every restart.
 
-One local project authority is enough. The project may refer to more than one source, though the acceptance scenario uses one Git repository so workspace behavior stays easy to inspect.
+One local project authority is enough. The project may refer to more than one source, though the acceptance scenario uses one Git repository so synchronization and workspace behavior stay easy to inspect.
 
 ## Boundary
 
@@ -19,6 +19,7 @@ Phase 4 includes the operations needed after a human starts an agent:
 - logical agent identity, project role, and durable guidance;
 - session generations, checkpoints, and bounded resume;
 - accepted tasks, assignments, execution leases, and handoffs;
+- repository attachment, selective Issue and pull request synchronization, and durable source policy;
 - managed worktrees, branches, scratch space, and safe cleanup;
 - assignment-aware views and inbox delivery;
 - structured work requests and optional direct prose;
@@ -85,6 +86,28 @@ The task keeps its independent planning facets:
 Deferring or pausing work removes it from the actionable queue without erasing the assignment history. Pausing in-progress work requires a checkpoint before Merl releases the execution lease.
 
 A handoff references the Task, current project revision, relevant objects, artifacts, and an optional short note payload. The next agent receives current objects. It does not inherit a copied snapshot that can drift from accepted state.
+
+## Repository synchronization
+
+The first release captures one named Issue at a time. Phase 4 lets a human attach a repository once and records which parts of it Merl should maintain:
+
+```bash
+merl repository attach \
+  --project project-a \
+  --repository acme/project-a
+
+merl repository sync --project project-a
+```
+
+The binding stores a versioned selection policy. It may include open Issues in an active milestone, selected labels, explicit Issue or pull request numbers, and provider objects referenced by accepted Tasks. A project can retain a closed Issue when current work still depends on it.
+
+Selection begins with structural provider metadata. Merl does not read cold body text to decide whether that text deserves compilation. The sync worker may keep a cheap catalog of Issue and pull request identity, state, labels, milestone, assignees, and update time while capturing full source versions only for selected surfaces.
+
+Capture and compilation remain separate. A practical policy might compile human comments on active assigned work eagerly, retain bot comments as `capture_only`, and leave an unrelated backlog uncaptured or catalog-only. Changing the policy requires an authorized operation and does not rewrite the policy recorded on earlier captures.
+
+The local daemon runs bounded incremental sync, and the CLI can request it directly. Provider pagination, rate limits, and incomplete responses stay visible. An incomplete listing cannot imply that an Issue, comment, or pull request was deleted. Repeating a sync is idempotent and does not redispatch completed compiler work.
+
+This is selective project maintenance, not an instruction to compile an entire repository. Sync reports what it cataloged, captured, compiled, skipped, or could not verify.
 
 ## Assignment context
 
@@ -201,6 +224,8 @@ The report compares Merl with a transcript-oriented workflow for the same scenar
 Phase 4 includes:
 
 - agent profiles, project membership, roles, and durable guidance;
+- repository attachment and versioned selection, capture, and compilation policies;
+- bounded incremental synchronization for selected Issues and pull requests;
 - session generations and one actionable inbox lease per logical agent;
 - Task assignments, execution leases, pause, handoff, and assignment history;
 - assignment-derived and relation-weighted project views;
@@ -219,6 +244,14 @@ Phase 4 includes:
 
 Phase 4 is complete when:
 
+- a human can attach an existing GitHub repository once and inspect its effective synchronization policy;
+- repository sync discovers eligible Issues and pull requests from provider metadata without reading cold body text to make the selection;
+- open, milestone, label, explicit-reference, and accepted-Task selectors have deterministic, versioned behavior;
+- selected existing Issues capture their available descriptions, comments, edits, and provider facts;
+- repeated sync creates no duplicate sources, accepted effects, or completed compiler work;
+- incomplete provider responses do not invent deletions or claim a complete refresh;
+- eager, on-demand, capture-only, required, and optional behavior follows the durable binding policy;
+- unrelated backlog prose does not enter compilation merely because its repository is attached;
 - logical agent identity survives process restart and model-context replacement;
 - project role and membership come from durable policy rather than runtime claims;
 - one active session owns a logical agent's actionable inbox cursor and execution lease;
@@ -251,20 +284,23 @@ Phase 4 is complete when:
 
 ## Acceptance scenario
 
-The release scenario uses a PM, an engineer, and a researcher that a human starts and attaches.
+The release scenario uses an existing GitHub repository plus a PM, an engineer, and a researcher that a human starts and attaches.
 
-1. The PM assigns separate accepted Tasks to the engineer and researcher.
-2. Merl creates an isolated writable worktree for each Task that needs repository access.
-3. Each agent resumes into a different assignment-focused context.
-4. The researcher records a finding that changes the engineer's Task.
-5. The engineer receives a compact delta and expands only the finding and its evidence.
-6. The engineer sends a supplemental note linked to a structured Task transition; Merl does not create duplicate work from that note.
-7. The engineer publishes its assignment branch as a pull request.
-8. A reviewer opens the reviewed commit in a separate read-only workspace and records a finding.
-9. GitHub reports the final merge state through the project revision and inbox.
-10. Both workers checkpoint and close.
-11. Fresh sessions resume from current state and referenced objects without receiving the prior transcripts.
-12. Merl reports the context and token cost for the team workflow.
+1. A human attaches the repository and selects its active milestone and agent-work labels.
+2. Merl catalogs the repository, captures selected existing Issues, and leaves unrelated backlog prose out of compiler input.
+3. A later sync records one new comment and one provider-state change without duplicating earlier work.
+4. The PM assigns separate accepted Tasks to the engineer and researcher.
+5. Merl creates an isolated writable worktree for each Task that needs repository access.
+6. Each agent resumes into a different assignment-focused context.
+7. The researcher records a finding that changes the engineer's Task.
+8. The engineer receives a compact delta and expands only the finding and its evidence.
+9. The engineer sends a supplemental note linked to a structured Task transition; Merl does not create duplicate work from that note.
+10. The engineer publishes its assignment branch as a pull request.
+11. A reviewer opens the reviewed commit in a separate read-only workspace and records a finding.
+12. GitHub reports the final merge state through the project revision and inbox.
+13. Both workers checkpoint and close.
+14. Fresh sessions resume from current state and referenced objects without receiving the prior transcripts.
+15. Merl reports the context and token cost for the team workflow.
 
 ## Deferred work
 

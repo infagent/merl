@@ -5,7 +5,7 @@ Start with the [product description](product-description.md). It explains the pr
 The [roadmap](roadmap.md) shows the release sequence. Each plan owns the scope and acceptance criteria for its release:
 
 - [First release](plans/first-release.md): compile GitHub Issue history into compact, provenance-backed state and measure the token break-even point.
-- [Phase 4](plans/single-project-agent-operations.md): operate manually started agents inside one project, with assignments, worktrees, continuity, and pull request review.
+- [Phase 4](plans/single-project-agent-operations.md): maintain an existing repository and operate manually started agents with assignments, worktrees, continuity, and pull request review.
 - [Phase 5](plans/delegated-agent-management.md): let an authorized manager provision and control agents within human-approved limits.
 
 Use the [UI behavior contract](user-interface.md) for observable commands and outcomes. The [architecture](architecture.md) defines the state model, authority boundaries, and transaction rules.
