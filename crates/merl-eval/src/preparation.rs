@@ -95,8 +95,10 @@ pub struct MerlPreparationRecord {
     pub capture_phase: bool,
     /// Candidate source revision that built the authority.
     pub candidate_commit: String,
-    /// Candidate evaluator executable hash; the binary embeds the Merl crates.
-    pub candidate_binary_sha256: String,
+    /// Executable that produced this authority and receipt.
+    pub candidate_preparer_binary_sha256: String,
+    /// Closed authority database produced by that executable.
+    pub authority_sha256: String,
     /// Compiler files and run identity.
     pub compiler: CompilerAttestation,
     /// Every compiler run in the prepared authority, in durable attempt order.
@@ -120,8 +122,8 @@ pub struct PreparationExpectation<'a> {
     pub capture_phase: bool,
     /// Candidate source revision.
     pub candidate_commit: &'a str,
-    /// Hash of the evaluator executable embedding this Merl candidate.
-    pub candidate_binary_sha256: &'a str,
+    /// Hash of the candidate executable that prepared the authority.
+    pub candidate_preparer_binary_sha256: &'a str,
 }
 
 /// Verify one prepared authority without trusting a caller-supplied causal flag.
@@ -142,10 +144,10 @@ pub fn verify_preparation(
         || record.source_cutoff != expected.source_cutoff
         || record.capture_phase != expected.capture_phase
         || record.candidate_commit != expected.candidate_commit
-        || record.candidate_binary_sha256 != expected.candidate_binary_sha256
     {
         return Err("preparation record does not match this candidate trial".to_owned());
     }
+    verify_producer_binding(record, database, expected.candidate_preparer_binary_sha256)?;
     let hashes = [
         file_digest(&artifacts.program)?,
         file_digest(&artifacts.prompt)?,
@@ -359,8 +361,21 @@ fn validate_run(
 
 fn file_digest(path: &Path) -> Result<String, String> {
     let bytes =
-        fs::read(path).map_err(|error| format!("could not read compiler artifact: {error}"))?;
+        fs::read(path).map_err(|error| format!("could not read frozen artifact: {error}"))?;
     Ok(digest_text(&Sha256::digest(bytes)))
+}
+
+fn verify_producer_binding(
+    record: &MerlPreparationRecord,
+    database: &Path,
+    expected_producer_sha256: &str,
+) -> Result<(), String> {
+    if record.candidate_preparer_binary_sha256 != expected_producer_sha256
+        || record.authority_sha256 != file_digest(database)?
+    {
+        return Err("prepared authority does not match its candidate producer".to_owned());
+    }
+    Ok(())
 }
 
 fn contract_digest(hashes: &[String; 4]) -> [u8; 32] {
@@ -389,7 +404,7 @@ mod tests {
 
     use super::{
         AttestedRun, CompilerAttestation, MerlPreparationRecord, TokenUsage, digest_text,
-        validate_run,
+        validate_run, verify_producer_binding,
     };
 
     #[test]
@@ -402,7 +417,8 @@ mod tests {
             source_cutoff: 4,
             capture_phase: false,
             candidate_commit: "a".repeat(40),
-            candidate_binary_sha256: digest_text(&contract),
+            candidate_preparer_binary_sha256: digest_text(&contract),
+            authority_sha256: digest_text(&contract),
             compiler: CompilerAttestation {
                 id: "process".to_owned(),
                 version: "v1".to_owned(),
@@ -450,5 +466,42 @@ mod tests {
         stored.mode = "live".to_owned();
         stored.prompt_digest = [8; 32];
         assert!(validate_run(&record, &run, &stored, &contract).is_err());
+    }
+
+    #[test]
+    fn preparation_receipt_binds_the_producer_and_database() {
+        let location =
+            std::env::temp_dir().join(format!("merl-preparation-binding-{}", std::process::id()));
+        std::fs::write(&location, b"authority-v1").expect("authority");
+        let producer = digest_text(&[9_u8; 32]);
+        let mut record = MerlPreparationRecord {
+            schema: "merl.eval-preparation/v1".to_owned(),
+            trial_id: "pair-a".to_owned(),
+            project: "P1".to_owned(),
+            source_cutoff: 4,
+            capture_phase: false,
+            candidate_commit: "a".repeat(40),
+            candidate_preparer_binary_sha256: producer.clone(),
+            authority_sha256: super::file_digest(&location).expect("authority digest"),
+            compiler: CompilerAttestation {
+                id: "process".to_owned(),
+                version: "v1".to_owned(),
+                model: "model-v1".to_owned(),
+                program_sha256: producer.clone(),
+                prompt_sha256: producer.clone(),
+                rules_sha256: producer.clone(),
+                config_sha256: producer.clone(),
+                contract_sha256: producer.clone(),
+            },
+            runs: vec![],
+            calls: vec![],
+            total_usage: TokenUsage::default(),
+        };
+        assert!(verify_producer_binding(&record, &location, &producer).is_ok());
+        std::fs::write(&location, b"authority-v2").expect("changed authority");
+        assert!(verify_producer_binding(&record, &location, &producer).is_err());
+        record.candidate_preparer_binary_sha256 = digest_text(&[8_u8; 32]);
+        assert!(verify_producer_binding(&record, &location, &producer).is_err());
+        std::fs::remove_file(location).expect("remove authority");
     }
 }
