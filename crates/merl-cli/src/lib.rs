@@ -62,6 +62,7 @@ impl From<StoreError> for CliError {
             StoreError::InvalidPolicyEvaluation => "INVALID_POLICY_EVALUATION",
             StoreError::InvalidInboxAcknowledgement => "INVALID_INBOX_ACKNOWLEDGEMENT",
             StoreError::InvalidPurge => "INVALID_PURGE",
+            StoreError::InvalidCoveragePromotion => "INVALID_COVERAGE_PROMOTION",
             StoreError::Storage(_) => "STORAGE_ERROR",
         };
         Self {
@@ -319,6 +320,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
         ["help", "show"] => help("show", *json_output),
         ["help", "source"] => help("source", *json_output),
         ["help", "source", "show"] => help("source show", *json_output),
+        ["help", "source", "require"] => help("source require", *json_output),
         ["help", "source", "purge"] => help("source purge", *json_output),
         ["help", "source", "purge-audit"] => help("source purge-audit", *json_output),
         ["help", "source", "replay"] => help("source replay", *json_output),
@@ -582,6 +584,60 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
             })?;
             let store = Store::open(Path::new(database))?;
             render_source(&store, &project, &version, *json_output)
+        }
+        ["source", "require"] => {
+            let project =
+                parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
+            let database = database.ok_or_else(|| invalid_input("--database is required"))?;
+            let version = SourceVersionId::try_from(
+                version.ok_or_else(|| invalid_input("--version is required"))?,
+            )
+            .map_err(|error| CliError {
+                code: "INVALID_ID",
+                message: error.to_string(),
+            })?;
+            let scope = scope.ok_or_else(|| invalid_input("--scope is required"))?;
+            let actor = merl_core::ActorId::try_from(
+                actor.ok_or_else(|| invalid_input("--actor is required"))?,
+            )
+            .map_err(|error| CliError {
+                code: "INVALID_ID",
+                message: error.to_string(),
+            })?;
+            let reason = reason.ok_or_else(|| invalid_input("--reason is required"))?;
+            let mut store = Store::open(Path::new(database))?;
+            let existed = store
+                .coverage_promotion(&project, &version, scope)?
+                .is_some();
+            let promotion = store.require_source(
+                &project,
+                &version,
+                scope,
+                &actor,
+                reason.as_bytes(),
+                utc_now_millis()?,
+            )?;
+            if *json_output {
+                render_json(&json!({
+                    "schema": "merl.source-coverage/v1",
+                    "action": "source.require",
+                    "project": project.as_str(),
+                    "source": promotion.source.as_str(),
+                    "scope": promotion.scope,
+                    "coverage": "required",
+                    "actor": promotion.actor.as_str(),
+                    "reason_payload": promotion.reason.as_str(),
+                    "promoted_at_millis": promotion.promoted_at_millis,
+                    "outcome": if existed { "unchanged" } else { "promoted" }
+                }))
+            } else {
+                Ok(format!(
+                    "{} is required for {} ({})\n",
+                    promotion.source,
+                    promotion.scope,
+                    if existed { "unchanged" } else { "promoted" }
+                ))
+            }
         }
         ["source", "purge"] => {
             let project =
@@ -1585,9 +1641,10 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "source" => (
             "merl source <command>",
-            "Commands: show, replay, purge, purge-audit.",
+            "Commands: show, require, replay, purge, purge-audit.",
             vec![
                 "source show",
+                "source require",
                 "source replay",
                 "source purge",
                 "source purge-audit",
@@ -1597,6 +1654,11 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             "merl source show --project <id> --database <path> --version <id> [--format json]",
             "Read one captured source version. Erased bytes report unavailable.",
             vec!["show"],
+        ),
+        "source require" => (
+            "merl source require --project <id> --database <path> --version <id> --scope <id> --actor <id> --reason <text> [--format json]",
+            "Make retained optional evidence part of the completeness contract for one scope. Identical retries are safe.",
+            vec!["source show", "issue view"],
         ),
         "source purge" => (
             "merl source purge --project <id> --database <path> --version <id> --reason <text> (--dry-run | --actor <id> --confirm-digest sha256:<hex>) [--format json]",
@@ -1661,6 +1723,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         "source show" => {
             Some("merl source show --project P1 --database project.sqlite --version SV1 --json")
         }
+        "source require" => Some(
+            "merl source require --project P1 --database project.sqlite --version SV1 --scope task:T42 --actor pm --reason 'Required safety evidence' --json",
+        ),
         "source purge" => Some(
             "merl source purge --project P1 --database project.sqlite --version SV1 --reason 'Sensitive text' --dry-run --json",
         ),

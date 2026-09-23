@@ -4,11 +4,19 @@ use std::{
     process::Command,
 };
 
+use merl_core::{
+    ActorId, CapturePolicyVersion, CompilationMode, CoverageRequirement, ProjectId,
+    SourceBindingId, SourceId, SourceKind, SourceProvider, SourceVersionId,
+};
+use merl_store::{SourceBinding, SourceCapture, Store};
+use sha2::{Digest, Sha256};
+
 pub struct CliIssueHistory {
     directory: TestDirectory,
     latest: Option<serde_json::Value>,
     purge_digest: Option<String>,
     compiler_program: Option<PathBuf>,
+    first_promotion: Option<serde_json::Value>,
 }
 
 impl CliIssueHistory {
@@ -18,11 +26,155 @@ impl CliIssueHistory {
             latest: None,
             purge_digest: None,
             compiler_program: None,
+            first_promotion: None,
         }
     }
 
     fn database(&self) -> PathBuf {
         self.directory.path.join("project.sqlite")
+    }
+
+    pub fn given_an_optional_issue_note(&mut self) -> &mut Self {
+        let mut store = Store::open(&self.database()).expect("authority");
+        let project = ProjectId::try_from("P1").expect("project");
+        store.create_project(&project).expect("project");
+        store
+            .capture_source_version(
+                &project,
+                &SourceCapture {
+                    binding: SourceBinding {
+                        id: SourceBindingId::try_from("binding").expect("binding"),
+                        provider: SourceProvider::try_from("controlled").expect("provider"),
+                        provider_namespace_id: "fixture".into(),
+                        namespace_digest: Sha256::digest(b"fixture").into(),
+                    },
+                    source: SourceId::try_from("optional-note").expect("source"),
+                    provider_entity_id: "optional-note",
+                    context_scope_id: "issue-204",
+                    version: SourceVersionId::try_from("optional-note-v1").expect("version"),
+                    provider_version_id: "optional-note-v1",
+                    kind: SourceKind::try_from("issue_comment").expect("kind"),
+                    supersedes: None,
+                    ambiguous_order_with_previous: false,
+                    created_at_millis: 1,
+                    occurred_at_millis: 1,
+                    upstream_updated_at_millis: Some(1),
+                    observed_at_millis: 1,
+                    actor: Some(ActorId::try_from("researcher").expect("actor")),
+                    provider_actor_id: Some("researcher"),
+                    source_author: Some(ActorId::try_from("researcher").expect("author")),
+                    provider_source_author_id: Some("researcher"),
+                    body: Some(b"Optional safety note."),
+                    edit_diff: None,
+                    edit_deleted_at_millis: None,
+                    missing_body_reason: None,
+                    compilation_mode: CompilationMode::CaptureOnly,
+                    coverage_requirement: CoverageRequirement::Optional,
+                    policy_version: CapturePolicyVersion::try_from("fixture-v1").expect("policy"),
+                },
+            )
+            .expect("capture optional note");
+        self
+    }
+
+    pub fn when_issue_coverage_is_read(&mut self) -> &mut Self {
+        let store = Store::open(&self.database()).expect("authority");
+        let coverage = store
+            .semantic_coverage_in_scope(&ProjectId::try_from("P1").expect("project"), "issue-204")
+            .expect("coverage");
+        self.latest = Some(serde_json::json!({
+            "required_gaps": coverage.required_gaps,
+            "optional_cold": coverage.optional_cold
+        }));
+        self
+    }
+
+    pub fn then_the_cold_note_is_optional(&mut self) -> &mut Self {
+        let coverage = self.latest.as_ref().expect("coverage");
+        assert_eq!(coverage["required_gaps"], 0);
+        assert_eq!(coverage["optional_cold"], 1);
+        self
+    }
+
+    pub fn when_the_note_is_required_for_the_issue(&mut self) -> &mut Self {
+        let output = merl(&[
+            "source",
+            "require",
+            "--project",
+            "P1",
+            "--database",
+            path(&self.database()),
+            "--version",
+            "optional-note-v1",
+            "--scope",
+            "issue-204",
+            "--actor",
+            "pm",
+            "--reason",
+            "Required safety evidence",
+            "--json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let promotion: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("promotion result");
+        self.first_promotion = Some(promotion.clone());
+        self.latest = Some(promotion);
+        self
+    }
+
+    pub fn then_the_note_becomes_a_required_gap_with_an_audit_record(&mut self) -> &mut Self {
+        let promotion = self.latest.as_ref().expect("promotion");
+        assert_eq!(promotion["outcome"], "promoted");
+        let store = Store::open(&self.database()).expect("authority");
+        let project = ProjectId::try_from("P1").expect("project");
+        let source = SourceVersionId::try_from("optional-note-v1").expect("source");
+        let coverage = store
+            .semantic_coverage_in_scope(&project, "issue-204")
+            .expect("coverage");
+        assert_eq!(coverage.required_gaps, 1);
+        assert_eq!(coverage.optional_cold, 0);
+        let audit = store
+            .coverage_promotion(&project, &source, "issue-204")
+            .expect("promotion audit")
+            .expect("promotion");
+        assert_eq!(audit.actor.as_str(), "pm");
+        assert_eq!(audit.reason.as_str(), promotion["reason_payload"]);
+        self
+    }
+
+    pub fn when_the_same_requirement_is_retried(&mut self) -> &mut Self {
+        let output = merl(&[
+            "source",
+            "require",
+            "--project",
+            "P1",
+            "--database",
+            path(&self.database()),
+            "--version",
+            "optional-note-v1",
+            "--scope",
+            "issue-204",
+            "--actor",
+            "pm",
+            "--reason",
+            "Required safety evidence",
+            "--json",
+        ]);
+        assert!(output.status.success());
+        self.latest = Some(serde_json::from_slice(&output.stdout).expect("retry result"));
+        self
+    }
+
+    pub fn then_the_retry_returns_the_original_promotion(&mut self) {
+        let first = self.first_promotion.as_ref().expect("first promotion");
+        let retry = self.latest.as_ref().expect("retry result");
+        assert_eq!(retry["outcome"], "unchanged");
+        assert_eq!(retry["promoted_at_millis"], first["promoted_at_millis"]);
+        assert_eq!(retry["reason_payload"], first["reason_payload"]);
     }
 
     pub fn given_a_new_project(&mut self) -> &mut Self {

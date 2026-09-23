@@ -83,3 +83,15 @@ fn projection_rebuild_keeps_accepted_state_but_reports_purged_evidence() {
         .when_the_project_projection_is_rebuilt()
         .then_rebuild_reports_degraded_provenance_at_the_same_revision();
 }
+
+#[test]
+fn an_authorized_operator_can_make_an_optional_source_required() {
+    CliIssueHistory::new()
+        .given_an_optional_issue_note()
+        .when_issue_coverage_is_read()
+        .then_the_cold_note_is_optional()
+        .when_the_note_is_required_for_the_issue()
+        .then_the_note_becomes_a_required_gap_with_an_audit_record()
+        .when_the_same_requirement_is_retried()
+        .then_the_retry_returns_the_original_promotion();
+}

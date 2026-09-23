@@ -12,7 +12,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -47,6 +47,8 @@ pub enum StoreError {
     InvalidInboxAcknowledgement,
     /// The preview changed, the actor omitted a reason, or this source was purged already.
     InvalidPurge,
+    /// A coverage promotion is incomplete or conflicts with its durable identity.
+    InvalidCoveragePromotion,
 }
 
 impl fmt::Display for StoreError {
@@ -83,6 +85,9 @@ impl fmt::Display for StoreError {
                 formatter.write_str("inbox entry is absent or out of order")
             }
             Self::InvalidPurge => formatter.write_str("purge request does not match its preview"),
+            Self::InvalidCoveragePromotion => {
+                formatter.write_str("source coverage promotion is invalid or conflicts")
+            }
         }
     }
 }
@@ -102,6 +107,21 @@ pub enum PayloadRead {
     Available(Vec<u8>),
     /// The reference remains, but protected bytes were erased.
     Unavailable,
+}
+
+/// Durable policy state that makes previously optional evidence completeness-critical.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoveragePromotion {
+    /// Source whose absence now prevents a completeness claim.
+    pub source: SourceVersionId,
+    /// Issue, task, or other bounded scope where the requirement applies.
+    pub scope: String,
+    /// Actor who accepted the cost and completeness consequence.
+    pub actor: ActorId,
+    /// Protected explanation retained for audit without embedding prose in structural state.
+    pub reason: PayloadId,
+    /// Authority time of the first accepted promotion.
+    pub promoted_at_millis: i64,
 }
 
 /// One protected payload named in an administrative purge preview.
@@ -801,6 +821,11 @@ impl Store {
             if version < 15 {
                 transaction
                     .execute_batch(include_str!("../migrations/0015_provider_sightings.sql"))?;
+            }
+            if version < 16 {
+                transaction.execute_batch(include_str!(
+                    "../migrations/0016_source_coverage_promotions.sql"
+                ))?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -2015,6 +2040,128 @@ impl Store {
         self.semantic_coverage_for_scope(project, None)
     }
 
+    /// Makes one retained source part of the completeness contract for a bounded scope.
+    ///
+    /// The first accepted promotion fixes its actor, reason, and time. Identical retries return
+    /// that record so a restarted operator cannot accidentally create a second policy fact.
+    ///
+    /// # Errors
+    /// Rejects missing or already-required sources, empty fields, and conflicting retries.
+    pub fn require_source(
+        &mut self,
+        project: &ProjectId,
+        source: &SourceVersionId,
+        scope: &str,
+        actor: &ActorId,
+        reason: &[u8],
+        promoted_at_millis: i64,
+    ) -> Result<CoveragePromotion, StoreError> {
+        type RawPromotion = (String, String, Vec<u8>, i64);
+        if scope.is_empty() || scope.len() > 512 || reason.is_empty() {
+            return Err(StoreError::InvalidCoveragePromotion);
+        }
+        let captured: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT coverage_requirement FROM source_versions WHERE project_id=?1 AND id=?2",
+                params![project.as_str(), source.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match captured.as_deref() {
+            Some("optional") => {}
+            Some("required") | None => return Err(StoreError::InvalidCoveragePromotion),
+            Some(_) => return Err(StoreError::CorruptHistory),
+        }
+
+        let digest: [u8; 32] = Sha256::digest(reason).into();
+        let existing: Option<RawPromotion> = self
+            .connection
+            .query_row(
+                "SELECT actor_id,reason_payload_id,reason_digest,promoted_at_millis
+                 FROM source_coverage_promotions
+                 WHERE project_id=?1 AND source_version_id=?2 AND scope_id=?3",
+                params![project.as_str(), source.as_str(), scope],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        if let Some((stored_actor, stored_reason, stored_digest, stored_at)) = existing {
+            if stored_actor != actor.as_str() || stored_digest.as_slice() != digest {
+                return Err(StoreError::InvalidCoveragePromotion);
+            }
+            return Ok(CoveragePromotion {
+                source: source.clone(),
+                scope: scope.to_owned(),
+                actor: actor.clone(),
+                reason: PayloadId::try_from(stored_reason.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                promoted_at_millis: stored_at,
+            });
+        }
+
+        let reason_id = coverage_reason_id(project, source, scope)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "INSERT INTO payloads (project_id,id,digest,bytes) VALUES (?1,?2,?3,?4)",
+            params![
+                project.as_str(),
+                reason_id.as_str(),
+                digest.as_slice(),
+                reason
+            ],
+        )?;
+        transaction.execute(
+            "INSERT INTO source_coverage_promotions
+             (project_id,source_version_id,scope_id,actor_id,reason_payload_id,reason_digest,promoted_at_millis)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![project.as_str(), source.as_str(), scope, actor.as_str(), reason_id.as_str(), digest.as_slice(), promoted_at_millis],
+        )?;
+        transaction.commit()?;
+        Ok(CoveragePromotion {
+            source: source.clone(),
+            scope: scope.to_owned(),
+            actor: actor.clone(),
+            reason: reason_id,
+            promoted_at_millis,
+        })
+    }
+
+    /// Reads the durable audit record for one source/scope promotion.
+    ///
+    /// # Errors
+    /// Returns an error if stored structural identity is corrupt or SQLite cannot read it.
+    pub fn coverage_promotion(
+        &self,
+        project: &ProjectId,
+        source: &SourceVersionId,
+        scope: &str,
+    ) -> Result<Option<CoveragePromotion>, StoreError> {
+        type RawPromotion = (String, String, i64);
+        let row: Option<RawPromotion> = self
+            .connection
+            .query_row(
+                "SELECT actor_id,reason_payload_id,promoted_at_millis
+                 FROM source_coverage_promotions
+                 WHERE project_id=?1 AND source_version_id=?2 AND scope_id=?3",
+                params![project.as_str(), source.as_str(), scope],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        row.map(|(actor, reason, promoted_at_millis)| {
+            Ok(CoveragePromotion {
+                source: source.clone(),
+                scope: scope.to_owned(),
+                actor: ActorId::try_from(actor.as_str()).map_err(|_| StoreError::CorruptHistory)?,
+                reason: PayloadId::try_from(reason.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                promoted_at_millis,
+            })
+        })
+        .transpose()
+    }
+
     /// Reports only the required and optional observations attached to one Issue thread.
     ///
     /// # Errors
@@ -2036,15 +2183,23 @@ impl Store {
         scope: Option<&str>,
     ) -> Result<SemanticCoverage, StoreError> {
         let observation_head: i64 = self.connection.query_row(
-            "SELECT COALESCE(MAX(sequence), 0) FROM source_versions
-             WHERE project_id=?1 AND (?2 IS NULL OR context_scope_id=?2)",
+            "SELECT COALESCE(MAX(sequence), 0) FROM source_versions s
+             WHERE project_id=?1 AND (?2 IS NULL OR context_scope_id=?2 OR EXISTS(
+               SELECT 1 FROM source_coverage_promotions p
+               WHERE p.project_id=s.project_id AND p.source_version_id=s.id AND p.scope_id=?2))",
             params![project.as_str(), scope],
             |row| row.get(0),
         )?;
         let (required_gaps, required_failed, optional_cold, first_gap, required_pending, required_purged):
             (i64, i64, i64, Option<i64>, i64, i64) = self.connection.query_row(
             "WITH scoped AS (
-               SELECT s.sequence,s.coverage_requirement,
+               SELECT s.sequence,
+                 CASE WHEN s.coverage_requirement='required' OR EXISTS(
+                   SELECT 1 FROM source_coverage_promotions requirement
+                   WHERE requirement.project_id=s.project_id
+                     AND requirement.source_version_id=s.id
+                     AND (?2 IS NULL OR requirement.scope_id=?2)
+                 ) THEN 'required' ELSE 'optional' END AS effective_requirement,
                  (COALESCE(p.erased,0)=1 OR COALESCE((
                    SELECT cp.erased FROM compilation_runs cr
                    JOIN payloads cp ON cp.project_id=cr.project_id AND cp.id=cr.context_payload_id
@@ -2058,16 +2213,19 @@ impl Store {
                    ORDER BY r.attempt_order DESC LIMIT 1),'unprocessed') AS latest_outcome
                FROM source_versions s LEFT JOIN payloads p
                  ON p.project_id=s.project_id AND p.id=s.payload_id
-               WHERE s.project_id=?1 AND (?2 IS NULL OR s.context_scope_id=?2)
+               WHERE s.project_id=?1 AND (?2 IS NULL OR s.context_scope_id=?2 OR EXISTS(
+                 SELECT 1 FROM source_coverage_promotions promoted
+                 WHERE promoted.project_id=s.project_id AND promoted.source_version_id=s.id
+                   AND promoted.scope_id=?2))
              )
              SELECT
-               COALESCE(SUM(coverage_requirement='required' AND (latest_outcome!='succeeded' OR unavailable)),0),
-               COALESCE(SUM(coverage_requirement='required' AND latest_outcome='failed' AND NOT unavailable),0),
-               COALESCE(SUM(coverage_requirement='optional' AND (latest_outcome!='succeeded' OR unavailable)),0),
-               MIN(CASE WHEN coverage_requirement='required' AND (latest_outcome!='succeeded' OR unavailable)
+               COALESCE(SUM(effective_requirement='required' AND (latest_outcome!='succeeded' OR unavailable)),0),
+               COALESCE(SUM(effective_requirement='required' AND latest_outcome='failed' AND NOT unavailable),0),
+               COALESCE(SUM(effective_requirement='optional' AND (latest_outcome!='succeeded' OR unavailable)),0),
+               MIN(CASE WHEN effective_requirement='required' AND (latest_outcome!='succeeded' OR unavailable)
                    THEN sequence END),
-               COALESCE(SUM(coverage_requirement='required' AND latest_outcome IN ('pending','needs_context') AND NOT unavailable),0),
-               COALESCE(SUM(coverage_requirement='required' AND unavailable),0)
+               COALESCE(SUM(effective_requirement='required' AND latest_outcome IN ('pending','needs_context') AND NOT unavailable),0),
+               COALESCE(SUM(effective_requirement='required' AND unavailable),0)
              FROM scoped",
             params![project.as_str(), scope],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
@@ -4163,6 +4321,19 @@ fn purge_reason_id(project: &ProjectId, source: &SourceVersionId) -> Result<Payl
         write!(&mut id, "{byte:02x}").expect("writing a digest is infallible");
     }
     PayloadId::try_from(id.as_str()).map_err(|_| StoreError::InvalidPurge)
+}
+
+fn coverage_reason_id(
+    project: &ProjectId,
+    source: &SourceVersionId,
+    scope: &str,
+) -> Result<PayloadId, StoreError> {
+    let digest = Sha256::digest(format!("{project}/{source}/{scope}").as_bytes());
+    let mut id = String::from("coverage_reason_");
+    for byte in digest {
+        write!(&mut id, "{byte:02x}").expect("writing a digest is infallible");
+    }
+    PayloadId::try_from(id.as_str()).map_err(|_| StoreError::InvalidCoveragePromotion)
 }
 
 fn to_sql_revision(revision: ProjectRevision) -> Result<i64, StoreError> {
