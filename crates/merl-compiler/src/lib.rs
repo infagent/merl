@@ -99,7 +99,9 @@ pub struct CompilerLimits {
 }
 
 impl CompilerLimits {
-    const fn recorded(self) -> [usize; 9] {
+    /// Returns the stable field order used by run and authorization records.
+    #[must_use]
+    pub const fn as_array(self) -> [usize; 9] {
         [
             self.input_bytes,
             self.output_bytes,
@@ -239,7 +241,7 @@ pub fn rebuild_recorded_context(
     let status = store
         .compilation_run_status(project, run_id)?
         .ok_or(CompileError::NonCausalHistory)?;
-    if status.mode == "hindsight" || status.limits != limits.recorded() {
+    if status.mode == "hindsight" || status.limits != limits.as_array() {
         return Err(CompileError::NonCausalHistory);
     }
     if status.renderer_version != "json_v1" {
@@ -708,6 +710,15 @@ pub trait CompilerAdapter {
     fn model(&self) -> &str;
     /// Digest of the adapter's prompt or ruleset.
     fn prompt_digest(&self) -> [u8; 32];
+    /// Digest of the executable artifact and fixed adapter configuration.
+    fn configuration_digest(&self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(self.id().as_bytes());
+        digest.update(self.version().as_bytes());
+        digest.update(self.model().as_bytes());
+        digest.update(self.prompt_digest());
+        digest.finalize().into()
+    }
     /// Runs the compiler and returns encoded structured output.
     ///
     /// # Errors
@@ -740,15 +751,66 @@ pub fn protocol_schemas() -> serde_json::Value {
 #[derive(Debug)]
 pub struct ProcessCompiler {
     /// Executable chosen by the evaluation runner.
-    pub program: String,
+    program: String,
     /// Fixed arguments; the exact context is supplied only on stdin.
-    pub args: Vec<String>,
+    args: Vec<String>,
     /// Stable implementation version.
-    pub version: String,
+    version: String,
     /// Provider/model identity for evaluation provenance.
-    pub model: String,
+    model: String,
     /// Hash of the configured prompt, which remains outside the database.
-    pub prompt_digest: [u8; 32],
+    prompt_digest: [u8; 32],
+    configuration_digest: [u8; 32],
+}
+
+impl ProcessCompiler {
+    /// Freezes a process adapter to the executable bytes and fixed arguments on disk now.
+    ///
+    /// # Errors
+    /// Returns an adapter error when the executable cannot be read.
+    pub fn new(
+        program: impl Into<String>,
+        args: Vec<String>,
+        version: impl Into<String>,
+        model: impl Into<String>,
+        prompt_digest: [u8; 32],
+    ) -> Result<Self, CompileError> {
+        let program = program.into();
+        let artifact = std::fs::read(&program)
+            .map_err(|error| CompileError::Adapter(format!("cannot read compiler: {error}")))?;
+        let configuration_digest = process_configuration_digest(&artifact, &args)?;
+        Ok(Self {
+            program,
+            args,
+            version: version.into(),
+            model: model.into(),
+            prompt_digest,
+            configuration_digest,
+        })
+    }
+}
+
+fn process_configuration_digest(
+    artifact: &[u8],
+    args: &[String],
+) -> Result<[u8; 32], CompileError> {
+    let mut digest = Sha256::new();
+    digest.update(b"merl.process-compiler-config/v1");
+    digest.update(
+        u64::try_from(artifact.len())
+            .map_err(|_| CompileError::Adapter("compiler artifact is too large".into()))?
+            .to_le_bytes(),
+    );
+    digest.update(artifact);
+    for argument in args {
+        digest.update(
+            u64::try_from(argument.len())
+                .map_err(|_| CompileError::Adapter("compiler argument is too large".into()))?
+                .to_le_bytes(),
+        );
+        digest.update(argument.as_bytes());
+    }
+    Ok(digest.finalize().into())
 }
 
 impl CompilerAdapter for ProcessCompiler {
@@ -763,6 +825,9 @@ impl CompilerAdapter for ProcessCompiler {
     }
     fn prompt_digest(&self) -> [u8; 32] {
         self.prompt_digest
+    }
+    fn configuration_digest(&self) -> [u8; 32] {
+        self.configuration_digest
     }
     fn compile(&self, context: &[u8], limits: CompilerLimits) -> Result<Vec<u8>, CompileError> {
         let context_value: serde_json::Value =
@@ -946,26 +1011,6 @@ pub fn prepare_eager_compilation(
     prepare_compilation(store, project, source, adapter, request)
 }
 
-/// Persists live work for controlled bootstrap and fixture construction.
-///
-/// This explicit escape hatch keeps recovery and evaluation fixtures separate
-/// from public on-demand compilation.
-///
-/// # Errors
-/// Rejects non-live requests and invalid compiler context.
-pub fn prepare_bootstrap_compilation(
-    store: &mut Store,
-    project: &ProjectId,
-    source: &SourceVersionId,
-    adapter: &impl CompilerAdapter,
-    request: RunRequest<'_>,
-) -> Result<Option<PreparedCompilation>, CompileError> {
-    if request.mode != RunMode::Live {
-        return Err(CompileError::InvalidResponse);
-    }
-    prepare_compilation(store, project, source, adapter, request)
-}
-
 /// Persists a corpus-evaluation attempt that cannot satisfy live coverage.
 ///
 /// # Errors
@@ -1027,7 +1072,7 @@ fn prepare_compilation(
             || existing.compiler_version != adapter.version()
             || existing.model_id != adapter.model()
             || existing.prompt_digest != adapter.prompt_digest()
-            || existing.limits != limits.recorded()
+            || existing.limits != limits.as_array()
         {
             return Err(CompileError::InvalidResponse);
         }
@@ -1114,6 +1159,8 @@ pub fn prepare_authorized_compilation(
         || authorization.compiler_version != adapter.version()
         || authorization.model_id != adapter.model()
         || authorization.prompt_digest != adapter.prompt_digest()
+        || authorization.adapter_config_digest != adapter.configuration_digest()
+        || authorization.limits != request.limits.as_array()
     {
         return Err(CompileError::UnauthorizedCompilation);
     }
@@ -1437,7 +1484,10 @@ fn valid_id(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompilationContext, CompileError, CompilerLimits, validate_response};
+    use super::{
+        CompilationContext, CompileError, CompilerLimits, process_configuration_digest,
+        validate_response,
+    };
     use merl_core::{ProjectRevision, SourceVersionId};
 
     #[test]
@@ -1500,5 +1550,18 @@ mod tests {
                 Err(CompileError::InvalidResponse)
             ));
         }
+    }
+
+    #[test]
+    fn process_identity_changes_with_the_executable_or_fixed_arguments() {
+        let base =
+            process_configuration_digest(b"compiler-a", &["--strict".into()]).expect("base digest");
+        let other_artifact = process_configuration_digest(b"compiler-b", &["--strict".into()])
+            .expect("artifact digest");
+        let other_arguments = process_configuration_digest(b"compiler-a", &["--fast".into()])
+            .expect("argument digest");
+
+        assert_ne!(base, other_artifact);
+        assert_ne!(base, other_arguments);
     }
 }

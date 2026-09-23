@@ -1,6 +1,6 @@
 use merl_compiler::{
     CompileError, CompilerAdapter, CompilerLimits, RunMode, RunRequest, execute_compilation,
-    prepare_bootstrap_compilation, prepare_hindsight_compilation, record_compilation_result,
+    prepare_eager_compilation, prepare_hindsight_compilation, record_compilation_result,
 };
 use merl_core::{
     CompilationMode, CoverageRequirement, DomainEvent, DomainEventBatch, PayloadId,
@@ -1160,7 +1160,7 @@ impl PolicyScenario {
             attributed_to,
             value,
         };
-        let prepared = prepare_bootstrap_compilation(
+        let prepared = prepare_eager_compilation(
             &mut self.store,
             &self.project,
             &id(version),

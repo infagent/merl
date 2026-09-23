@@ -321,6 +321,11 @@ impl CliIssueHistory {
         assert_eq!(authorization.compiler_version, "v1");
         assert_eq!(authorization.model_id, "deterministic-test");
         assert_eq!(authorization.prompt_digest, [0; 32]);
+        assert_ne!(authorization.adapter_config_digest, [0; 32]);
+        assert_eq!(
+            authorization.limits,
+            [65_536, 16_384, 2_048, 32, 8, 2, 49_152, 16, 32]
+        );
         assert_eq!(
             store
                 .read_payload(&project, &authorization.reason)

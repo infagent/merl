@@ -1,7 +1,7 @@
 use merl_compiler::{
-    CompilerLimits, FakeCompiler, ProcessCompiler, RunMode, RunRequest, SequentialReplay,
-    build_context, execute_compilation, prepare_authorized_compilation,
-    prepare_bootstrap_compilation, prepare_eager_compilation, prepare_evaluation_compilation,
+    CompileError, CompilerAdapter, CompilerLimits, FakeCompiler, ProcessCompiler, RunMode,
+    RunRequest, SequentialReplay, build_context, execute_compilation,
+    prepare_authorized_compilation, prepare_eager_compilation, prepare_evaluation_compilation,
     prepare_hindsight_compilation, prepare_replay_compilation, rebuild_recorded_context,
     record_compilation_result,
 };
@@ -39,7 +39,7 @@ fn run_compiler(
 ) -> Result<(), merl_compiler::CompileError> {
     let completed_at = request.now_millis;
     let prepared = match request.mode {
-        RunMode::Live => prepare_bootstrap_compilation(store, project, source, adapter, request),
+        RunMode::Live => prepare_eager_compilation(store, project, source, adapter, request),
         RunMode::Eval => prepare_evaluation_compilation(store, project, source, adapter, request),
         RunMode::Hindsight => {
             prepare_hindsight_compilation(store, project, source, adapter, request)
@@ -92,10 +92,12 @@ impl CompilationAuthorizationScenario {
                 "authorized-run",
                 b"Needed for the assigned task",
                 CompilationAuthorizationConfig {
-                    compiler_id: "process",
+                    compiler_id: "configured-test",
                     compiler_version: "v1",
                     model_id: "model-a",
                     prompt_digest,
+                    adapter_config_digest: [9; 32],
+                    limits: recorded_limits(limits()),
                 },
             )
             .expect("authorization intent");
@@ -120,76 +122,66 @@ impl CompilationAuthorizationScenario {
     }
 
     pub fn when_low_level_preparation_is_attempted(&mut self) -> &mut Self {
-        let exact = process_compiler("v1", "model-a", [7; 32]);
+        let source = self.source.clone();
+        let other_source = self.other_source.clone();
+        let exact = configured_compiler("v1", "model-a", [7; 32], [9; 32]);
         let attempts = [
             (
-                &self.source,
+                &source,
                 "missing-run",
-                process_compiler("v1", "model-a", [7; 32]),
+                configured_compiler("v1", "model-a", [7; 32], [9; 32]),
             ),
             (
-                &self.other_source,
+                &other_source,
                 "authorized-run",
-                process_compiler("v1", "model-a", [7; 32]),
+                configured_compiler("v1", "model-a", [7; 32], [9; 32]),
             ),
             (
-                &self.source,
+                &source,
                 "authorized-run",
-                process_compiler("v2", "model-a", [7; 32]),
+                configured_compiler("v2", "model-a", [7; 32], [9; 32]),
             ),
             (
-                &self.source,
+                &source,
                 "authorized-run",
-                process_compiler("v1", "model-b", [7; 32]),
+                configured_compiler("v1", "model-b", [7; 32], [9; 32]),
             ),
             (
-                &self.source,
+                &source,
                 "authorized-run",
-                process_compiler("v1", "model-a", [8; 32]),
+                configured_compiler("v1", "model-a", [8; 32], [9; 32]),
             ),
         ];
         for (source, run, adapter) in attempts {
-            let result = prepare_authorized_compilation(
+            self.expect_authorization_rejection(source, run, &adapter, limits());
+        }
+        self.expect_authorization_rejection(&source, "authorized-run", &FakeCompiler, limits());
+        if matches!(
+            prepare_eager_compilation(
                 &mut self.store,
                 &self.project,
-                source,
-                &adapter,
+                &source,
+                &exact,
                 RunRequest {
-                    id: run,
+                    id: "unauthorized-eager-run",
                     limits: limits(),
                     mode: RunMode::Live,
                     now_millis: 30,
                 },
-            );
-            if matches!(
-                result,
-                Err(merl_compiler::CompileError::UnauthorizedCompilation)
-            ) {
-                self.rejected_attempts += 1;
-            }
-        }
-        let compiler_id_mismatch = prepare_authorized_compilation(
-            &mut self.store,
-            &self.project,
-            &self.source,
-            &FakeCompiler,
-            RunRequest {
-                id: "authorized-run",
-                limits: limits(),
-                mode: RunMode::Live,
-                now_millis: 30,
-            },
-        );
-        if matches!(
-            compiler_id_mismatch,
+            ),
             Err(merl_compiler::CompileError::UnauthorizedCompilation)
         ) {
             self.rejected_attempts += 1;
         }
+        let config_mismatch = configured_compiler("v1", "model-a", [7; 32], [10; 32]);
+        self.expect_authorization_rejection(&source, "authorized-run", &config_mismatch, limits());
+        let mut larger_limits = limits();
+        larger_limits.output_tokens += 1;
+        self.expect_authorization_rejection(&source, "authorized-run", &exact, larger_limits);
         self.exact_prepared = prepare_authorized_compilation(
             &mut self.store,
             &self.project,
-            &self.source,
+            &source,
             &exact,
             RunRequest {
                 id: "authorized-run",
@@ -217,8 +209,32 @@ impl CompilationAuthorizationScenario {
         self
     }
 
+    fn expect_authorization_rejection(
+        &mut self,
+        source: &SourceVersionId,
+        run: &str,
+        adapter: &impl CompilerAdapter,
+        compiler_limits: CompilerLimits,
+    ) {
+        let result = prepare_authorized_compilation(
+            &mut self.store,
+            &self.project,
+            source,
+            adapter,
+            RunRequest {
+                id: run,
+                limits: compiler_limits,
+                mode: RunMode::Live,
+                now_millis: 30,
+            },
+        );
+        if matches!(result, Err(CompileError::UnauthorizedCompilation)) {
+            self.rejected_attempts += 1;
+        }
+    }
+
     pub fn then_only_the_exact_authorized_run_is_prepared(&mut self) -> &mut Self {
-        assert_eq!(self.rejected_attempts, 6);
+        assert_eq!(self.rejected_attempts, 9);
         assert!(self.exact_prepared);
         assert_eq!(
             self.store
@@ -279,14 +295,65 @@ impl CompilationAuthorizationScenario {
     }
 }
 
-fn process_compiler(version: &str, model: &str, prompt_digest: [u8; 32]) -> ProcessCompiler {
-    ProcessCompiler {
-        program: "unused".into(),
-        args: Vec::new(),
+struct ConfiguredCompiler {
+    version: String,
+    model: String,
+    prompt_digest: [u8; 32],
+    config_digest: [u8; 32],
+}
+
+impl CompilerAdapter for ConfiguredCompiler {
+    fn id(&self) -> &'static str {
+        "configured-test"
+    }
+
+    fn version(&self) -> &str {
+        &self.version
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    fn prompt_digest(&self) -> [u8; 32] {
+        self.prompt_digest
+    }
+
+    fn configuration_digest(&self) -> [u8; 32] {
+        self.config_digest
+    }
+
+    fn compile(&self, _context: &[u8], _limits: CompilerLimits) -> Result<Vec<u8>, CompileError> {
+        Err(CompileError::InvalidResponse)
+    }
+}
+
+fn configured_compiler(
+    version: &str,
+    model: &str,
+    prompt_digest: [u8; 32],
+    config_digest: [u8; 32],
+) -> ConfiguredCompiler {
+    ConfiguredCompiler {
         version: version.into(),
         model: model.into(),
         prompt_digest,
+        config_digest,
     }
+}
+
+fn recorded_limits(limits: CompilerLimits) -> [usize; 9] {
+    [
+        limits.input_bytes,
+        limits.output_bytes,
+        limits.output_tokens,
+        limits.assertions,
+        limits.context_requests,
+        limits.expansion_rounds,
+        limits.payload_bytes,
+        limits.source_window,
+        limits.objects,
+    ]
 }
 
 pub struct HistoricalIssue {
@@ -889,16 +956,17 @@ impl CompilationScenario {
             r#"{{"schema":"merl.compiler-response/v1","assertions":[{{"source":"{}","span_start":0,"span_end":3,"subject":"D1","predicate":"gain","value":"variable","act":"report","epistemic_basis":"reported","polarity":"positive","confidence_millis":900,"attributed_to":"user-2"}}]}}"#,
             self.note
         );
-        let adapter = ProcessCompiler {
-            program: "sh".into(),
-            args: vec![
+        let adapter = ProcessCompiler::new(
+            "/bin/sh",
+            vec![
                 "-c".into(),
                 format!("read -r request; printf '%s' '{response}'"),
             ],
-            version: "v1".into(),
-            model: "test-model".into(),
-            prompt_digest: Sha256::digest(b"edited-issue-prompt").into(),
-        };
+            "v1",
+            "test-model",
+            Sha256::digest(b"edited-issue-prompt").into(),
+        )
+        .expect("process compiler");
         run_compiler(
             &mut self.store,
             &self.project,
@@ -1090,16 +1158,17 @@ impl CompilationScenario {
 
     pub fn when_the_configured_compiler_runs(&mut self) -> &mut Self {
         let response = r#"{"schema":"merl.compiler-response/v1","assertions":[{"source":"note-v1","span_start":2,"span_end":9,"subject":"T1","predicate":"blocked","value":"true","act":"report","epistemic_basis":"observed","polarity":"positive","confidence_millis":900,"attributed_to":null}]}"#;
-        let adapter = ProcessCompiler {
-            program: "sh".into(),
-            args: vec![
+        let adapter = ProcessCompiler::new(
+            "/bin/sh",
+            vec![
                 "-c".into(),
                 format!("read -r request; printf '%s' '{response}'"),
             ],
-            version: "v1".into(),
-            model: "test-model".into(),
-            prompt_digest: Sha256::digest(b"test-prompt").into(),
-        };
+            "v1",
+            "test-model",
+            Sha256::digest(b"test-prompt").into(),
+        )
+        .expect("process compiler");
         run_compiler(
             &mut self.store,
             &self.project,
@@ -1117,7 +1186,7 @@ impl CompilationScenario {
     }
 
     pub fn when_the_authority_prepares_the_compiler_run(&mut self) -> &mut Self {
-        let prepared = prepare_bootstrap_compilation(
+        let prepared = prepare_eager_compilation(
             &mut self.store,
             &self.project,
             &self.note,
@@ -1137,16 +1206,17 @@ impl CompilationScenario {
 
     pub fn when_the_compiler_requests_more_context(&mut self) -> &mut Self {
         let response = r#"{"schema":"merl.compiler-response/v1","assertions":[],"context_required":[{"reference":"D18"}]}"#;
-        let adapter = ProcessCompiler {
-            program: "sh".into(),
-            args: vec![
+        let adapter = ProcessCompiler::new(
+            "/bin/sh",
+            vec![
                 "-c".into(),
                 format!("read -r request; printf '%s' '{response}'"),
             ],
-            version: "v1".into(),
-            model: "test-model".into(),
-            prompt_digest: Sha256::digest(b"context-request-prompt").into(),
-        };
+            "v1",
+            "test-model",
+            Sha256::digest(b"context-request-prompt").into(),
+        )
+        .expect("process compiler");
         let _ = run_compiler(
             &mut self.store,
             &self.project,
@@ -1187,7 +1257,7 @@ impl CompilationScenario {
             mode: RunMode::Live,
             now_millis: 30,
         };
-        let prepared = prepare_bootstrap_compilation(
+        let prepared = prepare_eager_compilation(
             &mut self.store,
             &self.project,
             &self.note,
@@ -1208,7 +1278,7 @@ impl CompilationScenario {
                 source.payload.as_ref().expect("source payload"),
             )
             .expect("erase original source bytes");
-        self.recovery_succeeded = prepare_bootstrap_compilation(
+        self.recovery_succeeded = prepare_eager_compilation(
             &mut self.store,
             &self.project,
             &self.note,
@@ -1221,7 +1291,7 @@ impl CompilationScenario {
             let raw = execute_compilation(&prepared, &FakeCompiler);
             record_compilation_result(&mut self.store, &self.project, &prepared, raw, 31).is_ok()
         });
-        self.recovery_succeeded &= prepare_bootstrap_compilation(
+        self.recovery_succeeded &= prepare_eager_compilation(
             &mut self.store,
             &self.project,
             &self.note,
@@ -1328,7 +1398,7 @@ impl CompilationScenario {
                     edit_diff: None,
                     edit_deleted_at_millis: None,
                     missing_body_reason: None,
-                    compilation_mode: CompilationMode::OnDemand,
+                    compilation_mode: CompilationMode::Eager,
                     coverage_requirement: requirement,
                     policy_version: CapturePolicyVersion::try_from("test-v1").expect("policy"),
                 },
@@ -1336,7 +1406,7 @@ impl CompilationScenario {
             .expect("capture");
     }
 
-    pub fn when_the_note_is_compiled_on_demand(&mut self) -> &mut Self {
+    pub fn when_the_note_is_compiled_late(&mut self) -> &mut Self {
         let context =
             build_context(&self.store, &self.project, &self.note, limits()).expect("context");
         self.context = Some(serde_json::from_slice(&context.rendered).expect("rendered input"));
@@ -1508,7 +1578,7 @@ impl CompilationScenario {
     }
 
     pub fn when_a_retry_is_prepared(&mut self) -> &mut Self {
-        prepare_bootstrap_compilation(
+        prepare_eager_compilation(
             &mut self.store,
             &self.project,
             &self.note,

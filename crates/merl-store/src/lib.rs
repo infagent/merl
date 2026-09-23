@@ -12,7 +12,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -157,6 +157,10 @@ pub struct CompilationAuthorizationConfig<'a> {
     pub model_id: &'a str,
     /// Prompt or ruleset digest.
     pub prompt_digest: [u8; 32],
+    /// Executable artifact and fixed adapter configuration digest.
+    pub adapter_config_digest: [u8; 32],
+    /// Maximum work accepted for the compiler run.
+    pub limits: [usize; 9],
 }
 
 /// Accepted authority for one on-demand compiler run.
@@ -174,12 +178,40 @@ pub struct CompilationAuthorization {
     pub model_id: String,
     /// Prompt or ruleset digest selected by the request.
     pub prompt_digest: [u8; 32],
+    /// Executable artifact and fixed adapter configuration digest.
+    pub adapter_config_digest: [u8; 32],
+    /// Maximum work accepted for the compiler run.
+    pub limits: [usize; 9],
     /// Actor who accepted the compiler expense.
     pub actor: ActorId,
     /// Protected explanation for the expense.
     pub reason: PayloadId,
     /// Authority time of the accepted request.
     pub authorized_at_millis: i64,
+}
+
+struct RawCompilationAuthorization {
+    source: String,
+    compiler_id: String,
+    compiler_version: String,
+    model_id: String,
+    prompt_digest: Vec<u8>,
+    adapter_config_digest: Vec<u8>,
+    limits: [i64; 9],
+    actor: String,
+    reason: String,
+    authorized_at_millis: i64,
+}
+
+struct RawCompilationIntent {
+    run: String,
+    source: String,
+    compiler_id: String,
+    compiler_version: String,
+    model_id: String,
+    prompt_digest: Vec<u8>,
+    adapter_config_digest: Vec<u8>,
+    limits: [i64; 9],
 }
 
 /// One protected payload named in an administrative purge preview.
@@ -883,6 +915,11 @@ impl Store {
             if version < 16 {
                 transaction.execute_batch(include_str!(
                     "../migrations/0016_source_coverage_promotions.sql"
+                ))?;
+            }
+            if version < 17 {
+                transaction.execute_batch(include_str!(
+                    "../migrations/0017_compilation_authorization_bounds.sql"
                 ))?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -2302,6 +2339,14 @@ impl Store {
         identity_hash.update(config.compiler_version.as_bytes());
         identity_hash.update(config.model_id.as_bytes());
         identity_hash.update(config.prompt_digest);
+        identity_hash.update(config.adapter_config_digest);
+        for limit in config.limits {
+            identity_hash.update(
+                u64::try_from(limit)
+                    .map_err(|_| StoreError::InvalidCompilation)?
+                    .to_le_bytes(),
+            );
+        }
         let identity_digest: [u8; 32] = identity_hash.finalize().into();
         let object = compilation_authorization_object_id(project, source, run, &identity_digest)?;
         let reason_id =
@@ -2321,8 +2366,10 @@ impl Store {
         transaction.execute(
             "INSERT OR IGNORE INTO source_compilation_intents
              (project_id,object_id,run_id,source_version_id,compiler_id,compiler_version,
-              model_id,prompt_digest,reason_payload_id,reason_digest)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+              model_id,prompt_digest,reason_payload_id,reason_digest,adapter_config_digest,
+              max_input_bytes,max_output_bytes,max_output_tokens,max_assertions,
+              max_context_requests,max_expansion_rounds,max_payload_bytes,max_source_window,max_objects)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
             params![
                 project.as_str(),
                 object.as_str(),
@@ -2334,6 +2381,16 @@ impl Store {
                 config.prompt_digest.as_slice(),
                 reason_id.as_str(),
                 digest.as_slice(),
+                config.adapter_config_digest.as_slice(),
+                i64::try_from(config.limits[0]).map_err(|_| StoreError::InvalidCompilation)?,
+                i64::try_from(config.limits[1]).map_err(|_| StoreError::InvalidCompilation)?,
+                i64::try_from(config.limits[2]).map_err(|_| StoreError::InvalidCompilation)?,
+                i64::try_from(config.limits[3]).map_err(|_| StoreError::InvalidCompilation)?,
+                i64::try_from(config.limits[4]).map_err(|_| StoreError::InvalidCompilation)?,
+                i64::try_from(config.limits[5]).map_err(|_| StoreError::InvalidCompilation)?,
+                i64::try_from(config.limits[6]).map_err(|_| StoreError::InvalidCompilation)?,
+                i64::try_from(config.limits[7]).map_err(|_| StoreError::InvalidCompilation)?,
+                i64::try_from(config.limits[8]).map_err(|_| StoreError::InvalidCompilation)?,
             ],
         )?;
         transaction.commit()?;
@@ -2352,13 +2409,17 @@ impl Store {
         project: &ProjectId,
         run: &str,
     ) -> Result<Option<CompilationAuthorization>, StoreError> {
-        type RawAuthorization = (String, String, String, String, Vec<u8>, String, String, i64);
-        let row: Option<RawAuthorization> = self
+        let row: Option<RawCompilationAuthorization> = self
             .connection
             .query_row(
                 "SELECT authorization.source_version_id,authorization.compiler_id,
                     authorization.compiler_version,authorization.model_id,
-                    authorization.prompt_digest,batch.actor_id,
+                    authorization.prompt_digest,authorization.adapter_config_digest,
+                    authorization.max_input_bytes,authorization.max_output_bytes,
+                    authorization.max_output_tokens,authorization.max_assertions,
+                    authorization.max_context_requests,authorization.max_expansion_rounds,
+                    authorization.max_payload_bytes,authorization.max_source_window,
+                    authorization.max_objects,batch.actor_id,
                     authorization.reason_payload_id,batch.occurred_at_millis
              FROM source_compilation_authorizations authorization
              JOIN domain_events event ON event.project_id=authorization.project_id
@@ -2369,49 +2430,61 @@ impl Store {
              ORDER BY batch.revision DESC LIMIT 1",
                 params![project.as_str(), run],
                 |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
-                    ))
+                    Ok(RawCompilationAuthorization {
+                        source: row.get(0)?,
+                        compiler_id: row.get(1)?,
+                        compiler_version: row.get(2)?,
+                        model_id: row.get(3)?,
+                        prompt_digest: row.get(4)?,
+                        adapter_config_digest: row.get(5)?,
+                        limits: [
+                            row.get(6)?,
+                            row.get(7)?,
+                            row.get(8)?,
+                            row.get(9)?,
+                            row.get(10)?,
+                            row.get(11)?,
+                            row.get(12)?,
+                            row.get(13)?,
+                            row.get(14)?,
+                        ],
+                        actor: row.get(15)?,
+                        reason: row.get(16)?,
+                        authorized_at_millis: row.get(17)?,
+                    })
                 },
             )
             .optional()?;
-        row.map(
-            |(
-                source,
-                compiler_id,
-                compiler_version,
-                model_id,
+        row.map(|raw| {
+            let prompt_digest: [u8; 32] = raw
+                .prompt_digest
+                .try_into()
+                .map_err(|_| StoreError::CorruptHistory)?;
+            let adapter_config_digest: [u8; 32] = raw
+                .adapter_config_digest
+                .try_into()
+                .map_err(|_| StoreError::CorruptHistory)?;
+            let mut limits = [0_usize; 9];
+            for (target, value) in limits.iter_mut().zip(raw.limits) {
+                *target = usize::try_from(value).map_err(|_| StoreError::CorruptHistory)?;
+            }
+            Ok(CompilationAuthorization {
+                run: run.to_owned(),
+                source: SourceVersionId::try_from(raw.source.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                compiler_id: raw.compiler_id,
+                compiler_version: raw.compiler_version,
+                model_id: raw.model_id,
                 prompt_digest,
-                actor,
-                reason,
-                authorized_at_millis,
-            )| {
-                let prompt_digest: [u8; 32] = prompt_digest
-                    .try_into()
-                    .map_err(|_| StoreError::CorruptHistory)?;
-                Ok(CompilationAuthorization {
-                    run: run.to_owned(),
-                    source: SourceVersionId::try_from(source.as_str())
-                        .map_err(|_| StoreError::CorruptHistory)?,
-                    compiler_id,
-                    compiler_version,
-                    model_id,
-                    prompt_digest,
-                    actor: ActorId::try_from(actor.as_str())
-                        .map_err(|_| StoreError::CorruptHistory)?,
-                    reason: PayloadId::try_from(reason.as_str())
-                        .map_err(|_| StoreError::CorruptHistory)?,
-                    authorized_at_millis,
-                })
-            },
-        )
+                adapter_config_digest,
+                limits,
+                actor: ActorId::try_from(raw.actor.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                reason: PayloadId::try_from(raw.reason.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                authorized_at_millis: raw.authorized_at_millis,
+            })
+        })
         .transpose()
     }
 
@@ -5589,42 +5662,67 @@ fn accept_source_compilation_authorization(
     object: &ObjectId,
     reason: &PayloadId,
 ) -> Result<(), StoreError> {
-    type RawIntent = (String, String, String, String, String, Vec<u8>);
-    let intent: Option<RawIntent> = transaction
+    let intent: Option<RawCompilationIntent> = transaction
         .query_row(
-            "SELECT run_id,source_version_id,compiler_id,compiler_version,model_id,prompt_digest
+            "SELECT run_id,source_version_id,compiler_id,compiler_version,model_id,prompt_digest,
+                adapter_config_digest,max_input_bytes,max_output_bytes,max_output_tokens,
+                max_assertions,max_context_requests,max_expansion_rounds,max_payload_bytes,
+                max_source_window,max_objects
              FROM source_compilation_intents
              WHERE project_id=?1 AND object_id=?2 AND reason_payload_id=?3",
             params![project.as_str(), object.as_str(), reason.as_str()],
             |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
+                Ok(RawCompilationIntent {
+                    run: row.get(0)?,
+                    source: row.get(1)?,
+                    compiler_id: row.get(2)?,
+                    compiler_version: row.get(3)?,
+                    model_id: row.get(4)?,
+                    prompt_digest: row.get(5)?,
+                    adapter_config_digest: row.get(6)?,
+                    limits: [
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                        row.get(10)?,
+                        row.get(11)?,
+                        row.get(12)?,
+                        row.get(13)?,
+                        row.get(14)?,
+                        row.get(15)?,
+                    ],
+                })
             },
         )
         .optional()?;
-    let (run, source, compiler_id, compiler_version, model_id, prompt_digest) =
-        intent.ok_or(StoreError::InvalidBatch)?;
+    let intent = intent.ok_or(StoreError::InvalidBatch)?;
     transaction.execute(
         "INSERT INTO source_compilation_authorizations
          (project_id,run_id,object_id,source_version_id,compiler_id,compiler_version,
-          model_id,prompt_digest,reason_payload_id)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+          model_id,prompt_digest,reason_payload_id,adapter_config_digest,
+          max_input_bytes,max_output_bytes,max_output_tokens,max_assertions,
+          max_context_requests,max_expansion_rounds,max_payload_bytes,max_source_window,max_objects)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
         params![
             project.as_str(),
-            run,
+            intent.run,
             object.as_str(),
-            source,
-            compiler_id,
-            compiler_version,
-            model_id,
-            prompt_digest,
-            reason.as_str()
+            intent.source,
+            intent.compiler_id,
+            intent.compiler_version,
+            intent.model_id,
+            intent.prompt_digest,
+            reason.as_str(),
+            intent.adapter_config_digest,
+            intent.limits[0],
+            intent.limits[1],
+            intent.limits[2],
+            intent.limits[3],
+            intent.limits[4],
+            intent.limits[5],
+            intent.limits[6],
+            intent.limits[7],
+            intent.limits[8],
         ],
     )?;
     Ok(())

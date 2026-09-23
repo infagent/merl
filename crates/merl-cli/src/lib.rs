@@ -628,15 +628,14 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
             let prompt_digest = parse_sha256(
                 prompt_digest.ok_or_else(|| invalid_input("--prompt-digest is required"))?,
             )?;
-            let adapter = merl_compiler::ProcessCompiler {
-                program: program
-                    .ok_or_else(|| invalid_input("--program is required"))?
-                    .into(),
-                args: compiler_args,
-                version: compiler_version.into(),
-                model: model.into(),
+            let adapter = merl_compiler::ProcessCompiler::new(
+                program.ok_or_else(|| invalid_input("--program is required"))?,
+                compiler_args,
+                compiler_version,
+                model,
                 prompt_digest,
-            };
+            )?;
+            let limits = first_release_compiler_limits();
             let mut store = Store::open(Path::new(database))?;
             let source = store
                 .source_version(&project, &version)?
@@ -651,6 +650,10 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                     compiler_version,
                     model_id: model,
                     prompt_digest,
+                    adapter_config_digest: merl_compiler::CompilerAdapter::configuration_digest(
+                        &adapter,
+                    ),
+                    limits: limits.as_array(),
                 },
             )?;
             let identity = format!("{project}/{version}/{run}/{actor}/{reason}");
@@ -707,7 +710,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 &adapter,
                 merl_compiler::RunRequest {
                     id: run,
-                    limits: first_release_compiler_limits(),
+                    limits,
                     mode: merl_compiler::RunMode::Live,
                     now_millis: utc_now_millis()?,
                 },
@@ -966,20 +969,17 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
             if let Some(program) = program {
                 let new_id =
                     new_run.ok_or_else(|| invalid_input("--new-run is required with --program"))?;
-                let adapter = merl_compiler::ProcessCompiler {
-                    program: program.into(),
-                    args: compiler_args,
-                    version: compiler_version
-                        .ok_or_else(|| invalid_input("--compiler-version is required"))?
-                        .into(),
-                    model: model
-                        .ok_or_else(|| invalid_input("--model is required"))?
-                        .into(),
-                    prompt_digest: parse_sha256(
+                let adapter = merl_compiler::ProcessCompiler::new(
+                    program,
+                    compiler_args,
+                    compiler_version
+                        .ok_or_else(|| invalid_input("--compiler-version is required"))?,
+                    model.ok_or_else(|| invalid_input("--model is required"))?,
+                    parse_sha256(
                         prompt_digest
                             .ok_or_else(|| invalid_input("--prompt-digest is required"))?,
                     )?,
-                };
+                )?;
                 let now = utc_now_millis()?;
                 if let Some(prepared) = merl_compiler::prepare_replay_compilation(
                     &mut store,
