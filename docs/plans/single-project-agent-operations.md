@@ -136,7 +136,7 @@ Every writable assignment gets an isolated workspace. The default local strategy
   workspaces/<project>/<task>-<agent>/
 ```
 
-The workspace record links the source, Task, Assignment, logical agent, path, Git identity, branch, base revision, access mode, creation time, and lease state. It belongs to the durable work, not to one disposable session. The current session may hold its execution lease.
+The workspace record links the source, Task, Assignment, logical agent, path, Git identity, branch, base revision, access mode, creation time, and lease state. It belongs to the durable work, not to one disposable session. The current session may hold separate execution and workspace leases.
 
 Merl canonicalizes paths and inspects Git worktree identity before granting a lease. Two writers cannot hold leases for the same working tree. Review work uses a detached read-only worktree at a pinned commit unless the reviewer needs a separate writable branch.
 
@@ -198,13 +198,13 @@ merl session checkpoint \
 
 merl session close \
   --agent project-a-dev \
-  --task T52 \
-  --outcome completed
+  --assignment A52 \
+  --reason context-replacement
 ```
 
-`continuous`, `task-scoped`, and `manual` context policies control closure behavior. A task-scoped close commits the checkpoint, outcome, cursor, assignment transition, and lease release before asking the host to clear context. If the host cannot reset context, Merl reports that fact and prints a manual next step.
+`continuous`, `task-scoped`, and `manual` context policies control closure behavior. Closing a session commits its checkpoint, cursor, closure record, and execution and workspace lease releases before asking the host to clear context. It does not complete the Assignment or Task. If work is finished, the agent first records the Task outcome through a separate accepted transition; policy may then close the Assignment. If work remains, the Assignment and workspace remain ready for another session. If the host cannot reset context, Merl reports that fact and prints a manual next step.
 
-A later session receives a new generation ID. Resume uses active guidance and current task state without replaying the prior transcript.
+A later session receives a new generation ID and acquires new leases on the existing Assignment and workspace. It never inherits the prior session's leases. Resume uses active guidance and current task state without replaying the prior transcript.
 
 ## Team evidence
 
@@ -281,9 +281,10 @@ Phase 4 is complete when:
 - a reviewer receives the reviewed commit in a separate read-only workspace;
 - routine machine state stays out of GitHub while significant configured events produce bounded, retryable publication intents;
 - an ambiguous GitHub write cannot duplicate a pull request, status update, or comment after reconciliation;
-- task-scoped closure commits checkpoint and lease state before any host reset;
+- task-scoped closure commits checkpoint, session state, and lease releases before any host reset;
+- session closure does not complete or cancel the Assignment or Task;
 - unsupported host reset produces an honest pending or manual result;
-- a restarted session can acquire the existing Assignment and workspace and continue unfinished work without the previous transcript;
+- a restarted session can acquire new leases on the existing Assignment and workspace and continue unfinished work without the previous transcript;
 - two manually started agents using different supported host adapters can attach to the same project and coordinate through the same accepted state and inbox path;
 - the acceptance scenario runs through public CLI commands without private Rust or SQLite access;
 - the report accounts for correctness, missed state, review outcomes, rendered context, expansions, restarts, and measured host usage where available;
@@ -305,8 +306,8 @@ The release scenario uses an existing GitHub repository plus a PM, an engineer, 
 10. The engineer publishes its assignment branch as a pull request.
 11. A reviewer opens the reviewed commit in a separate read-only workspace and records a finding.
 12. GitHub reports the final merge state through the project revision and inbox.
-13. Both workers checkpoint and close while their Assignments and workspaces remain durable.
-14. Fresh sessions acquire the existing execution leases and resume from current state and referenced objects without receiving the prior transcripts.
+13. Both workers checkpoint and close, releasing their session leases while their unfinished Assignments and workspaces remain durable.
+14. Fresh sessions acquire new execution and workspace leases and resume from current state and referenced objects without receiving the prior transcripts.
 15. Merl reports task correctness, missed state, review outcomes, continuity failures, rereads, and context cost for both the Merl and transcript-oriented teams.
 
 ## Deferred work
