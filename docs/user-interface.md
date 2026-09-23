@@ -767,14 +767,15 @@ merl source compile SE91
 
 An authorized compile request records the effective policy, requester, reason, and chosen compiler. One project-scoped run serves every delivery and later session while its source and context remain applicable.
 
-An optional note does not block a completeness claim, even when structural metadata links it to a task. If its semantics are required, an authorized actor promotes it for a recorded scope and then compiles it:
+An optional note does not block a completeness claim, even when structural metadata links it to a task. If its semantics are required, an authorized actor promotes it for a recorded scope:
 
 ```bash
-merl source require SE91 --scope task:T42 --reason 'Required safety evidence'
+merl source require --project P1 --database project.sqlite --version SE91 \
+  --scope task:T42 --actor pm --reason 'Required safety evidence'
 merl source compile SE91
 ```
 
-The promotion is durable policy state. It is not inferred from the cold payload, and the sender cannot grant it. Project-significant actions should normally use structured commands rather than rely on optional prose.
+The first command records the requirement. It does not hide compiler work inside a local CLI call. Coverage reports the source as a required gap until the authority compiles it or an authorized policy action excludes it. The promotion is not inferred from the cold payload, and the sender cannot grant it. Project-significant actions should normally use structured commands rather than rely on optional prose.
 
 `in_reply_to` preserves conversation history but does not close a question, finding, or task. Those objects change only through semantic commands or accepted assertions such as `answers Q41`, `updates T45`, or `disputes C9`. One note may address several objects, and several notes may address one object.
 
