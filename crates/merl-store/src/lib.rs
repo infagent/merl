@@ -137,6 +137,51 @@ pub struct CoverageRequirementIntent {
     pub reason: PayloadId,
 }
 
+/// Protected compile request awaiting administrative policy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompilationAuthorizationIntent {
+    /// Control object created only when policy accepts the spend.
+    pub object: ObjectId,
+    /// Protected reason payload referenced by that object.
+    pub reason: PayloadId,
+}
+
+/// Compiler identity covered by an administrative spend decision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CompilationAuthorizationConfig<'a> {
+    /// Compiler implementation identity.
+    pub compiler_id: &'a str,
+    /// Compiler implementation version.
+    pub compiler_version: &'a str,
+    /// Model selected for the run.
+    pub model_id: &'a str,
+    /// Prompt or ruleset digest.
+    pub prompt_digest: [u8; 32],
+}
+
+/// Accepted authority for one on-demand compiler run.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompilationAuthorization {
+    /// Run whose external compiler work was approved.
+    pub run: String,
+    /// Source version the approved run may interpret.
+    pub source: SourceVersionId,
+    /// Compiler implementation selected by the request.
+    pub compiler_id: String,
+    /// Compiler version selected by the request.
+    pub compiler_version: String,
+    /// Model selected by the request.
+    pub model_id: String,
+    /// Prompt or ruleset digest selected by the request.
+    pub prompt_digest: [u8; 32],
+    /// Actor who accepted the compiler expense.
+    pub actor: ActorId,
+    /// Protected explanation for the expense.
+    pub reason: PayloadId,
+    /// Authority time of the accepted request.
+    pub authorized_at_millis: i64,
+}
+
 /// One protected payload named in an administrative purge preview.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PurgePayload {
@@ -2231,6 +2276,142 @@ impl Store {
                 promoted_at_millis,
             })
         })
+        .transpose()
+    }
+
+    /// Stages protected compile metadata without granting permission to run the adapter.
+    ///
+    /// # Errors
+    /// Rejects missing sources, invalid run identities, empty reasons, and storage failures.
+    pub fn prepare_compilation_authorization(
+        &mut self,
+        project: &ProjectId,
+        source: &SourceVersionId,
+        run: &str,
+        reason: &[u8],
+        config: CompilationAuthorizationConfig<'_>,
+    ) -> Result<CompilationAuthorizationIntent, StoreError> {
+        merl_core::CompilationRunId::try_from(run).map_err(|_| StoreError::InvalidCompilation)?;
+        if reason.is_empty() || self.source_version(project, source)?.is_none() {
+            return Err(StoreError::InvalidCompilation);
+        }
+        let digest: [u8; 32] = Sha256::digest(reason).into();
+        let mut identity_hash = Sha256::new();
+        identity_hash.update(digest);
+        identity_hash.update(config.compiler_id.as_bytes());
+        identity_hash.update(config.compiler_version.as_bytes());
+        identity_hash.update(config.model_id.as_bytes());
+        identity_hash.update(config.prompt_digest);
+        let identity_digest: [u8; 32] = identity_hash.finalize().into();
+        let object = compilation_authorization_object_id(project, source, run, &identity_digest)?;
+        let reason_id =
+            compilation_authorization_reason_id(project, source, run, &identity_digest)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO payloads (project_id,id,digest,bytes) VALUES (?1,?2,?3,?4)",
+            params![
+                project.as_str(),
+                reason_id.as_str(),
+                digest.as_slice(),
+                reason
+            ],
+        )?;
+        transaction.execute(
+            "INSERT OR IGNORE INTO source_compilation_intents
+             (project_id,object_id,run_id,source_version_id,compiler_id,compiler_version,
+              model_id,prompt_digest,reason_payload_id,reason_digest)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![
+                project.as_str(),
+                object.as_str(),
+                run,
+                source.as_str(),
+                config.compiler_id,
+                config.compiler_version,
+                config.model_id,
+                config.prompt_digest.as_slice(),
+                reason_id.as_str(),
+                digest.as_slice(),
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(CompilationAuthorizationIntent {
+            object,
+            reason: reason_id,
+        })
+    }
+
+    /// Reads the accepted authority behind one on-demand compiler run.
+    ///
+    /// # Errors
+    /// Returns an error if stored identities are corrupt or SQLite cannot read them.
+    pub fn compilation_authorization(
+        &self,
+        project: &ProjectId,
+        run: &str,
+    ) -> Result<Option<CompilationAuthorization>, StoreError> {
+        type RawAuthorization = (String, String, String, String, Vec<u8>, String, String, i64);
+        let row: Option<RawAuthorization> = self
+            .connection
+            .query_row(
+                "SELECT authorization.source_version_id,authorization.compiler_id,
+                    authorization.compiler_version,authorization.model_id,
+                    authorization.prompt_digest,batch.actor_id,
+                    authorization.reason_payload_id,batch.occurred_at_millis
+             FROM source_compilation_authorizations authorization
+             JOIN domain_events event ON event.project_id=authorization.project_id
+               AND event.object_id=authorization.object_id
+             JOIN domain_event_batches batch ON batch.project_id=event.project_id
+               AND batch.id=event.batch_id
+             WHERE authorization.project_id=?1 AND authorization.run_id=?2
+             ORDER BY batch.revision DESC LIMIT 1",
+                params![project.as_str(), run],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(
+            |(
+                source,
+                compiler_id,
+                compiler_version,
+                model_id,
+                prompt_digest,
+                actor,
+                reason,
+                authorized_at_millis,
+            )| {
+                let prompt_digest: [u8; 32] = prompt_digest
+                    .try_into()
+                    .map_err(|_| StoreError::CorruptHistory)?;
+                Ok(CompilationAuthorization {
+                    run: run.to_owned(),
+                    source: SourceVersionId::try_from(source.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    compiler_id,
+                    compiler_version,
+                    model_id,
+                    prompt_digest,
+                    actor: ActorId::try_from(actor.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    reason: PayloadId::try_from(reason.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    authorized_at_millis,
+                })
+            },
+        )
         .transpose()
     }
 
@@ -4439,6 +4620,50 @@ fn coverage_object_id(
     ObjectId::try_from(id.as_str()).map_err(|_| StoreError::InvalidCoveragePromotion)
 }
 
+fn compilation_authorization_object_id(
+    project: &ProjectId,
+    source: &SourceVersionId,
+    run: &str,
+    reason_digest: &[u8; 32],
+) -> Result<ObjectId, StoreError> {
+    let digest = administrative_digest(project, source, run, reason_digest);
+    let mut id = String::from("source_compile_request_");
+    append_hex(&mut id, &digest);
+    ObjectId::try_from(id.as_str()).map_err(|_| StoreError::InvalidCompilation)
+}
+
+fn compilation_authorization_reason_id(
+    project: &ProjectId,
+    source: &SourceVersionId,
+    run: &str,
+    reason_digest: &[u8; 32],
+) -> Result<PayloadId, StoreError> {
+    let digest = administrative_digest(project, source, run, reason_digest);
+    let mut id = String::from("source_compile_reason_");
+    append_hex(&mut id, &digest);
+    PayloadId::try_from(id.as_str()).map_err(|_| StoreError::InvalidCompilation)
+}
+
+fn administrative_digest(
+    project: &ProjectId,
+    source: &SourceVersionId,
+    run: &str,
+    reason_digest: &[u8; 32],
+) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(project.as_str().as_bytes());
+    hash.update(source.as_str().as_bytes());
+    hash.update(run.as_bytes());
+    hash.update(reason_digest);
+    hash.finalize().into()
+}
+
+fn append_hex(output: &mut String, digest: &[u8]) {
+    for byte in digest {
+        write!(output, "{byte:02x}").expect("writing a digest is infallible");
+    }
+}
+
 fn to_sql_revision(revision: ProjectRevision) -> Result<i64, StoreError> {
     i64::try_from(revision.get()).map_err(|_| StoreError::CorruptHistory)
 }
@@ -5183,6 +5408,10 @@ fn next_revision(transaction: &Transaction<'_>, project: &ProjectId) -> Result<i
         .ok_or(StoreError::CorruptHistory)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the accepted batch transaction validates and projects both event variants atomically"
+)]
 fn insert_accepted_batch(
     transaction: &Transaction<'_>,
     batch: &DomainEventBatch,
@@ -5242,15 +5471,14 @@ fn insert_accepted_batch(
                         return Err(StoreError::InvalidBatch);
                     }
                 }
-                if kind.as_str() == "source_coverage_requirement" {
-                    accept_source_coverage_target(
-                        transaction,
-                        &batch.project,
-                        object,
-                        payload.as_ref().ok_or(StoreError::InvalidBatch)?,
-                        issue_scope.as_deref().ok_or(StoreError::InvalidBatch)?,
-                    )?;
-                }
+                accept_administrative_object(
+                    transaction,
+                    &batch.project,
+                    object,
+                    kind,
+                    payload.as_ref(),
+                    issue_scope.as_deref(),
+                )?;
                 transaction.execute(
                     "INSERT INTO domain_events (project_id, batch_id, id, event_index, event_kind, object_id, object_kind, payload_id, issue_scope_id, lifecycle) VALUES (?1, ?2, ?3, ?4, 'put_object', ?5, ?6, ?7, ?8, ?9)",
                     params![batch.project.as_str(), batch.id.as_str(), id.as_str(), i64::try_from(index).map_err(|_| StoreError::InvalidBatch)?, object.as_str(), kind.as_str(), payload.as_ref().map(PayloadId::as_str), issue_scope, lifecycle.as_str()],
@@ -5293,6 +5521,32 @@ fn insert_accepted_batch(
     Ok(())
 }
 
+fn accept_administrative_object(
+    transaction: &Transaction<'_>,
+    project: &ProjectId,
+    object: &ObjectId,
+    kind: &ObjectKind,
+    payload: Option<&PayloadId>,
+    scope: Option<&str>,
+) -> Result<(), StoreError> {
+    match kind.as_str() {
+        "source_coverage_requirement" => accept_source_coverage_target(
+            transaction,
+            project,
+            object,
+            payload.ok_or(StoreError::InvalidBatch)?,
+            scope.ok_or(StoreError::InvalidBatch)?,
+        ),
+        "source_compilation_request" => accept_source_compilation_authorization(
+            transaction,
+            project,
+            object,
+            payload.ok_or(StoreError::InvalidBatch)?,
+        ),
+        _ => Ok(()),
+    }
+}
+
 fn accept_source_coverage_target(
     transaction: &Transaction<'_>,
     project: &ProjectId,
@@ -5324,6 +5578,53 @@ fn accept_source_coverage_target(
             scope,
             reason.as_str(),
             digest
+        ],
+    )?;
+    Ok(())
+}
+
+fn accept_source_compilation_authorization(
+    transaction: &Transaction<'_>,
+    project: &ProjectId,
+    object: &ObjectId,
+    reason: &PayloadId,
+) -> Result<(), StoreError> {
+    type RawIntent = (String, String, String, String, String, Vec<u8>);
+    let intent: Option<RawIntent> = transaction
+        .query_row(
+            "SELECT run_id,source_version_id,compiler_id,compiler_version,model_id,prompt_digest
+             FROM source_compilation_intents
+             WHERE project_id=?1 AND object_id=?2 AND reason_payload_id=?3",
+            params![project.as_str(), object.as_str(), reason.as_str()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    let (run, source, compiler_id, compiler_version, model_id, prompt_digest) =
+        intent.ok_or(StoreError::InvalidBatch)?;
+    transaction.execute(
+        "INSERT INTO source_compilation_authorizations
+         (project_id,run_id,object_id,source_version_id,compiler_id,compiler_version,
+          model_id,prompt_digest,reason_payload_id)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        params![
+            project.as_str(),
+            run,
+            object.as_str(),
+            source,
+            compiler_id,
+            compiler_version,
+            model_id,
+            prompt_digest,
+            reason.as_str()
         ],
     )?;
     Ok(())

@@ -9,8 +9,8 @@ use merl_corpus::fixture::Fixture;
 use merl_ingest::{ImportError, import_fixture};
 use merl_policy::{PolicyRules, Proposal, evaluate};
 use merl_store::{
-    IssueState, ObjectHistoryEntry, PayloadRead, ProjectDelta, PurgeAudit, PurgePreview, Store,
-    StoreError, SupportStatus,
+    CompilationAuthorizationConfig, IssueState, ObjectHistoryEntry, PayloadRead, ProjectDelta,
+    PurgeAudit, PurgePreview, Store, StoreError, SupportStatus,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -616,22 +616,89 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
             )
             .map_err(|error| invalid_input(&error.to_string()))?;
             let run = run_id.ok_or_else(|| invalid_input("--run is required"))?;
+            let actor = merl_core::ActorId::try_from(
+                actor.ok_or_else(|| invalid_input("--actor is required"))?,
+            )
+            .map_err(|error| invalid_input(&error.to_string()))?;
+            let reason = reason.ok_or_else(|| invalid_input("--reason is required"))?;
+            let compiler_version =
+                compiler_version.ok_or_else(|| invalid_input("--compiler-version is required"))?;
+            let model = model.ok_or_else(|| invalid_input("--model is required"))?;
+            let prompt_digest = parse_sha256(
+                prompt_digest.ok_or_else(|| invalid_input("--prompt-digest is required"))?,
+            )?;
             let adapter = merl_compiler::ProcessCompiler {
                 program: program
                     .ok_or_else(|| invalid_input("--program is required"))?
                     .into(),
                 args: compiler_args,
-                version: compiler_version
-                    .ok_or_else(|| invalid_input("--compiler-version is required"))?
-                    .into(),
-                model: model
-                    .ok_or_else(|| invalid_input("--model is required"))?
-                    .into(),
-                prompt_digest: parse_sha256(
-                    prompt_digest.ok_or_else(|| invalid_input("--prompt-digest is required"))?,
-                )?,
+                version: compiler_version.into(),
+                model: model.into(),
+                prompt_digest,
             };
             let mut store = Store::open(Path::new(database))?;
+            let source = store
+                .source_version(&project, &version)?
+                .ok_or_else(|| invalid_input("source version does not exist"))?;
+            let intent = store.prepare_compilation_authorization(
+                &project,
+                &version,
+                run,
+                reason.as_bytes(),
+                CompilationAuthorizationConfig {
+                    compiler_id: "process",
+                    compiler_version,
+                    model_id: model,
+                    prompt_digest,
+                },
+            )?;
+            let identity = format!("{project}/{version}/{run}/{actor}/{reason}");
+            let proposal = Proposal::AdministrativeAction {
+                id: stable_id("source_compile_input", &identity)?,
+                event: merl_core::DomainEvent::PutObject {
+                    id: stable_id("source_compile_event", &identity)?,
+                    object: intent.object,
+                    kind: merl_core::ObjectKind::try_from("source_compilation_request")
+                        .map_err(|error| invalid_input(&error.to_string()))?,
+                    payload: Some(intent.reason.clone()),
+                    issue_scope: Some(source.context_scope_id),
+                    lifecycle: merl_core::ObjectLifecycle::Active,
+                },
+            };
+            let rules = PolicyRules {
+                version: merl_core::PolicyVersion::try_from("source_compile_v1")
+                    .map_err(|error| invalid_input(&error.to_string()))?,
+                decision_authors: Vec::new(),
+                command_actors: Vec::new(),
+                administrators: store.administrators(&project)?,
+            };
+            let prepared_policy = evaluate(
+                &store,
+                &project,
+                &actor,
+                stable_id("source_compile_evaluation", &identity)?,
+                stable_id("source_compile_batch", &identity)?,
+                utc_now_millis()?,
+                &rules,
+                &[proposal],
+            )?;
+            let disposition = prepared_policy.evaluation.inputs[0].disposition;
+            prepared_policy.commit(&mut store)?;
+            if disposition == merl_core::PolicyDisposition::Rejected {
+                let coverage = store.semantic_coverage(&project)?;
+                return if *json_output {
+                    render_json(&json!({
+                        "schema": "merl.source-compile/v1", "action": "source.compile",
+                        "project": project.as_str(), "source": version.as_str(), "run": run,
+                        "actor": actor.as_str(), "outcome": "rejected",
+                        "required_gaps": coverage.required_gaps
+                    }))
+                } else {
+                    Ok(format!(
+                        "Compilation of {version} was rejected for {actor}.\n"
+                    ))
+                };
+            }
             let prepared = merl_compiler::prepare_compilation(
                 &mut store,
                 &project,
@@ -1826,8 +1893,8 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             vec!["show"],
         ),
         "source compile" => (
-            "merl source compile --project <id> --database <path> --version <id> --run <id> --program <path> --compiler-version <version> --model <model> --prompt-digest sha256:<hex> [--compiler-arg <arg>] [--format json]",
-            "Compile one retained source through a configured process adapter and record the attempt.",
+            "merl source compile --project <id> --database <path> --version <id> --run <id> --actor <id> --reason <text> --program <path> --compiler-version <version> --model <model> --prompt-digest sha256:<hex> [--compiler-arg <arg>] [--format json]",
+            "Authorize and compile one retained source through a configured process adapter.",
             vec!["source show", "issue view"],
         ),
         "source require" => (

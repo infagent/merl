@@ -105,10 +105,12 @@ fn required_coverage_follows_the_source_across_edits() {
     CliIssueHistory::new()
         .given_an_optional_issue_note_and_project_administrator()
         .when_the_note_is_required_for_the_issue()
+        .when_a_non_administrator_compiles_the_required_note()
+        .then_the_compile_request_is_rejected_without_spending_compiler_work()
         .when_the_required_note_is_compiled()
-        .then_required_coverage_is_complete()
+        .then_required_coverage_is_complete_with_an_authorization_record()
         .when_the_optional_note_is_edited()
         .then_the_edit_is_a_required_gap()
         .when_the_required_edit_is_compiled()
-        .then_required_coverage_is_complete();
+        .then_required_coverage_is_complete_with_an_authorization_record();
 }

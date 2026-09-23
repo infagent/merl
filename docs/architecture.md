@@ -221,7 +221,9 @@ An authorized administrative policy action may promote an optional source to req
 
 Structured commands bypass compilation because they already carry typed semantics. Trusted provider state changes use deterministic `ProviderObservation` inputs. Merl-generated notifications and projections are marked by origin and never compile. Deterministic extractors may still process structured artifacts without a model call.
 
-`on_demand` triggers are explicit and auditable: an authorized `source compile` command, selection of the source as evidence for a semantic command, or an authorized backfill after policy changes. Reading the raw payload does not silently compile it. The first implementation will not estimate future readership or automatically spend tokens at a predicted break-even point.
+`on_demand` triggers are explicit and auditable: an authorized `source compile` command, selection of the source as evidence for a semantic command, or an authorized backfill after policy changes. A compile request records its actor, protected reason, source version, run, compiler, model, and prompt digest before the adapter starts. Rejected requests spend no compiler tokens. Reading the raw payload does not silently compile it. The first implementation will not estimate future readership or automatically spend tokens at a predicted break-even point.
+
+Coverage requirements and compile requests advance accepted revision and appear in deltas, but they are control state. Role views and compiler context selectors exclude these administrative objects and their protected reasons from ordinary semantic context.
 
 Sensible defaults keep human project surfaces current without compiling routine agent traffic. Human-authored Issue comments are normally `eager` and `required`. Direct agent notes, long reports, research notes, and legacy mailbox imports normally use `capture_only` or `on_demand` with `optional` coverage. Structured provider observations are processed deterministically and remain required. Projects can change those defaults at the binding level.
 
