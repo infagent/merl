@@ -100,7 +100,7 @@ pub(super) fn execute(
                 if let (Some(payload), Some(text)) = (&review.reason, options.reason)
                     && store.candidate_review(project, &review.id)?.is_none()
                 {
-                    store.put_payload(project, payload, text.as_bytes())?;
+                    store.put_review_reason(project, payload, text.as_bytes())?;
                 }
                 let record = merl_policy::review_candidate(store, project, &review, now)?;
                 let decision = &record.inputs[0];

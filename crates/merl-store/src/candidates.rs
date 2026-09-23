@@ -6,7 +6,8 @@ use merl_core::{
     PolicyEvaluation, PolicyEvaluationId, PolicyInput, PolicyInputId, ProjectId, ProjectRevision,
     ReasonCode,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
 
 /// The first recorded candidate disposition for one immutable assertion input.
 #[derive(Clone, Debug)]
@@ -74,6 +75,44 @@ fn identifier<T: for<'a> TryFrom<&'a str>>(value: &str) -> Result<T, StoreError>
 }
 
 impl Store {
+    /// Retains a review reason, reusing identical bytes after an interrupted request.
+    ///
+    /// A process can stop after writing the reason but before recording its review.
+    /// Compare and insert under one writer transaction so retries can reuse that
+    /// payload without overwriting another value or restoring erased bytes.
+    ///
+    /// # Errors
+    /// Returns an identity conflict if the existing digest or bytes differ, or the
+    /// payload was erased. Missing projects and storage failures also return errors.
+    pub fn put_review_reason(
+        &mut self,
+        project: &ProjectId,
+        id: &PayloadId,
+        bytes: &[u8],
+    ) -> Result<(), StoreError> {
+        let digest = Sha256::digest(bytes);
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let matches: Option<bool> = transaction.query_row(
+            "SELECT digest=?3 AND COALESCE(bytes=?4,0) FROM payloads WHERE project_id=?1 AND id=?2",
+            params![project.as_str(), id.as_str(), digest.as_slice(), bytes],
+            |row| row.get(0),
+        ).optional()?;
+        match matches {
+            Some(false) => return Err(StoreError::PolicyInputConflict),
+            Some(true) => {}
+            None => {
+                transaction.execute(
+                    "INSERT INTO payloads (project_id,id,digest,bytes) VALUES (?1,?2,?3,?4)",
+                    params![project.as_str(), id.as_str(), digest.as_slice(), bytes],
+                )?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// Finds an assertion candidate without expanding source prose.
     ///
     /// # Errors

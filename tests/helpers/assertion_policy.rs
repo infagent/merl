@@ -1296,3 +1296,123 @@ impl AssertionScenario {
         assert!(human.contains("accepted"));
     }
 }
+
+pub struct ReviewRecoveryCases {
+    cases: Vec<(
+        &'static str,
+        &'static str,
+        AssertionScenario,
+        merl_core::PayloadId,
+    )>,
+}
+impl ReviewRecoveryCases {
+    fn arguments<'a>(operation: &'a str, candidate: &'a str) -> Vec<&'a str> {
+        let mut args = vec![
+            "candidate",
+            operation,
+            candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "interrupted-review",
+            "--reason",
+            "The author left this question open",
+        ];
+        if operation == "correct" {
+            args.extend(["--subject", "Q1", "--kind", "question", "--value", "none"]);
+        }
+        args
+    }
+    pub fn given_review_reasons_without_requests() -> Self {
+        let mut cases = Vec::new();
+        for (operation, state) in [
+            ("reject", "matching"),
+            ("correct", "matching"),
+            ("reject", "different"),
+            ("reject", "erased"),
+        ] {
+            // Obtain the reason reference through public inspection in a separate
+            // database, so this crash fixture does not duplicate the ID algorithm.
+            let reference = AssertionScenario::given_a_candidate_for_review();
+            let candidate = reference.candidate_id();
+            let completed = reference.cli(&Self::arguments(operation, &candidate));
+            assert_eq!(completed["outcome"], "accepted");
+            let detail = reference.cli(&["candidate", "show", &candidate]);
+            let payload = id(detail["reviews"][0]["reason_payload"].as_str().unwrap());
+            let scenario = AssertionScenario::given_a_candidate_for_review();
+            let bytes: &[u8] = if state == "different" {
+                b"Different retained reason"
+            } else {
+                b"The author left this question open"
+            };
+            {
+                let mut store = scenario.store();
+                store.put_payload(&id("P1"), &payload, bytes).unwrap();
+                if state == "erased" {
+                    store.erase_payload(&id("P1"), &payload).unwrap();
+                }
+                assert!(
+                    store
+                        .candidate_review(&id("P1"), &id("interrupted-review"))
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            cases.push((operation, state, scenario, payload));
+        }
+        Self { cases }
+    }
+    pub fn when_the_same_commands_are_retried_after_restart(mut self) -> Self {
+        for (operation, _, scenario, _) in &mut self.cases {
+            let candidate = scenario.candidate_id();
+            let args = Self::arguments(operation, &candidate);
+            scenario.outputs.push(scenario.cli(&args));
+            scenario.outputs.push(scenario.cli(&args));
+        }
+        self
+    }
+    pub fn then_matching_reasons_recover_and_conflicting_or_erased_reasons_stay_unchanged(self) {
+        for (operation, state, scenario, payload) in self.cases {
+            let result = &scenario.outputs[1];
+            assert_eq!(result, &scenario.outputs[2]);
+            let store = scenario.store();
+            if state == "matching" {
+                assert_eq!(result["outcome"], "accepted", "{operation}: {result}");
+                assert_eq!(
+                    store.project_revision(&id("P1")).unwrap().get(),
+                    scenario.basis + 1
+                );
+                assert!(
+                    store
+                        .candidate_review(&id("P1"), &id("interrupted-review"))
+                        .unwrap()
+                        .is_some()
+                );
+                assert_eq!(
+                    store.read_payload(&id("P1"), &payload).unwrap(),
+                    merl_store::PayloadRead::Available(
+                        b"The author left this question open".to_vec()
+                    )
+                );
+            } else {
+                assert_eq!(result["code"], "POLICY_INPUT_CONFLICT", "{state}: {result}");
+                assert_eq!(
+                    store.project_revision(&id("P1")).unwrap().get(),
+                    scenario.basis
+                );
+                assert!(
+                    store
+                        .candidate_review(&id("P1"), &id("interrupted-review"))
+                        .unwrap()
+                        .is_none()
+                );
+                let expected = if state == "erased" {
+                    merl_store::PayloadRead::Unavailable
+                } else {
+                    merl_store::PayloadRead::Available(b"Different retained reason".to_vec())
+                };
+                assert_eq!(store.read_payload(&id("P1"), &payload).unwrap(), expected);
+            }
+        }
+    }
+}

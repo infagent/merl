@@ -419,6 +419,8 @@ A review request fixes the actor, candidate, action, replacement, and reason ref
 
 Policy checks the original target against the candidate's basis revision. The commit transaction checks current grants, target reads, source availability and version, and whether another review or assertion application already resolved the candidate. A changed dependency produces a durable conflict. Unrelated revisions do not invalidate review. Rejection may close stale evidence because it accepts no semantic support.
 
+If a process stops after retaining a reason but before recording the review request, an exact retry reuses that payload after checking its digest and bytes in one writer transaction. Mismatched or erased content returns an identity conflict; retries cannot overwrite or restore it.
+
 An identical request retry returns its recorded outcome after restart, erasure, or authority changes. Reusing the request ID with different content conflicts. A second request cannot resolve the same candidate again, and later automatic assertion application cannot revive a rejected or corrected candidate. Correction consumes the candidate without claiming that policy accepted the mistaken assertion. Accepted objects retain the original evidence lineage for expansion, purge, and evidence revalidation, even after another command updates the object.
 
 ### Durable semantic authority

@@ -116,3 +116,10 @@ fn review_previews_and_retries_preserve_their_public_contract() {
         .when_review_is_previewed_then_retried_after_revocation_and_rebuild()
         .then_preview_is_read_only_and_retry_preserves_the_original_outcome();
 }
+
+#[test]
+fn interrupted_review_retries_reuse_matching_reasons_without_overwriting_or_restoring_them() {
+    assertion_policy::ReviewRecoveryCases::given_review_reasons_without_requests()
+        .when_the_same_commands_are_retried_after_restart()
+        .then_matching_reasons_recover_and_conflicting_or_erased_reasons_stay_unchanged();
+}
