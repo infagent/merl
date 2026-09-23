@@ -253,6 +253,29 @@ Merl policy protects cooperating clients; unrestricted local processes can read 
 
 `merl security explain` prints the files and credentials at risk, the host controls in effect, and the isolation options available to the operator. Merl never describes same-user local policy as a sandbox.
 
+## Project authority grants
+
+The local CLI establishes the first administrator when it initializes a project:
+
+```bash
+merl project init --id P1 --database project.sqlite --administrator owner
+merl project authority list --project P1 --database project.sqlite --json
+merl project authority grant --project P1 --database project.sqlite \
+  --id grant-alice-decisions --actor owner --subject alice \
+  --permission decision_author --reason 'Alice owns project decisions' --json
+merl project authority revoke --project P1 --database project.sqlite \
+  --id revoke-alice-decisions --actor owner --subject alice \
+  --permission decision_author --reason 'Alice changed roles' --json
+```
+
+`decision_author` allows policy to accept that source author's explicit decisions when their provenance supports the claim. `command_actor` allows structured semantic commands. The grants are independent; neither grants administrative authority. Administrators remain part of the project's bootstrap configuration in this release.
+
+Grant and revoke require an administrator. Results name the disposition, acting administrator, policy version, configuration digest used for evaluation, and accepted revision. A rejection has no accepted revision. The list command reports current grants and their digest. Both permissions survive restart and projection rebuild. `merl help project authority` lists the commands; leaf help supplies arguments and examples.
+
+Each change needs a request `--id` and a reason. The reason stays in an erasable payload linked from the accepted event. Repeating the same request returns its recorded result, even if the permission has since been revoked. Reusing an ID with different content fails with `POLICY_INPUT_CONFLICT`; a new request needs a new ID. Work prepared before a grant change may return `POLICY_CONFLICT` and require reevaluation.
+
+In local mode, `--actor` is a cooperating client's audit claim. Merl trusts processes with unrestricted access as the same OS user; these commands do not authenticate that user or sandbox the database.
+
 ## Moving setup between computers
 
 A node manifest recreates non-secret local setup:

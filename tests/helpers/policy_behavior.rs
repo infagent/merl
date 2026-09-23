@@ -1042,6 +1042,203 @@ impl PolicyScenario {
         }
     }
 
+    pub fn given_durable_grants_and_a_compiled_statement() -> Self {
+        let mut scenario = Self::file_backed();
+        scenario
+            .store
+            .grant_administrator_unchecked_bootstrap(&scenario.project, &id("admin"))
+            .expect("bootstrap");
+        scenario.set_semantic_grants(true);
+        scenario.capture("durable-v1", "Use fixed gain", "alice");
+        scenario.compile("durable-v1", "Use fixed gain".len(), None, "durable-run");
+        scenario.store =
+            Store::open(&scenario.persisted_file.as_ref().expect("file").0).expect("restart");
+        scenario
+            .store
+            .rebuild_projection(&scenario.project)
+            .expect("rebuild grants");
+        scenario
+    }
+
+    fn set_semantic_grants(&mut self, grant: bool) {
+        for permission in [
+            merl_core::AuthorityPermission::DecisionAuthor,
+            merl_core::AuthorityPermission::CommandActor,
+        ] {
+            let request = merl_policy::AuthorityChange {
+                id: id(&format!(
+                    "{}_{}",
+                    permission.as_str(),
+                    if grant { "grant" } else { "revoke" }
+                )),
+                actor: id("admin"),
+                subject: id(match permission {
+                    merl_core::AuthorityPermission::DecisionAuthor => "alice",
+                    merl_core::AuthorityPermission::CommandActor => "agent",
+                }),
+                permission,
+                grant,
+                reason: "Project role assignment".into(),
+            };
+            merl_policy::change_authority(&mut self.store, &self.project, &request, NOW)
+                .expect("admin changes grants");
+        }
+    }
+
+    pub fn when_a_decision_and_command_use_durable_authority(&mut self) -> &mut Self {
+        self.prepared = Some(
+            merl_policy::evaluate_current(
+                &self.store,
+                &self.project,
+                &id("agent"),
+                id("durable-evaluation"),
+                id("durable-batch"),
+                NOW,
+                &[
+                    Proposal::ObservedAssertion {
+                        id: id("durable-assertion"),
+                        run: id("durable-run"),
+                        index: 0,
+                        event: event("durable-decision", "D1", "decision", None),
+                    },
+                    Proposal::Command {
+                        id: id("durable-command"),
+                        event: event("durable-task", "T1", "task", None),
+                    },
+                ],
+            )
+            .expect("evaluate durable grants"),
+        );
+        self
+    }
+
+    pub fn then_both_inputs_use_the_persisted_grants(&mut self) -> &mut Self {
+        let prepared = self.prepared.as_ref().expect("prepared work");
+        assert!(
+            prepared
+                .evaluation
+                .inputs
+                .iter()
+                .all(|input| input.disposition == PolicyDisposition::Accepted)
+        );
+        assert_eq!(
+            prepared.evaluation.configuration_digest,
+            PolicyRules::from_store(&self.store, &self.project)
+                .expect("durable rules")
+                .configuration_digest()
+        );
+        self
+    }
+
+    pub fn when_semantic_authority_is_revoked(&mut self) -> &mut Self {
+        self.set_semantic_grants(false);
+        self.store = Store::open(&self.persisted_file.as_ref().expect("file").0)
+            .expect("restart after revocation");
+        self.store
+            .rebuild_projection(&self.project)
+            .expect("rebuild revoked grants");
+        self
+    }
+
+    pub fn then_new_work_lacks_authority(&mut self) -> &mut Self {
+        let inputs = &self
+            .prepared
+            .as_ref()
+            .expect("evaluation")
+            .evaluation
+            .inputs;
+        assert_eq!(inputs[0].disposition, PolicyDisposition::Candidate);
+        assert_eq!(inputs[1].disposition, PolicyDisposition::Rejected);
+        self
+    }
+
+    pub fn when_the_prepared_work_is_committed(&mut self) -> &mut Self {
+        self.result = Some(
+            self.prepared
+                .as_ref()
+                .expect("prepared")
+                .commit(&mut self.store),
+        );
+        self
+    }
+
+    pub fn then_stale_authority_cannot_accept_work(&mut self) -> &mut Self {
+        assert!(matches!(self.result, Some(Err(StoreError::PolicyConflict))));
+        assert!(
+            self.store
+                .object(&self.project, &id("D1"))
+                .expect("decision lookup")
+                .is_none()
+        );
+        let recorded = self
+            .store
+            .policy_evaluation(&self.project, &id("durable-evaluation"))
+            .expect("audit")
+            .expect("conflict record");
+        assert!(recorded.conflict.is_some());
+        self
+    }
+
+    pub fn when_a_command_tries_to_revoke_a_grant(&mut self) -> &mut Self {
+        let object = self
+            .store
+            .prepare_authority_grant(
+                &self.project,
+                &id("agent"),
+                merl_core::AuthorityPermission::DecisionAuthor,
+            )
+            .expect("target");
+        self.prepared = Some(
+            merl_policy::evaluate_current(
+                &self.store,
+                &self.project,
+                &id("agent"),
+                id("attack-evaluation"),
+                id("attack-batch"),
+                NOW,
+                &[Proposal::Command {
+                    id: id("attack-command"),
+                    event: DomainEvent::PutObject {
+                        id: id("attack-event"),
+                        object,
+                        kind: id("authority_grant"),
+                        payload: None,
+                        issue_scope: None,
+                        lifecycle: merl_core::ObjectLifecycle::Invalidated,
+                    },
+                }],
+            )
+            .expect("evaluate command"),
+        );
+        self.result = Some(
+            self.prepared
+                .as_ref()
+                .expect("prepared")
+                .commit(&mut self.store),
+        );
+        self
+    }
+
+    pub fn then_the_command_cannot_change_authority(&mut self) -> &mut Self {
+        assert_eq!(
+            self.prepared
+                .as_ref()
+                .expect("evaluation")
+                .evaluation
+                .inputs[0]
+                .disposition,
+            PolicyDisposition::Rejected
+        );
+        assert_eq!(
+            self.store
+                .authority_grants(&self.project)
+                .expect("grants")
+                .decision_authors,
+            vec![id("alice")]
+        );
+        self
+    }
+
     fn new() -> Self {
         let mut store = Store::open_in_memory().expect("store");
         let project = id("policy-project");

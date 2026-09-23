@@ -167,3 +167,29 @@ fn provider_facts_cannot_replace_an_accepted_semantic_object() {
         .when_a_provider_observation_targets_that_decision()
         .then_the_provider_observation_is_rejected_and_the_decision_remains();
 }
+
+#[test]
+fn durable_authority_governs_decisions_and_commands_after_restart() {
+    PolicyScenario::given_durable_grants_and_a_compiled_statement()
+        .when_a_decision_and_command_use_durable_authority()
+        .then_both_inputs_use_the_persisted_grants()
+        .when_semantic_authority_is_revoked()
+        .when_a_decision_and_command_use_durable_authority()
+        .then_new_work_lacks_authority();
+}
+
+#[test]
+fn revocation_invalidates_work_prepared_under_old_grants() {
+    PolicyScenario::given_durable_grants_and_a_compiled_statement()
+        .when_a_decision_and_command_use_durable_authority()
+        .when_semantic_authority_is_revoked()
+        .when_the_prepared_work_is_committed()
+        .then_stale_authority_cannot_accept_work();
+}
+
+#[test]
+fn semantic_commands_cannot_change_authority_grants() {
+    PolicyScenario::given_durable_grants_and_a_compiled_statement()
+        .when_a_command_tries_to_revoke_a_grant()
+        .then_the_command_cannot_change_authority();
+}

@@ -1,5 +1,9 @@
 //! SQLite authority for accepted events and independently erasable payloads.
 
+mod authority;
+
+pub use authority::AuthorityGrants;
+
 use std::{collections::BTreeSet, error::Error, fmt, fmt::Write as _, path::Path};
 
 use merl_core::{
@@ -12,7 +16,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 18;
+const SCHEMA_VERSION: i64 = 19;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -941,6 +945,10 @@ impl Store {
                 transaction.execute_batch(include_str!(
                     "../migrations/0018_binding_capture_policy.sql"
                 ))?;
+            }
+            if version < 19 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0019_authority_grants.sql"))?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -1900,7 +1908,7 @@ impl Store {
         }
         let mut statement = self.connection.prepare(
             "SELECT id,kind FROM objects WHERE project_id=?1
-             AND kind NOT IN ('provider_issue','source_coverage_requirement','source_compilation_request')
+             AND kind NOT IN ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant')
              AND lifecycle!='superseded'",
         )?;
         let rows = statement.query_map(params![project.as_str()], |row| {
@@ -2008,7 +2016,7 @@ impl Store {
                 AND domain_event_batches.id = domain_events.batch_id
                WHERE domain_events.project_id = ?1 AND domain_event_batches.revision <= ?2
                  AND domain_events.object_kind NOT IN
-                   ('provider_issue','source_coverage_requirement','source_compilation_request')
+                   ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant')
              ) SELECT object_id, payload_id, object_revision FROM history
                WHERE rank = 1 ORDER BY CASE WHEN ?4 IS NOT NULL AND issue_scope_id=?4 THEN 0 ELSE 1 END, object_id LIMIT ?3",
         )?;
@@ -4263,7 +4271,7 @@ impl Store {
         let mut statement = self.connection.prepare(
             "SELECT id FROM objects WHERE project_id=?1 AND issue_scope_id=?2
                AND kind NOT IN
-                 ('provider_issue','source_coverage_requirement','source_compilation_request')
+                 ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant')
                ORDER BY id",
         )?;
         let ids = statement
@@ -5700,6 +5708,16 @@ fn accept_administrative_object(
     scope: Option<&str>,
 ) -> Result<(), StoreError> {
     match kind.as_str() {
+        "authority_grant" => {
+            let exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM authority_grant_targets WHERE project_id=?1 AND object_id=?2)",
+                params![project.as_str(), object.as_str()], |row| row.get(0),
+            )?;
+            if !exists || payload.is_none() || scope.is_some() {
+                return Err(StoreError::InvalidBatch);
+            }
+            Ok(())
+        }
         "source_coverage_requirement" => accept_source_coverage_target(
             transaction,
             project,

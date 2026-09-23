@@ -1,5 +1,6 @@
 //! The public command-line boundary for local Merl projects.
 
+mod authority;
 mod capture;
 
 use std::{
@@ -9,7 +10,7 @@ use std::{
 use merl_core::{AgentId, ObjectId, PolicyInput, ProjectId, ProjectRevision, SourceVersionId};
 use merl_corpus::fixture::Fixture;
 use merl_ingest::{ImportError, import_fixture};
-use merl_policy::{PolicyRules, Proposal, evaluate};
+use merl_policy::{Proposal, apply_current};
 use merl_store::{
     CompilationAuthorizationConfig, IssueState, ObjectHistoryEntry, PayloadRead, ProjectDelta,
     PurgeAudit, PurgePreview, Store, StoreError, SupportStatus,
@@ -108,9 +109,12 @@ impl From<ImportError> for CliError {
 
 impl From<merl_policy::PolicyError> for CliError {
     fn from(error: merl_policy::PolicyError) -> Self {
-        Self {
-            code: "POLICY_ERROR",
-            message: error.to_string(),
+        match error {
+            merl_policy::PolicyError::Store(error) => Self::from(error),
+            error @ merl_policy::PolicyError::InvalidProposal => Self {
+                code: "POLICY_ERROR",
+                message: error.to_string(),
+            },
         }
     }
 }
@@ -203,6 +207,8 @@ fn execute(
     let mut reason = None;
     let mut actor = None;
     let mut administrator = None;
+    let mut subject = None;
+    let mut permission = None;
     let mut confirm_digest = None;
     let mut dry_run = false;
     let mut run_id = None;
@@ -294,6 +300,14 @@ fn execute(
                 index += 1;
                 actor = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
             }
+            "--subject" => {
+                index += 1;
+                subject = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--permission" => {
+                index += 1;
+                permission = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
             "--administrator" => {
                 index += 1;
                 administrator = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
@@ -376,6 +390,27 @@ fn execute(
         ["help", "issue", "import-fixture"] | ["issue", "import-fixture", "help"] => {
             help("issue import-fixture", *json_output)
         }
+        ["help", "project", "authority"] | ["project", "authority", "help"] => {
+            authority::help(None, *json_output)
+        }
+        ["help", "project", "authority", operation]
+        | ["project", "authority", operation, "help"] => {
+            authority::help(Some(operation), *json_output)
+        }
+        ["project", "authority", operation] => authority::execute(
+            operation,
+            authority::Options {
+                database,
+                project,
+                actor,
+                subject,
+                permission,
+                id,
+                reason,
+            },
+            *json_output,
+            clock,
+        ),
         ["project", "init"] => {
             let id = parse_project(id.ok_or_else(|| invalid_input("--id is required"))?)?;
             let path = database.ok_or_else(|| invalid_input("--database is required"))?;
@@ -738,25 +773,16 @@ fn execute(
                     lifecycle: merl_core::ObjectLifecycle::Active,
                 },
             };
-            let rules = PolicyRules {
-                version: merl_core::PolicyVersion::try_from("source_compile_v1")
-                    .map_err(|error| invalid_input(&error.to_string()))?,
-                decision_authors: Vec::new(),
-                command_actors: Vec::new(),
-                administrators: store.administrators(&project)?,
-            };
-            let prepared_policy = evaluate(
-                &store,
+            let record = apply_current(
+                &mut store,
                 &project,
                 &actor,
                 stable_id("source_compile_evaluation", &identity)?,
                 stable_id("source_compile_batch", &identity)?,
                 clock()?,
-                &rules,
                 &[proposal],
             )?;
-            let disposition = prepared_policy.evaluation.inputs[0].disposition;
-            prepared_policy.commit(&mut store)?;
+            let disposition = record.inputs[0].disposition;
             if disposition == merl_core::PolicyDisposition::Rejected {
                 let coverage = store.semantic_coverage(&project)?;
                 return if *json_output {
@@ -873,26 +899,17 @@ fn execute(
                     lifecycle: merl_core::ObjectLifecycle::Active,
                 },
             };
-            let rules = PolicyRules {
-                version: merl_core::PolicyVersion::try_from("source_coverage_v1")
-                    .map_err(|error| invalid_input(&error.to_string()))?,
-                decision_authors: Vec::new(),
-                command_actors: Vec::new(),
-                administrators: store.administrators(&project)?,
-            };
             let now = clock()?;
-            let prepared = evaluate(
-                &store,
+            let record = apply_current(
+                &mut store,
                 &project,
                 &actor,
                 stable_id("source_requirement_evaluation", &identity)?,
                 stable_id("source_requirement_batch", &identity)?,
                 now,
-                &rules,
                 &[proposal],
             )?;
-            let disposition = prepared.evaluation.inputs[0].disposition;
-            prepared.commit(&mut store)?;
+            let disposition = record.inputs[0].disposition;
             let promotion = store.coverage_promotion(&project, &version, scope)?;
             let outcome = match disposition {
                 merl_core::PolicyDisposition::Accepted => "promoted",
@@ -1865,8 +1882,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "project" => (
             "merl project <command>",
-            "Commands: init, revision, rebuild, view, delta, batch.",
+            "Commands: init, revision, rebuild, view, delta, batch, authority.",
             vec![
+                "project authority",
                 "project init",
                 "project revision",
                 "project rebuild",
