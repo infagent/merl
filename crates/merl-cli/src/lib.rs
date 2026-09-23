@@ -7,11 +7,13 @@ use std::{
 use merl_core::{AgentId, ObjectId, PolicyInput, ProjectId, ProjectRevision, SourceVersionId};
 use merl_corpus::fixture::Fixture;
 use merl_ingest::{ImportError, import_fixture};
+use merl_policy::{PolicyRules, Proposal, evaluate};
 use merl_store::{
     IssueState, ObjectHistoryEntry, PayloadRead, ProjectDelta, PurgeAudit, PurgePreview, Store,
     StoreError, SupportStatus,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 /// A CLI failure with a stable machine-readable code.
 #[derive(Debug)]
@@ -94,6 +96,15 @@ impl From<ImportError> for CliError {
                 code: "POLICY_ERROR",
                 message: error.to_string(),
             },
+        }
+    }
+}
+
+impl From<merl_policy::PolicyError> for CliError {
+    fn from(error: merl_policy::PolicyError) -> Self {
+        Self {
+            code: "POLICY_ERROR",
+            message: error.to_string(),
         }
     }
 }
@@ -609,33 +620,92 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
             let existed = store
                 .coverage_promotion(&project, &version, scope)?
                 .is_some();
-            let promotion = store.require_source(
+            let intent =
+                store.prepare_source_requirement(&project, &version, scope, reason.as_bytes())?;
+            if existed {
+                let promotion = store
+                    .coverage_promotion(&project, &version, scope)?
+                    .ok_or(StoreError::CorruptHistory)?;
+                if *json_output {
+                    return render_json(&json!({
+                        "schema": "merl.source-coverage/v1",
+                        "action": "source.require",
+                        "project": project.as_str(),
+                        "source": promotion.source.as_str(),
+                        "scope": promotion.scope,
+                        "coverage": "required",
+                        "actor": promotion.actor.as_str(),
+                        "reason_payload": promotion.reason.as_str(),
+                        "promoted_at_millis": promotion.promoted_at_millis,
+                        "outcome": "unchanged"
+                    }));
+                }
+                return Ok(format!(
+                    "{} is required for {} (unchanged)\n",
+                    promotion.source, promotion.scope
+                ));
+            }
+            let identity = format!(
+                "{}/{}/{}/{}/{}",
+                project, intent.source, scope, actor, reason
+            );
+            let proposal = Proposal::AdministrativeAction {
+                id: stable_id("source_requirement_input", &identity)?,
+                event: merl_core::DomainEvent::PutObject {
+                    id: stable_id("source_requirement_event", &identity)?,
+                    object: intent.object,
+                    kind: merl_core::ObjectKind::try_from("source_coverage_requirement")
+                        .map_err(|error| invalid_input(&error.to_string()))?,
+                    payload: Some(intent.reason.clone()),
+                    issue_scope: Some(scope.to_owned()),
+                    lifecycle: merl_core::ObjectLifecycle::Active,
+                },
+            };
+            let rules = PolicyRules {
+                version: merl_core::PolicyVersion::try_from("source_coverage_v1")
+                    .map_err(|error| invalid_input(&error.to_string()))?,
+                decision_authors: Vec::new(),
+                command_actors: Vec::new(),
+                administrators: store.administrators(&project)?,
+            };
+            let now = utc_now_millis()?;
+            let prepared = evaluate(
+                &store,
                 &project,
-                &version,
-                scope,
                 &actor,
-                reason.as_bytes(),
-                utc_now_millis()?,
+                stable_id("source_requirement_evaluation", &identity)?,
+                stable_id("source_requirement_batch", &identity)?,
+                now,
+                &rules,
+                &[proposal],
             )?;
+            let disposition = prepared.evaluation.inputs[0].disposition;
+            prepared.commit(&mut store)?;
+            let promotion = store.coverage_promotion(&project, &version, scope)?;
+            let outcome = match disposition {
+                merl_core::PolicyDisposition::Accepted => "promoted",
+                merl_core::PolicyDisposition::Duplicate => "unchanged",
+                merl_core::PolicyDisposition::Rejected => "rejected",
+                merl_core::PolicyDisposition::Candidate => "candidate",
+                merl_core::PolicyDisposition::Conflict => "conflict",
+            };
             if *json_output {
                 render_json(&json!({
                     "schema": "merl.source-coverage/v1",
                     "action": "source.require",
                     "project": project.as_str(),
-                    "source": promotion.source.as_str(),
-                    "scope": promotion.scope,
-                    "coverage": "required",
-                    "actor": promotion.actor.as_str(),
-                    "reason_payload": promotion.reason.as_str(),
-                    "promoted_at_millis": promotion.promoted_at_millis,
-                    "outcome": if existed { "unchanged" } else { "promoted" }
+                    "source": intent.source.as_str(),
+                    "scope": scope,
+                    "coverage": if promotion.is_some() { "required" } else { "optional" },
+                    "actor": actor.as_str(),
+                    "reason_payload": intent.reason.as_str(),
+                    "promoted_at_millis": promotion.as_ref().map(|value| value.promoted_at_millis),
+                    "outcome": outcome
                 }))
             } else {
                 Ok(format!(
                     "{} is required for {} ({})\n",
-                    promotion.source,
-                    promotion.scope,
-                    if existed { "unchanged" } else { "promoted" }
+                    intent.source, scope, outcome
                 ))
             }
         }
@@ -1045,6 +1115,19 @@ fn utc_now_millis() -> Result<i64, CliError> {
         .map_err(|_| invalid_input("system clock is before Unix epoch"))?
         .as_millis();
     i64::try_from(now).map_err(|_| invalid_input("system clock is outside supported range"))
+}
+
+fn stable_id<T>(prefix: &str, meaning: &str) -> Result<T, CliError>
+where
+    for<'a> T: TryFrom<&'a str>,
+    for<'a> <T as TryFrom<&'a str>>::Error: fmt::Display,
+{
+    let digest = Sha256::digest(meaning.as_bytes());
+    let mut value = format!("{prefix}_");
+    for byte in digest {
+        write!(&mut value, "{byte:02x}").expect("writing a digest is infallible");
+    }
+    T::try_from(value.as_str()).map_err(|error| invalid_input(&error.to_string()))
 }
 
 fn render_purge_preview(

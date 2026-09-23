@@ -85,13 +85,28 @@ fn projection_rebuild_keeps_accepted_state_but_reports_purged_evidence() {
 }
 
 #[test]
-fn an_authorized_operator_can_make_an_optional_source_required() {
+fn only_a_project_administrator_can_make_optional_evidence_required() {
     CliIssueHistory::new()
-        .given_an_optional_issue_note()
+        .given_an_optional_issue_note_and_project_administrator()
         .when_issue_coverage_is_read()
         .then_the_cold_note_is_optional()
+        .when_a_non_administrator_requires_the_note()
+        .then_the_requirement_is_rejected_and_the_note_stays_optional()
         .when_the_note_is_required_for_the_issue()
         .then_the_note_becomes_a_required_gap_with_an_audit_record()
         .when_the_same_requirement_is_retried()
         .then_the_retry_returns_the_original_promotion();
+}
+
+#[test]
+fn required_coverage_follows_the_source_across_edits() {
+    CliIssueHistory::new()
+        .given_an_optional_issue_note_and_project_administrator()
+        .when_the_note_is_required_for_the_issue()
+        .when_the_required_note_is_compiled()
+        .then_required_coverage_is_complete()
+        .when_the_optional_note_is_edited()
+        .then_the_edit_is_a_required_gap()
+        .when_the_required_edit_is_compiled()
+        .then_required_coverage_is_complete();
 }

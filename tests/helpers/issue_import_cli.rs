@@ -34,10 +34,16 @@ impl CliIssueHistory {
         self.directory.path.join("project.sqlite")
     }
 
-    pub fn given_an_optional_issue_note(&mut self) -> &mut Self {
+    pub fn given_an_optional_issue_note_and_project_administrator(&mut self) -> &mut Self {
         let mut store = Store::open(&self.database()).expect("authority");
         let project = ProjectId::try_from("P1").expect("project");
         store.create_project(&project).expect("project");
+        store
+            .grant_administrator_unchecked_bootstrap(
+                &project,
+                &ActorId::try_from("pm").expect("administrator"),
+            )
+            .expect("administrator grant");
         store
             .capture_source_version(
                 &project,
@@ -77,6 +83,22 @@ impl CliIssueHistory {
         self
     }
 
+    pub fn when_a_non_administrator_requires_the_note(&mut self) -> &mut Self {
+        self.latest = Some(require_note(&self.database(), "researcher"));
+        self
+    }
+
+    pub fn then_the_requirement_is_rejected_and_the_note_stays_optional(&mut self) -> &mut Self {
+        assert_eq!(self.latest.as_ref().expect("result")["outcome"], "rejected");
+        let store = Store::open(&self.database()).expect("authority");
+        let coverage = store
+            .semantic_coverage_in_scope(&ProjectId::try_from("P1").expect("project"), "issue-204")
+            .expect("coverage");
+        assert_eq!(coverage.required_gaps, 0);
+        assert_eq!(coverage.optional_cold, 1);
+        self
+    }
+
     pub fn when_issue_coverage_is_read(&mut self) -> &mut Self {
         let store = Store::open(&self.database()).expect("authority");
         let coverage = store
@@ -97,30 +119,7 @@ impl CliIssueHistory {
     }
 
     pub fn when_the_note_is_required_for_the_issue(&mut self) -> &mut Self {
-        let output = merl(&[
-            "source",
-            "require",
-            "--project",
-            "P1",
-            "--database",
-            path(&self.database()),
-            "--version",
-            "optional-note-v1",
-            "--scope",
-            "issue-204",
-            "--actor",
-            "pm",
-            "--reason",
-            "Required safety evidence",
-            "--json",
-        ]);
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let promotion: serde_json::Value =
-            serde_json::from_slice(&output.stdout).expect("promotion result");
+        let promotion = require_note(&self.database(), "pm");
         self.first_promotion = Some(promotion.clone());
         self.latest = Some(promotion);
         self
@@ -164,7 +163,12 @@ impl CliIssueHistory {
             "Required safety evidence",
             "--json",
         ]);
-        assert!(output.status.success());
+        assert!(
+            output.status.success(),
+            "stdout: {} stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         self.latest = Some(serde_json::from_slice(&output.stdout).expect("retry result"));
         self
     }
@@ -175,6 +179,102 @@ impl CliIssueHistory {
         assert_eq!(retry["outcome"], "unchanged");
         assert_eq!(retry["promoted_at_millis"], first["promoted_at_millis"]);
         assert_eq!(retry["reason_payload"], first["reason_payload"]);
+    }
+
+    pub fn when_the_required_note_is_compiled(&mut self) -> &mut Self {
+        self.compile_optional_note("optional-note-v1", "optional-note-run-v1");
+        self
+    }
+
+    pub fn then_required_coverage_is_complete(&mut self) -> &mut Self {
+        let store = Store::open(&self.database()).expect("authority");
+        let coverage = store
+            .semantic_coverage_in_scope(&ProjectId::try_from("P1").expect("project"), "issue-204")
+            .expect("coverage");
+        assert_eq!(coverage.required_gaps, 0);
+        self
+    }
+
+    pub fn when_the_optional_note_is_edited(&mut self) -> &mut Self {
+        let mut store = Store::open(&self.database()).expect("authority");
+        let project = ProjectId::try_from("P1").expect("project");
+        store
+            .capture_source_version(
+                &project,
+                &SourceCapture {
+                    binding: SourceBinding {
+                        id: SourceBindingId::try_from("binding").expect("binding"),
+                        provider: SourceProvider::try_from("controlled").expect("provider"),
+                        provider_namespace_id: "fixture".into(),
+                        namespace_digest: Sha256::digest(b"fixture").into(),
+                    },
+                    source: SourceId::try_from("optional-note").expect("source"),
+                    provider_entity_id: "optional-note",
+                    context_scope_id: "issue-204",
+                    version: SourceVersionId::try_from("optional-note-v2").expect("version"),
+                    provider_version_id: "optional-note-v2",
+                    kind: SourceKind::try_from("issue_comment").expect("kind"),
+                    supersedes: Some(
+                        SourceVersionId::try_from("optional-note-v1").expect("prior version"),
+                    ),
+                    ambiguous_order_with_previous: false,
+                    created_at_millis: 1,
+                    occurred_at_millis: 2,
+                    upstream_updated_at_millis: Some(2),
+                    observed_at_millis: 2,
+                    actor: Some(ActorId::try_from("researcher").expect("actor")),
+                    provider_actor_id: Some("researcher"),
+                    source_author: Some(ActorId::try_from("researcher").expect("author")),
+                    provider_source_author_id: Some("researcher"),
+                    body: Some(b"Updated optional safety note."),
+                    edit_diff: None,
+                    edit_deleted_at_millis: None,
+                    missing_body_reason: None,
+                    compilation_mode: CompilationMode::CaptureOnly,
+                    coverage_requirement: CoverageRequirement::Optional,
+                    policy_version: CapturePolicyVersion::try_from("fixture-v1").expect("policy"),
+                },
+            )
+            .expect("capture edited note");
+        self
+    }
+
+    pub fn then_the_edit_is_a_required_gap(&mut self) -> &mut Self {
+        let store = Store::open(&self.database()).expect("authority");
+        let coverage = store
+            .semantic_coverage_in_scope(&ProjectId::try_from("P1").expect("project"), "issue-204")
+            .expect("coverage");
+        assert_eq!(coverage.required_gaps, 1);
+        assert_eq!(coverage.optional_cold, 0);
+        self
+    }
+
+    pub fn when_the_required_edit_is_compiled(&mut self) -> &mut Self {
+        self.compile_optional_note("optional-note-v2", "optional-note-run-v2");
+        self
+    }
+
+    fn compile_optional_note(&self, version: &str, run: &str) {
+        let mut store = Store::open(&self.database()).expect("authority");
+        let project = ProjectId::try_from("P1").expect("project");
+        let source = SourceVersionId::try_from(version).expect("source version");
+        let prepared = merl_compiler::prepare_compilation(
+            &mut store,
+            &project,
+            &source,
+            &merl_compiler::FakeCompiler,
+            merl_compiler::RunRequest {
+                id: run,
+                limits: test_compiler_limits(),
+                mode: merl_compiler::RunMode::Live,
+                now_millis: 10,
+            },
+        )
+        .expect("prepare compiler")
+        .expect("new run");
+        let response = merl_compiler::execute_compilation(&prepared, &merl_compiler::FakeCompiler);
+        merl_compiler::record_compilation_result(&mut store, &project, &prepared, response, 11)
+            .expect("record compiler response");
     }
 
     pub fn given_a_new_project(&mut self) -> &mut Self {
@@ -658,6 +758,46 @@ impl CliIssueHistory {
         assert_eq!(replay.source_window, original.source_window);
         assert_eq!(replay.objects, original.objects);
         assert_eq!(rerun.selector_version, "issue_context_v1");
+    }
+}
+
+fn require_note(database: &Path, actor: &str) -> serde_json::Value {
+    let output = merl(&[
+        "source",
+        "require",
+        "--project",
+        "P1",
+        "--database",
+        path(database),
+        "--version",
+        "optional-note-v1",
+        "--scope",
+        "issue-204",
+        "--actor",
+        actor,
+        "--reason",
+        "Required safety evidence",
+        "--json",
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("require result")
+}
+
+fn test_compiler_limits() -> merl_compiler::CompilerLimits {
+    merl_compiler::CompilerLimits {
+        input_bytes: 4096,
+        output_bytes: 4096,
+        output_tokens: 512,
+        assertions: 4,
+        context_requests: 1,
+        expansion_rounds: 1,
+        payload_bytes: 2048,
+        source_window: 2,
+        objects: 4,
     }
 }
 

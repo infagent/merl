@@ -112,8 +112,8 @@ pub enum PayloadRead {
 /// Durable policy state that makes previously optional evidence completeness-critical.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoveragePromotion {
-    /// Source whose absence now prevents a completeness claim.
-    pub source: SourceVersionId,
+    /// Stable source whose current and future versions are completeness-critical.
+    pub source: SourceId,
     /// Issue, task, or other bounded scope where the requirement applies.
     pub scope: String,
     /// Actor who accepted the cost and completeness consequence.
@@ -122,6 +122,19 @@ pub struct CoveragePromotion {
     pub reason: PayloadId,
     /// Authority time of the first accepted promotion.
     pub promoted_at_millis: i64,
+}
+
+/// Protected intent submitted to administrative policy before it can affect coverage.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoverageRequirementIntent {
+    /// Stable source identity shared by its immutable versions.
+    pub source: SourceId,
+    /// Scope whose completeness would depend on this source.
+    pub scope: String,
+    /// Semantic object written only if administrative policy accepts the action.
+    pub object: ObjectId,
+    /// Protected reason payload referenced by the accepted object.
+    pub reason: PayloadId,
 }
 
 /// One protected payload named in an administrative purge preview.
@@ -2040,66 +2053,104 @@ impl Store {
         self.semantic_coverage_for_scope(project, None)
     }
 
-    /// Makes one retained source part of the completeness contract for a bounded scope.
+    /// Adds a trusted administrator while a project is being bootstrapped.
     ///
-    /// The first accepted promotion fixes its actor, reason, and time. Identical retries return
-    /// that record so a restarted operator cannot accidentally create a second policy fact.
+    /// Runtime maintenance still passes through policy; this narrow seam only establishes the
+    /// grants that policy reads.
+    ///
+    /// # Errors
+    /// Returns an error if the project is missing or SQLite cannot store the grant.
+    pub fn grant_administrator_unchecked_bootstrap(
+        &self,
+        project: &ProjectId,
+        actor: &ActorId,
+    ) -> Result<(), StoreError> {
+        self.project_revision(project)?;
+        self.connection.execute(
+            "INSERT OR IGNORE INTO project_administrators (project_id,actor_id) VALUES (?1,?2)",
+            params![project.as_str(), actor.as_str()],
+        )?;
+        Ok(())
+    }
+
+    /// Returns the administrators whose grants apply to deterministic policy.
+    ///
+    /// # Errors
+    /// Returns an error if SQLite cannot read the grants or stored IDs are corrupt.
+    pub fn administrators(&self, project: &ProjectId) -> Result<Vec<ActorId>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT actor_id FROM project_administrators WHERE project_id=?1 ORDER BY actor_id",
+        )?;
+        let rows = statement.query_map(params![project.as_str()], |row| row.get::<_, String>(0))?;
+        rows.map(|row| {
+            let actor = row?;
+            ActorId::try_from(actor.as_str()).map_err(|_| StoreError::CorruptHistory)
+        })
+        .collect()
+    }
+
+    /// Records the protected target of a proposed requirement without granting it authority.
+    ///
+    /// Coverage changes only after administrative policy accepts the returned object's event.
+    /// Keeping this intent separate lets rejected requests remain auditable without allowing
+    /// their actor string to mutate project truth.
     ///
     /// # Errors
     /// Rejects missing or already-required sources, empty fields, and conflicting retries.
-    pub fn require_source(
+    pub fn prepare_source_requirement(
         &mut self,
         project: &ProjectId,
-        source: &SourceVersionId,
+        version: &SourceVersionId,
         scope: &str,
-        actor: &ActorId,
         reason: &[u8],
-        promoted_at_millis: i64,
-    ) -> Result<CoveragePromotion, StoreError> {
-        type RawPromotion = (String, String, Vec<u8>, i64);
+    ) -> Result<CoverageRequirementIntent, StoreError> {
+        type RawTarget = (String, String, Vec<u8>);
         if scope.is_empty() || scope.len() > 512 || reason.is_empty() {
             return Err(StoreError::InvalidCoveragePromotion);
         }
-        let captured: Option<String> = self
+        let captured: Option<(String, String)> = self
             .connection
             .query_row(
-                "SELECT coverage_requirement FROM source_versions WHERE project_id=?1 AND id=?2",
-                params![project.as_str(), source.as_str()],
-                |row| row.get(0),
+                "SELECT source_id,coverage_requirement FROM source_versions WHERE project_id=?1 AND id=?2",
+                params![project.as_str(), version.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        match captured.as_deref() {
-            Some("optional") => {}
-            Some("required") | None => return Err(StoreError::InvalidCoveragePromotion),
-            Some(_) => return Err(StoreError::CorruptHistory),
+        let (source, requirement) = captured.ok_or(StoreError::InvalidCoveragePromotion)?;
+        if requirement != "optional" {
+            return if requirement == "required" {
+                Err(StoreError::InvalidCoveragePromotion)
+            } else {
+                Err(StoreError::CorruptHistory)
+            };
         }
+        let source = SourceId::try_from(source.as_str()).map_err(|_| StoreError::CorruptHistory)?;
 
         let digest: [u8; 32] = Sha256::digest(reason).into();
-        let existing: Option<RawPromotion> = self
+        let object = coverage_object_id(project, &source, scope)?;
+        let existing: Option<RawTarget> = self
             .connection
             .query_row(
-                "SELECT actor_id,reason_payload_id,reason_digest,promoted_at_millis
-                 FROM source_coverage_promotions
-                 WHERE project_id=?1 AND source_version_id=?2 AND scope_id=?3",
-                params![project.as_str(), source.as_str(), scope],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                "SELECT source_id,reason_payload_id,reason_digest
+                 FROM source_coverage_targets WHERE project_id=?1 AND object_id=?2",
+                params![project.as_str(), object.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        if let Some((stored_actor, stored_reason, stored_digest, stored_at)) = existing {
-            if stored_actor != actor.as_str() || stored_digest.as_slice() != digest {
+        if let Some((stored_source, stored_reason, stored_digest)) = existing {
+            if stored_source != source.as_str() || stored_digest.as_slice() != digest {
                 return Err(StoreError::InvalidCoveragePromotion);
             }
-            return Ok(CoveragePromotion {
-                source: source.clone(),
+            return Ok(CoverageRequirementIntent {
+                source,
                 scope: scope.to_owned(),
-                actor: actor.clone(),
+                object,
                 reason: PayloadId::try_from(stored_reason.as_str())
                     .map_err(|_| StoreError::CorruptHistory)?,
-                promoted_at_millis: stored_at,
             });
         }
 
-        let reason_id = coverage_reason_id(project, source, scope)?;
+        let reason_id = coverage_reason_id(project, &source, scope)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -2113,18 +2164,24 @@ impl Store {
             ],
         )?;
         transaction.execute(
-            "INSERT INTO source_coverage_promotions
-             (project_id,source_version_id,scope_id,actor_id,reason_payload_id,reason_digest,promoted_at_millis)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)",
-            params![project.as_str(), source.as_str(), scope, actor.as_str(), reason_id.as_str(), digest.as_slice(), promoted_at_millis],
+            "INSERT INTO source_coverage_targets
+             (project_id,object_id,source_id,scope_id,reason_payload_id,reason_digest)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                project.as_str(),
+                object.as_str(),
+                source.as_str(),
+                scope,
+                reason_id.as_str(),
+                digest.as_slice()
+            ],
         )?;
         transaction.commit()?;
-        Ok(CoveragePromotion {
-            source: source.clone(),
+        Ok(CoverageRequirementIntent {
+            source,
             scope: scope.to_owned(),
-            actor: actor.clone(),
+            object,
             reason: reason_id,
-            promoted_at_millis,
         })
     }
 
@@ -2138,20 +2195,31 @@ impl Store {
         source: &SourceVersionId,
         scope: &str,
     ) -> Result<Option<CoveragePromotion>, StoreError> {
-        type RawPromotion = (String, String, i64);
+        type RawPromotion = (String, String, String, i64);
         let row: Option<RawPromotion> = self
             .connection
             .query_row(
-                "SELECT actor_id,reason_payload_id,promoted_at_millis
-                 FROM source_coverage_promotions
-                 WHERE project_id=?1 AND source_version_id=?2 AND scope_id=?3",
+                "SELECT target.source_id,batch.actor_id,target.reason_payload_id,batch.occurred_at_millis
+                 FROM source_versions source
+                 JOIN source_coverage_targets target
+                   ON target.project_id=source.project_id AND target.source_id=source.source_id
+                 JOIN objects object
+                   ON object.project_id=target.project_id AND object.id=target.object_id
+                    AND object.kind='source_coverage_requirement' AND object.lifecycle='active'
+                 JOIN domain_events event
+                   ON event.project_id=object.project_id AND event.object_id=object.id
+                 JOIN domain_event_batches batch
+                   ON batch.project_id=event.project_id AND batch.id=event.batch_id
+                 WHERE source.project_id=?1 AND source.id=?2 AND target.scope_id=?3
+                 ORDER BY batch.revision DESC LIMIT 1",
                 params![project.as_str(), source.as_str(), scope],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
-        row.map(|(actor, reason, promoted_at_millis)| {
+        row.map(|(source, actor, reason, promoted_at_millis)| {
             Ok(CoveragePromotion {
-                source: source.clone(),
+                source: SourceId::try_from(source.as_str())
+                    .map_err(|_| StoreError::CorruptHistory)?,
                 scope: scope.to_owned(),
                 actor: ActorId::try_from(actor.as_str()).map_err(|_| StoreError::CorruptHistory)?,
                 reason: PayloadId::try_from(reason.as_str())
@@ -2185,8 +2253,13 @@ impl Store {
         let observation_head: i64 = self.connection.query_row(
             "SELECT COALESCE(MAX(sequence), 0) FROM source_versions s
              WHERE project_id=?1 AND (?2 IS NULL OR context_scope_id=?2 OR EXISTS(
-               SELECT 1 FROM source_coverage_promotions p
-               WHERE p.project_id=s.project_id AND p.source_version_id=s.id AND p.scope_id=?2))",
+               SELECT 1 FROM source_coverage_targets target
+               JOIN objects requirement ON requirement.project_id=target.project_id
+                 AND requirement.id=target.object_id
+                 AND requirement.kind='source_coverage_requirement'
+                 AND requirement.lifecycle='active'
+               WHERE target.project_id=s.project_id AND target.source_id=s.source_id
+                 AND target.scope_id=?2))",
             params![project.as_str(), scope],
             |row| row.get(0),
         )?;
@@ -2195,10 +2268,13 @@ impl Store {
             "WITH scoped AS (
                SELECT s.sequence,
                  CASE WHEN s.coverage_requirement='required' OR EXISTS(
-                   SELECT 1 FROM source_coverage_promotions requirement
-                   WHERE requirement.project_id=s.project_id
-                     AND requirement.source_version_id=s.id
-                     AND (?2 IS NULL OR requirement.scope_id=?2)
+                   SELECT 1 FROM source_coverage_targets target
+                   JOIN objects requirement ON requirement.project_id=target.project_id
+                     AND requirement.id=target.object_id
+                     AND requirement.kind='source_coverage_requirement'
+                     AND requirement.lifecycle='active'
+                   WHERE target.project_id=s.project_id AND target.source_id=s.source_id
+                     AND (?2 IS NULL OR target.scope_id=?2)
                  ) THEN 'required' ELSE 'optional' END AS effective_requirement,
                  (COALESCE(p.erased,0)=1 OR COALESCE((
                    SELECT cp.erased FROM compilation_runs cr
@@ -2214,9 +2290,13 @@ impl Store {
                FROM source_versions s LEFT JOIN payloads p
                  ON p.project_id=s.project_id AND p.id=s.payload_id
                WHERE s.project_id=?1 AND (?2 IS NULL OR s.context_scope_id=?2 OR EXISTS(
-                 SELECT 1 FROM source_coverage_promotions promoted
-                 WHERE promoted.project_id=s.project_id AND promoted.source_version_id=s.id
-                   AND promoted.scope_id=?2))
+                 SELECT 1 FROM source_coverage_targets target
+                 JOIN objects requirement ON requirement.project_id=target.project_id
+                   AND requirement.id=target.object_id
+                   AND requirement.kind='source_coverage_requirement'
+                   AND requirement.lifecycle='active'
+                 WHERE target.project_id=s.project_id AND target.source_id=s.source_id
+                   AND target.scope_id=?2))
              )
              SELECT
                COALESCE(SUM(effective_requirement='required' AND (latest_outcome!='succeeded' OR unavailable)),0),
@@ -4325,7 +4405,7 @@ fn purge_reason_id(project: &ProjectId, source: &SourceVersionId) -> Result<Payl
 
 fn coverage_reason_id(
     project: &ProjectId,
-    source: &SourceVersionId,
+    source: &SourceId,
     scope: &str,
 ) -> Result<PayloadId, StoreError> {
     let digest = Sha256::digest(format!("{project}/{source}/{scope}").as_bytes());
@@ -4334,6 +4414,19 @@ fn coverage_reason_id(
         write!(&mut id, "{byte:02x}").expect("writing a digest is infallible");
     }
     PayloadId::try_from(id.as_str()).map_err(|_| StoreError::InvalidCoveragePromotion)
+}
+
+fn coverage_object_id(
+    project: &ProjectId,
+    source: &SourceId,
+    scope: &str,
+) -> Result<ObjectId, StoreError> {
+    let digest = Sha256::digest(format!("{project}/{source}/{scope}").as_bytes());
+    let mut id = String::from("coverage_requirement_");
+    for byte in digest {
+        write!(&mut id, "{byte:02x}").expect("writing a digest is infallible");
+    }
+    ObjectId::try_from(id.as_str()).map_err(|_| StoreError::InvalidCoveragePromotion)
 }
 
 fn to_sql_revision(revision: ProjectRevision) -> Result<i64, StoreError> {
