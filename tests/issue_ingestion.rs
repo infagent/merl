@@ -64,7 +64,7 @@ fn a_retry_keeps_the_first_capture_time_and_policy() {
 #[test]
 fn a_retry_cannot_change_a_known_entity_author() {
     IssueHistory::new("P7")
-        .given_a_source_authored_by_alice_and_edited_by_bob()
+        .given_a_source_with_alice_as_author_and_bob_as_version_actor()
         .when_the_source_is_retried_with_author(Some("bob"))
         .then_the_retry_reports_an_author_conflict()
         .then_the_source_provenance_is_unchanged();
@@ -73,7 +73,7 @@ fn a_retry_cannot_change_a_known_entity_author() {
 #[test]
 fn a_retry_accepts_the_same_author_or_a_missing_author_id() {
     IssueHistory::new("P8")
-        .given_a_source_authored_by_alice_and_edited_by_bob()
+        .given_a_source_with_alice_as_author_and_bob_as_version_actor()
         .when_the_source_is_retried_with_author(Some("alice"))
         .then_the_retry_is_a_no_op()
         .then_the_source_provenance_is_unchanged()

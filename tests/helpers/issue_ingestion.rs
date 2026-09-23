@@ -211,7 +211,7 @@ impl IssueHistory {
         self.given_a_source_with_author(None)
     }
 
-    pub fn given_a_source_authored_by_alice_and_edited_by_bob(&mut self) -> &mut Self {
+    pub fn given_a_source_with_alice_as_author_and_bob_as_version_actor(&mut self) -> &mut Self {
         self.given_a_source_with_author(Some("alice"))
     }
 
