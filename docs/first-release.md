@@ -2,7 +2,7 @@
 
 Status: draft
 
-This document owns the scope and acceptance criteria for Merl's first release. The [product description](product-description.md), [user interface and behavior contract](user-interface.md), and [architecture](architecture.md) describe the larger product.
+This document owns the scope and acceptance criteria for Merl's first release. The [roadmap](roadmap.md) places it in the release sequence. The [product description](product-description.md), [user interface and behavior contract](user-interface.md), and [architecture](architecture.md) describe the larger product.
 
 ## Goal
 
