@@ -305,9 +305,10 @@ fn verify_freeze(plan: &Plan, fixture_bytes: &[u8]) -> Result<(), String> {
         .freeze
         .as_ref()
         .ok_or("held-out evaluation needs a freeze record")?;
+    let prepared_authorities = plan.merl.trials.len();
     if freeze.candidate_commit != plan.candidate_commit
-        || freeze.preparation_record_sha256.len() != plan.config.trials.len()
-        || freeze.merl_database_sha256.len() != plan.config.trials.len()
+        || freeze.preparation_record_sha256.len() != prepared_authorities
+        || freeze.merl_database_sha256.len() != prepared_authorities
         || freeze
             .preparation_record_sha256
             .iter()
@@ -417,6 +418,12 @@ mod tests {
             capture_phase: false,
             text: "What changed?".to_owned(),
         };
+        let later_question = EvaluationQuestion {
+            id: "Q2".to_owned(),
+            cutoff: 4,
+            capture_phase: false,
+            text: "What changed later?".to_owned(),
+        };
         let config = BenchmarkConfig {
             model: "model".to_owned(),
             model_version: "v1".to_owned(),
@@ -441,7 +448,7 @@ mod tests {
         let mut plan = Plan {
             schema: "merl.eval-plan/v1".to_owned(),
             fixture: PathBuf::new(),
-            questions: vec![question],
+            questions: vec![question, later_question],
             config,
             model_program: model.clone(),
             scorer_program: scorer.clone(),
@@ -457,13 +464,18 @@ mod tests {
                 issue: "I1".to_owned(),
                 scope: "issue-1".to_owned(),
                 role: "engineer".to_owned(),
-                trials: vec![MerlTrialPlan {
-                    trial_id: "pair-a".to_owned(),
-                    source_cutoff: 3,
-                    capture_phase: false,
-                    database: PathBuf::new(),
-                    preparation_record: PathBuf::new(),
-                }],
+                trials: ["pair-a", "pair-b"]
+                    .into_iter()
+                    .flat_map(|trial_id| {
+                        [3, 4].into_iter().map(move |source_cutoff| MerlTrialPlan {
+                            trial_id: trial_id.to_owned(),
+                            source_cutoff,
+                            capture_phase: false,
+                            database: PathBuf::new(),
+                            preparation_record: PathBuf::new(),
+                        })
+                    })
+                    .collect(),
             },
             limits: ProcessLimits {
                 max_request_bytes: 4096,
@@ -487,8 +499,18 @@ mod tests {
             scorer_program_sha256: digest(b"scorer program"),
             scoring_spec: scoring_spec.clone(),
             scoring_spec_sha256: digest(b"frozen scoring rubric"),
-            preparation_record_sha256: vec![digest(b"prep-a"), digest(b"prep-b")],
-            merl_database_sha256: vec![digest(b"db-a"), digest(b"db-b")],
+            preparation_record_sha256: vec![
+                digest(b"prep-a-3"),
+                digest(b"prep-a-4"),
+                digest(b"prep-b-3"),
+                digest(b"prep-b-4"),
+            ],
+            merl_database_sha256: vec![
+                digest(b"db-a-3"),
+                digest(b"db-a-4"),
+                digest(b"db-b-3"),
+                digest(b"db-b-4"),
+            ],
         });
         assert!(verify_freeze(&plan, fixture).is_ok());
         std::fs::write(&scoring_spec, b"changed scoring rubric").expect("change rubric");
