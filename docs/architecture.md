@@ -217,7 +217,7 @@ Coverage requirements are:
 
 Coverage requirement is based on trusted structural metadata such as source binding, source kind, actor class, explicit object references, and an authorized policy override. Merl does not read a cold payload to decide whether it is required. Optional sources may appear as cold attachments when their metadata links them to a viewed object, but they remain separate from required coverage gaps.
 
-An authorized policy action may promote an optional source to required for a recorded scope and reason. Promotion creates durable policy state and makes the source pending for coverage until processing succeeds. A sender cannot promote its own prose or otherwise force a compiler expense. `capture_only` with `required` is valid, but the affected scope remains incomplete until an authorized action compiles or excludes the source.
+An authorized administrative policy action may promote an optional source to required for a recorded scope and reason. The requirement belongs to the stable source identity, so an edited successor remains required until Merl processes that version. A sender cannot promote its own prose or otherwise force a compiler expense. `capture_only` with `required` is valid, but the affected scope remains incomplete until an authorized action compiles or excludes the source.
 
 Structured commands bypass compilation because they already carry typed semantics. Trusted provider state changes use deterministic `ProviderObservation` inputs. Merl-generated notifications and projections are marked by origin and never compile. Deterministic extractors may still process structured artifacts without a model call.
 

@@ -177,6 +177,7 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
     let mut version = None;
     let mut reason = None;
     let mut actor = None;
+    let mut administrator = None;
     let mut confirm_digest = None;
     let mut dry_run = false;
     let mut run_id = None;
@@ -262,6 +263,10 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
                 index += 1;
                 actor = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
             }
+            "--administrator" => {
+                index += 1;
+                administrator = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
             "--confirm-digest" => {
                 index += 1;
                 confirm_digest = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
@@ -345,6 +350,11 @@ fn execute(arguments: &[String], json_output: &mut bool) -> Result<String, CliEr
             let path = database.ok_or_else(|| invalid_input("--database is required"))?;
             let mut store = Store::open(Path::new(path))?;
             store.create_project(&id)?;
+            if let Some(administrator) = administrator {
+                let administrator = merl_core::ActorId::try_from(administrator)
+                    .map_err(|error| invalid_input(&error.to_string()))?;
+                store.grant_administrator_unchecked_bootstrap(&id, &administrator)?;
+            }
             result("project.init", &id, 0, *json_output)
         }
         ["project", "revision"] => {
@@ -1729,8 +1739,8 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             ],
         ),
         "project init" => (
-            "merl project init --id <id> --database <path> [--format json]",
-            "Create a local project at revision zero.",
+            "merl project init --id <id> --database <path> [--administrator <actor>] [--format json]",
+            "Create a local project at revision zero and optionally establish its first administrator.",
             vec!["project revision"],
         ),
         "project revision" => (
