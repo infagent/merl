@@ -2,7 +2,11 @@
 
 mod authority;
 mod candidates;
+mod commands;
 pub use candidates::{Candidate, CandidateReview, ReviewAction};
+pub use commands::{
+    CommandOperation, Commitment, Execution, Scheduling, SemanticCommandRecord, TaskState,
+};
 
 pub use authority::AuthorityGrants;
 
@@ -18,7 +22,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 21;
+const SCHEMA_VERSION: i64 = 22;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -961,6 +965,10 @@ impl Store {
                 transaction
                     .execute_batch(include_str!("../migrations/0021_candidate_reviews.sql"))?;
             }
+            if version < 22 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0022_semantic_commands.sql"))?;
+            }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         }
@@ -1444,93 +1452,12 @@ impl Store {
         capture: &SourceCapture<'_>,
         basis_known: bool,
     ) -> Result<bool, StoreError> {
-        validate_source_capture(capture)?;
-        let body_digest = capture.body.map(Sha256::digest);
-        let edit_diff_digest = capture.edit_diff.map(Sha256::digest);
-        let capture_digest =
-            source_capture_digest(capture, body_digest.as_ref(), edit_diff_digest.as_ref());
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let head: Option<i64> = transaction
-            .query_row(
-                "SELECT source_observation_head FROM projects WHERE id = ?1",
-                [project.as_str()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let head = head.ok_or(StoreError::ProjectMissing)?;
-        ensure_source_binding(&transaction, project, &capture.binding)?;
-        if source_capture_is_retry(&transaction, project, capture, &capture_digest)? {
-            return Ok(false);
-        }
-        let previous: Option<String> = transaction
-            .query_row(
-                "SELECT id FROM source_versions WHERE project_id = ?1 AND source_id = ?2 ORDER BY sequence DESC LIMIT 1",
-                params![project.as_str(), capture.source.as_str()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if previous.as_deref() != capture.supersedes.as_ref().map(SourceVersionId::as_str) {
-            return Err(StoreError::InvalidSource);
-        }
-        let sequence = head.checked_add(1).ok_or(StoreError::CorruptHistory)?;
-        let basis = CaptureBasis {
-            revision: current_revision_in_transaction(&transaction, project)?,
-            known: basis_known,
-        };
-        let payload = capture
-            .body
-            .map(|_| PayloadId::try_from(format!("src_{}", capture.version).as_str()))
-            .transpose()
-            .map_err(|_| StoreError::InvalidSource)?;
-        let edit_diff_payload = capture
-            .edit_diff
-            .map(|_| PayloadId::try_from(format!("diff_{}", capture.version).as_str()))
-            .transpose()
-            .map_err(|_| StoreError::InvalidSource)?;
-        if let (Some(body), Some(id), Some(digest)) = (capture.body, &payload, &body_digest) {
-            insert_protected_payload(&transaction, project, id, body, digest)?;
-        }
-        if let (Some(diff), Some(id), Some(digest)) =
-            (capture.edit_diff, &edit_diff_payload, &edit_diff_digest)
-        {
-            insert_protected_payload(&transaction, project, id, diff, digest)?;
-        }
-        insert_source_version(
-            &transaction,
-            project,
-            capture,
-            sequence,
-            basis,
-            &capture_digest,
-            SourcePayloadRefs {
-                body_digest: body_digest.as_ref(),
-                body: payload.as_ref(),
-                edit_diff_digest: edit_diff_digest.as_ref(),
-                edit_diff: edit_diff_payload.as_ref(),
-            },
-        )?;
-        if let Some(previous) = previous {
-            record_evidence_impacts(
-                &transaction,
-                project,
-                &previous,
-                Some(capture.version.as_str()),
-                if capture.body.is_some() {
-                    "recompile"
-                } else {
-                    "reevaluate"
-                },
-                capture.observed_at_millis,
-            )?;
-        }
-        transaction.execute(
-            "UPDATE projects SET source_observation_head = ?2 WHERE id = ?1",
-            params![project.as_str(), sequence],
-        )?;
+        let inserted = capture_in_transaction(&transaction, project, capture, basis_known)?;
         transaction.commit()?;
-        Ok(true)
+        Ok(inserted)
     }
 
     /// Establishes a binding's capture policy or returns its existing policy.
@@ -5126,6 +5053,9 @@ fn validate_policy_dependencies(
     transaction: &Transaction<'_>,
     evaluation: &PolicyEvaluation,
 ) -> Result<Option<PolicyConflictDetail>, StoreError> {
+    if let Some(conflict) = commands::validate_commands(transaction, evaluation)? {
+        return Ok(Some(conflict));
+    }
     if let Some(conflict) = candidates::validate_reviews(transaction, evaluation)? {
         return Ok(Some(conflict));
     }
@@ -6668,6 +6598,100 @@ fn source_capture_digest(
         digest.update(deleted_at.to_be_bytes());
     }
     digest.finalize().into()
+}
+
+// Commands and provider capture share the same observation bookkeeping. A command
+// receipt can therefore retain its optional source within the receipt transaction.
+fn capture_in_transaction(
+    transaction: &Transaction<'_>,
+    project: &ProjectId,
+    capture: &SourceCapture<'_>,
+    basis_known: bool,
+) -> Result<bool, StoreError> {
+    validate_source_capture(capture)?;
+    let body_digest = capture.body.map(Sha256::digest);
+    let edit_diff_digest = capture.edit_diff.map(Sha256::digest);
+    let capture_digest =
+        source_capture_digest(capture, body_digest.as_ref(), edit_diff_digest.as_ref());
+    let head: Option<i64> = transaction
+        .query_row(
+            "SELECT source_observation_head FROM projects WHERE id = ?1",
+            [project.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let head = head.ok_or(StoreError::ProjectMissing)?;
+    ensure_source_binding(transaction, project, &capture.binding)?;
+    if source_capture_is_retry(transaction, project, capture, &capture_digest)? {
+        return Ok(false);
+    }
+    let previous: Option<String> = transaction
+            .query_row(
+                "SELECT id FROM source_versions WHERE project_id = ?1 AND source_id = ?2 ORDER BY sequence DESC LIMIT 1",
+                params![project.as_str(), capture.source.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+    if previous.as_deref() != capture.supersedes.as_ref().map(SourceVersionId::as_str) {
+        return Err(StoreError::InvalidSource);
+    }
+    let sequence = head.checked_add(1).ok_or(StoreError::CorruptHistory)?;
+    let basis = CaptureBasis {
+        revision: current_revision_in_transaction(transaction, project)?,
+        known: basis_known,
+    };
+    let payload = capture
+        .body
+        .map(|_| PayloadId::try_from(format!("src_{}", capture.version).as_str()))
+        .transpose()
+        .map_err(|_| StoreError::InvalidSource)?;
+    let edit_diff_payload = capture
+        .edit_diff
+        .map(|_| PayloadId::try_from(format!("diff_{}", capture.version).as_str()))
+        .transpose()
+        .map_err(|_| StoreError::InvalidSource)?;
+    if let (Some(body), Some(id), Some(digest)) = (capture.body, &payload, &body_digest) {
+        insert_protected_payload(transaction, project, id, body, digest)?;
+    }
+    if let (Some(diff), Some(id), Some(digest)) =
+        (capture.edit_diff, &edit_diff_payload, &edit_diff_digest)
+    {
+        insert_protected_payload(transaction, project, id, diff, digest)?;
+    }
+    insert_source_version(
+        transaction,
+        project,
+        capture,
+        sequence,
+        basis,
+        &capture_digest,
+        SourcePayloadRefs {
+            body_digest: body_digest.as_ref(),
+            body: payload.as_ref(),
+            edit_diff_digest: edit_diff_digest.as_ref(),
+            edit_diff: edit_diff_payload.as_ref(),
+        },
+    )?;
+    if let Some(previous) = previous {
+        record_evidence_impacts(
+            transaction,
+            project,
+            &previous,
+            Some(capture.version.as_str()),
+            if capture.body.is_some() {
+                "recompile"
+            } else {
+                "reevaluate"
+            },
+            capture.observed_at_millis,
+        )?;
+    }
+    transaction.execute(
+        "UPDATE projects SET source_observation_head = ?2 WHERE id = ?1",
+        params![project.as_str(), sequence],
+    )?;
+
+    Ok(true)
 }
 
 #[cfg(test)]

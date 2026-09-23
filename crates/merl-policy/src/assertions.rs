@@ -73,7 +73,7 @@ fn proposals(
                                 .map_err(|_| PolicyError::InvalidProposal)?,
                         )
                     },
-                    issue_scope: Some(source.context_scope_id),
+                    issue_scope: crate::commands::source_issue_scope(store, project, &source)?,
                     lifecycle: ObjectLifecycle::Active,
                 },
             })
@@ -182,13 +182,14 @@ pub(super) fn disposition(
     else {
         return Err(PolicyError::InvalidProposal);
     };
+    let expected_scope = crate::commands::source_issue_scope(store, project, &source)?;
     if assertion.subject != object.as_str()
         || assertion.predicate != kind.as_str()
         || assertion.value != payload.as_ref().map_or("none", PayloadId::as_str)
         || source.source_author.as_ref().map(ActorId::as_str) != assertion.asserted_by.as_deref()
         || issue_scope
             .as_deref()
-            .is_some_and(|scope| scope != source.context_scope_id)
+            .is_some_and(|scope| Some(scope) != expected_scope.as_deref())
         || *lifecycle != ObjectLifecycle::Active
     {
         return Err(PolicyError::InvalidProposal);
@@ -218,6 +219,9 @@ pub(super) fn disposition(
             PolicyDisposition::Rejected,
             "unsupported_assertion_predicate",
         ));
+    }
+    if let Some(disposition) = supplemental_disposition(store, project, &assertion)? {
+        return Ok(disposition);
     }
     if let Some(current) = store.object(project, object)?
         && (current.kind != *kind || current.issue_scope != *issue_scope)
@@ -269,4 +273,51 @@ pub(super) fn supported_kind(kind: &ObjectKind) -> bool {
             | "experiment"
             | "next_action"
     )
+}
+
+fn supplemental_disposition(
+    store: &Store,
+    project: &ProjectId,
+    assertion: &merl_store::StructuralAssertion,
+) -> Result<Option<(PolicyDisposition, &'static str)>, PolicyError> {
+    if let Some(command) = store.source_command(project, &assertion.source)? {
+        let accepted = store
+            .accepted_policy_input(
+                project,
+                &merl_core::PolicyInput::Command(command.id.clone()),
+            )?
+            .is_some();
+        // A different subject may repeat the originating act or express a separate one.
+        // Preserve that ambiguity for review instead of discarding project intent.
+        if accepted
+            && assertion.predicate == command.kind.as_str()
+            && assertion.act == "request"
+            && assertion.polarity == "positive"
+        {
+            if assertion.subject != command.object.as_str() {
+                return Ok(Some((
+                    PolicyDisposition::Candidate,
+                    "possible_supplemental_duplicate",
+                )));
+            }
+            // Only an exact value reference demonstrates a restatement. A changed
+            // or absent value may express a correction to the same object.
+            if command
+                .payload
+                .as_ref()
+                .is_some_and(|value| assertion.value == value.as_str())
+            {
+                return Ok(Some((PolicyDisposition::Duplicate, "covered_by_command")));
+            }
+        }
+        // Notes may report new evidence, but a compiler cannot replace the object
+        // whose accepted transition the note explains. Corrections require review.
+        if accepted && assertion.subject == command.object.as_str() {
+            return Ok(Some((
+                PolicyDisposition::Candidate,
+                "supplemental_correction",
+            )));
+        }
+    }
+    Ok(None)
 }

@@ -158,6 +158,25 @@ struct RenderedSource {
     body: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     observed_deletion_of: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    semantic_origin: Option<RenderedCommandOrigin>,
+}
+
+// This is the immutable intent captured with the note. Acceptance may happen
+// after the source cutoff, so a causal context must not claim its later outcome.
+#[derive(JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RenderedCommandOrigin {
+    command: String,
+    operation: String,
+    subject: String,
+    kind: String,
+    value: Option<String>,
+    commitment: Option<String>,
+    scheduling: Option<String>,
+    execution: Option<String>,
+    reason: Option<String>,
+    review_at: Option<String>,
 }
 
 #[derive(JsonSchema, Serialize)]
@@ -416,7 +435,9 @@ fn build_context_from_sources(
             return Err(CompileError::InputBudget);
         }
         source_window.push(item.id.clone());
+        let semantic_origin = render_command_origin(store, project, &item.id)?;
         sources.push(RenderedSource {
+            semantic_origin,
             id: item.id.to_string(),
             observation: item.sequence,
             source_author_id: item.source_author.map(|actor| actor.to_string()),
@@ -1529,6 +1550,27 @@ fn valid_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn render_command_origin(
+    store: &Store,
+    project: &ProjectId,
+    source: &SourceVersionId,
+) -> Result<Option<RenderedCommandOrigin>, CompileError> {
+    Ok(store
+        .source_command(project, source)?
+        .map(|command| RenderedCommandOrigin {
+            command: command.id.to_string(),
+            operation: command.operation.as_str().into(),
+            subject: command.object.to_string(),
+            kind: command.kind.to_string(),
+            value: command.payload.map(|p| p.to_string()),
+            commitment: command.task.as_ref().map(|t| t.commitment.to_string()),
+            scheduling: command.task.as_ref().map(|t| t.scheduling.to_string()),
+            execution: command.task.as_ref().map(|t| t.execution.to_string()),
+            reason: command.reason.map(|p| p.to_string()),
+            review_at: command.task.as_ref().and_then(|t| t.review_at.clone()),
+        }))
 }
 
 #[cfg(test)]

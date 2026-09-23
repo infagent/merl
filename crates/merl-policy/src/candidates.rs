@@ -209,7 +209,7 @@ fn review_event(
             object: object.clone(),
             kind: kind.clone(),
             payload: payload.clone(),
-            issue_scope: Some(source.context_scope_id.clone()),
+            issue_scope: crate::commands::source_issue_scope(store, project, &source)?,
             lifecycle: ObjectLifecycle::Active,
         }
     } else {

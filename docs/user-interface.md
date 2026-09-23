@@ -450,6 +450,74 @@ Direct commands are policy inputs in their own right. `merl show D18 --derivatio
 
 Confirmation never bypasses policy. `--yes` may confirm a local prompt, but it cannot grant permission, approve a merge, or convert a candidate into accepted state.
 
+### First-release semantic commands
+
+These operations accept authored content through the public CLI:
+
+| Command | Required semantic arguments |
+| --- | --- |
+| `decision create`, `question create`, `finding create` | `--subject ID --summary TEXT` |
+| `hypothesis create`, `claim create` | `--subject ID --summary TEXT` (`--statement` is an alias) |
+| `question resolve`, `finding resolve` | `ID --summary ANSWER` |
+| `task request` | `--subject ID --summary TEXT` |
+| `task accept`, `task start`, `task complete` | `ID` |
+| `task defer` | `ID --reason TEXT --review-at YYYY-MM-DD` |
+
+Each command also takes `--project`, `--database`, `--actor`, and a stable retry
+`--id`. A current `command_actor` grant authorizes the action. In local mode,
+`--actor` remains the cooperating client's audit claim. New objects may use
+`--issue SCOPE`; later commands inherit that scope and cannot change the kind.
+Provider-owned objects and fields stay outside this interface.
+
+```bash
+merl decision create --project P1 --database merl.db --actor alice \
+  --id choose-gain --subject D1 --summary 'Keep receive gain fixed' --json
+merl task request --project P1 --database merl.db --actor alice \
+  --id request-reader --subject T1 --summary 'Add clipping metadata'
+merl task accept T1 --project P1 --database merl.db --actor alice --id accept-reader
+merl task defer T1 --project P1 --database merl.db --actor alice --id defer-reader \
+  --reason 'Migration has priority' --review-at 2026-10-01
+```
+
+T1 now shows commitment `accepted`, scheduling `deferred`, and execution
+`not_started`. The reason and review date survive restart and projection rebuild.
+Deferring work in progress returns a rejected disposition with `task_in_progress`.
+Starting pending or deferred work, or restarting completed work, is rejected.
+This slice uses review dates as reconsideration triggers; condition relations,
+owner schedules, and execution leases remain outside these commands.
+
+Add `--note TEXT` or `--note-file PATH` to retain supplemental prose. Statements,
+reasons, and notes each allow at most 8192 UTF-8 bytes. Merl retains the command
+receipt and note together. The note stays `capture_only` and `optional`; ordinary
+views expose its reference. `show ID --source --history` expands notes across later
+object updates, and `source show --version VERSION` shows the originating command,
+with an affected-object reference only after acceptance. Erasure leaves the reference
+and an unavailable result. Retrying the command cannot restore erased bytes.
+
+An authorized later compile sees the note's originating intent. Policy records a
+positive request matching the accepted command's subject, kind, and nonempty
+represented value reference as `duplicate`. A same-subject request with a different
+value reference or `none` remains a `candidate` with reason `supplemental_correction`.
+A request of the same kind with a different subject becomes a `candidate` with reason
+`possible_supplemental_duplicate`. It may repeat the original act under another ID
+or express a separate request. Inspect it through `candidate show`, then accept,
+reject, or correct it. Added findings or other predicates still receive their own
+policy dispositions; corrections to the original object require review.
+
+Results use `merl.semantic-command/v1`; previews use
+`merl.semantic-command-preview/v1`. Human and JSON results distinguish `accepted`,
+`rejected`, and `conflict`. Policy dispositions return exit success; malformed input
+returns `INVALID_INPUT`, and changed content under an existing request ID returns
+`POLICY_INPUT_CONFLICT`. Exact retries return the recorded disposition and revision.
+`--dry-run` retains no content, source, or receipt. `merl help task defer` describes
+that operation without loading the whole command catalog.
+
+`show` resolves the object's statement and command provenance. Resolved questions
+and findings show `status=resolved`; their accepted lifecycle stays `active` because
+the resolution remains project knowledge. Task views expose all three planning
+facets. A compiler or review replacement without planning data makes those facets
+unknown rather than carrying older values into a new interpretation.
+
 ### Applying compiler assertions
 
 After a live compiler run finishes, inspect its output and request policy evaluation:
@@ -507,7 +575,7 @@ merl project rebuild --project P17 --database project.sqlite
 merl source replay --project P17 --database project.sqlite --run CR42 --json
 ```
 
-Use `project rebuild` to reconstruct objects and relations from accepted events and the provider Issue mirror from accepted observations and sightings. It never reads source prose or calls a compiler. The result includes the accepted revision and flags degraded provenance if payloads were erased. Use `source replay` to reconstruct one recorded compiler input with its original selector and renderer. Missing bytes produce `MISSING_EVIDENCE`; an unknown selector or renderer produces `UNSUPPORTED_REPLAY_VERSION`. Replay does not accept state.
+Use `project rebuild` to reconstruct objects and relations from accepted events and the provider Issue mirror from accepted observations and sightings. Accepted views also need the immutable typed policy inputs referenced by those events; semantic command receipts supply task facets and question/finding resolution status. It never reads source prose or calls a compiler. The result includes the accepted revision and flags degraded provenance if payloads were erased. Use `source replay` to reconstruct one recorded compiler input with its original selector and renderer. Missing bytes produce `MISSING_EVIDENCE`; an unknown selector or renderer produces `UNSUPPORTED_REPLAY_VERSION`. Replay does not accept state.
 
 An operator can run a configured process compiler against that causal input:
 
