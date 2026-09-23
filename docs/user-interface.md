@@ -117,7 +117,7 @@ or failed completed run keeps its identity on refresh and does not run again.
 An interrupted pending intent can resume with the same compiler configuration.
 Compilation records assertions; deterministic provider policy accepts open/closed
 state, labels, assignees, and timestamps through the project revision and inbox.
-Semantic assertion acceptance uses the separate policy workflow.
+Use `source assertions` to inspect a run and `source apply` to evaluate its assertions through policy.
 
 Both output modes report `captured`, `unchanged`, `failed`, or `incomplete`.
 JSON uses `merl.issue-capture/v1` and reports the binding policy, new version and
@@ -449,6 +449,28 @@ Direct commands are policy inputs in their own right. `merl show D18 --derivatio
 `--require-accepted` is useful in CI and automation. It prevents local queuing and treats candidate, rejected, and conflicted outcomes as failures.
 
 Confirmation never bypasses policy. `--yes` may confirm a local prompt, but it cannot grant permission, approve a merge, or convert a candidate into accepted state.
+
+### Applying compiler assertions
+
+After a live compiler run finishes, inspect its output and request policy evaluation:
+
+```bash
+merl source assertions --project P1 --database project.sqlite --run CR42 --json
+merl source apply --project P1 --database project.sqlite --run CR42 \
+  --actor worker --id apply-CR42-1 --json
+```
+
+Inspection uses `merl.assertions/v1`. It reports each assertion's index, exact source span, semantic axes, attribution, and whether Merl has accepted it. It also lists unresolved spans, context requests, and deferred relations. If a purge removed the response, `response_available` is false and the response-only lists are null; Merl does not claim the run had no unresolved work.
+
+Application uses `merl.assertion-application/v1`. Each input has its own `outcome` and `reason`; the envelope names the policy evaluation, policy version, configuration digest, basis revision, and accepted revision when one exists. Outcomes are `accepted`, `candidate`, `rejected`, `duplicate`, or `conflict`. A conflict includes its failed guard when the final transaction detected it. Ordinary dispositions return a successful command result; invalid requests use the error envelope and a nonzero exit.
+
+Only a recorded author's positive, unquoted `decision` with act `request`, basis `reported`, and a current `decision_author` grant qualifies for automatic acceptance. Here `request` means a directive to adopt that decision. Other supported semantic assertions remain candidates, including task requests from the same author. Provider and control predicates are rejected. The [architecture's permission matrix](architecture.md#applying-recorded-assertions) defines the mapping, including supported object kinds and retained payload references.
+
+Add `--dry-run` to preview current policy without recording an evaluation, accepted state, or inbox entry. JSON previews use `merl.assertion-preview/v1` and include proposed object IDs. A preview grants no acceptance and does not reserve the request ID.
+
+Reuse `--id` when retrying the same application. Merl returns the original outcomes even after authority changes. To reevaluate a candidate, submit a new request ID; Merl still deduplicates previously accepted run/index pairs. Reusing an ID with another run or actor returns `POLICY_INPUT_CONFLICT`. An empty successful run returns an empty input list and no evaluation or revision.
+
+`ASSERTION_RUN_INELIGIBLE` means the run is not a completed live result without context requests. Replay, eval, and hindsight need a separate promotion workflow. Changed or erased evidence cannot create new current support. Reading assertions spends no compiler tokens and accepts no state.
 
 ### Reviewing candidates
 

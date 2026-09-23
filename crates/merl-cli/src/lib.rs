@@ -1,5 +1,6 @@
 //! The public command-line boundary for local Merl projects.
 
+mod assertions;
 mod authority;
 mod capture;
 
@@ -111,6 +112,10 @@ impl From<merl_policy::PolicyError> for CliError {
     fn from(error: merl_policy::PolicyError) -> Self {
         match error {
             merl_policy::PolicyError::Store(error) => Self::from(error),
+            merl_policy::PolicyError::RunIneligible => Self {
+                code: "ASSERTION_RUN_INELIGIBLE",
+                message: error.to_string(),
+            },
             error @ merl_policy::PolicyError::InvalidProposal => Self {
                 code: "POLICY_ERROR",
                 message: error.to_string(),
@@ -381,6 +386,8 @@ fn execute(
         ["help", "show"] => help("show", *json_output),
         ["help", "source"] => help("source", *json_output),
         ["help", "source", "show"] => help("source show", *json_output),
+        ["help", "source", "assertions"] => help("source assertions", *json_output),
+        ["help", "source", "apply"] => help("source apply", *json_output),
         ["help", "source", "compile"] => help("source compile", *json_output),
         ["help", "source", "require"] => help("source require", *json_output),
         ["help", "source", "purge"] => help("source purge", *json_output),
@@ -711,6 +718,49 @@ fn execute(
             })?;
             let store = Store::open(Path::new(database))?;
             render_source(&store, &project, &version, *json_output)
+        }
+        ["source", action @ ("assertions" | "apply")] => {
+            let project =
+                parse_project(project.ok_or_else(|| invalid_input("--project is required"))?)?;
+            let database = database.ok_or_else(|| invalid_input("--database is required"))?;
+            let run = merl_core::CompilationRunId::try_from(
+                run_id.ok_or_else(|| invalid_input("--run is required"))?,
+            )
+            .map_err(|error| invalid_input(&error.to_string()))?;
+            let mut store = Store::open(Path::new(database))?;
+            if *action == "assertions" {
+                assertions::inspect(&store, &project, &run, *json_output)
+            } else {
+                let actor = merl_core::ActorId::try_from(
+                    actor.ok_or_else(|| invalid_input("--actor is required"))?,
+                )
+                .map_err(|error| invalid_input(&error.to_string()))?;
+                let request = merl_core::PolicyInputId::try_from(
+                    id.ok_or_else(|| invalid_input("--id is required"))?,
+                )
+                .map_err(|error| invalid_input(&error.to_string()))?;
+                if dry_run {
+                    let prepared = merl_policy::prepare_assertions(
+                        &store,
+                        &project,
+                        &run,
+                        &actor,
+                        &request,
+                        clock()?,
+                    )?;
+                    assertions::render_preview(&project, &run, prepared.as_ref(), *json_output)
+                } else {
+                    let result = merl_policy::apply_assertions(
+                        &mut store,
+                        &project,
+                        &run,
+                        &actor,
+                        &request,
+                        clock()?,
+                    )?;
+                    assertions::render_application(&project, &run, result.as_ref(), *json_output)
+                }
+            }
         }
         ["source", "compile"] => {
             let project =
@@ -1965,10 +2015,12 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "source" => (
             "merl source <command>",
-            "Commands: show, compile, require, replay, purge, purge-audit.",
+            "Commands: show, compile, assertions, apply, require, replay, purge, purge-audit.",
             vec![
                 "source show",
                 "source compile",
+                "source assertions",
+                "source apply",
                 "source require",
                 "source replay",
                 "source purge",
@@ -1979,6 +2031,16 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             "merl source show --project <id> --database <path> --version <id> [--format json]",
             "Read one captured source version. Erased bytes report unavailable.",
             vec!["show"],
+        ),
+        "source assertions" => (
+            "merl source assertions --project <id> --database <path> --run <id> [--json]",
+            "Inspect recorded assertions, unresolved spans, and context requests. Reading does not accept state.",
+            vec!["source apply", "source show"],
+        ),
+        "source apply" => (
+            "merl source apply --project <id> --database <path> --run <id> --actor <id> --id <request-id> [--dry-run] [--json]",
+            "Evaluate a completed live run with current grants. Reuse the request ID for retries; use a new ID to reevaluate candidates. Only direct explicit decisions qualify for decision-author acceptance.",
+            vec!["source assertions", "project authority", "show"],
         ),
         "source compile" => (
             "merl source compile --project <id> --database <path> --version <id> --run <id> --actor <id> --reason <text> --program <path> --compiler-version <version> --model <model> --prompt-digest sha256:<hex> [--compiler-arg <arg>] [--format json]",
@@ -2061,6 +2123,12 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         "source show" => {
             Some("merl source show --project P1 --database project.sqlite --version SV1 --json")
         }
+        "source assertions" => {
+            Some("merl source assertions --project P1 --database project.sqlite --run CR42 --json")
+        }
+        "source apply" => Some(
+            "merl source apply --project P1 --database project.sqlite --run CR42 --actor worker --id apply-CR42-1 --json",
+        ),
         "source require" => Some(
             "merl source require --project P1 --database project.sqlite --version SV1 --scope task:T42 --actor pm --reason 'Required safety evidence' --json",
         ),
@@ -2134,6 +2202,17 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
                 "COMPILER_ADAPTER_ERROR",
                 "STORAGE_ERROR",
             ]
+        } else if command == "source apply" {
+            vec![
+                "INVALID_INPUT",
+                "ASSERTION_RUN_INELIGIBLE",
+                "POLICY_INPUT_CONFLICT",
+                "POLICY_ERROR",
+                "CORRUPT_HISTORY",
+                "STORAGE_ERROR",
+            ]
+        } else if command == "source assertions" {
+            vec!["INVALID_INPUT", "CORRUPT_HISTORY", "STORAGE_ERROR"]
         } else if command == "source show" {
             vec![
                 "INVALID_INPUT",

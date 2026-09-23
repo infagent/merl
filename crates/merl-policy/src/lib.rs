@@ -1,6 +1,9 @@
 //! Deterministic first-release authority rules over typed, provenance-backed inputs.
 
+mod assertions;
 mod authority;
+
+pub use assertions::{apply_assertions, prepare_assertions};
 
 pub use authority::{AuthorityChange, change_authority};
 
@@ -103,7 +106,7 @@ impl PolicyRules {
 
     fn from_grants(grants: merl_store::AuthorityGrants) -> Result<Self, StoreError> {
         Ok(Self {
-            version: PolicyVersion::try_from("authority_v1")
+            version: PolicyVersion::try_from("authority_v2")
                 .map_err(|_| StoreError::CorruptHistory)?,
             decision_authors: grants.decision_authors,
             command_actors: grants.command_actors,
@@ -161,12 +164,17 @@ pub enum PolicyError {
     Store(StoreError),
     /// An input lacks the claimed immutable provenance or proposes a different fact.
     InvalidProposal,
+    /// A run is unfinished or requires explicit promotion before causal application.
+    RunIneligible,
 }
 
 impl fmt::Display for PolicyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Store(error) => write!(formatter, "{error}"),
+            Self::RunIneligible => formatter.write_str(
+                "assertion application requires a completed live run without context requests",
+            ),
             Self::InvalidProposal => {
                 formatter.write_str("policy proposal does not match its source")
             }
@@ -321,18 +329,48 @@ pub fn evaluate(
     let mut event_origins = Vec::new();
     let mut targets = HashSet::new();
     let mut provider = None;
-    for proposal in proposals {
-        let input = proposal.input();
-        let digest = input_digest(proposal, actor);
-        let (disposition, reason) =
+    let decisions = proposals
+        .iter()
+        .map(|proposal| {
+            let input = proposal.input();
+            let digest = input_digest(proposal, actor);
             if let Some((accepted_digest, _)) = store.accepted_policy_input(project, &input)? {
                 if accepted_digest != digest {
                     return Err(PolicyError::Store(StoreError::PolicyInputConflict));
                 }
-                (PolicyDisposition::Duplicate, "already_accepted")
+                Ok((PolicyDisposition::Duplicate, "already_accepted"))
             } else {
-                disposition_for(store, project, actor, rules, proposal)?
-            };
+                disposition_for(store, project, actor, rules, proposal)
+            }
+        })
+        .collect::<Result<Vec<_>, PolicyError>>()?;
+    let mut assertion_targets = std::collections::HashMap::new();
+    for (proposal, (disposition, _)) in proposals.iter().zip(&decisions) {
+        if *disposition == PolicyDisposition::Accepted
+            && let Proposal::ObservedAssertion {
+                event: DomainEvent::PutObject { object, .. },
+                ..
+            } = proposal
+        {
+            *assertion_targets.entry(object).or_insert(0_usize) += 1;
+        }
+    }
+    for (position, proposal) in proposals.iter().enumerate() {
+        let input = proposal.input();
+        let digest = input_digest(proposal, actor);
+        let (mut disposition, mut reason) = decisions[position];
+        if disposition == PolicyDisposition::Accepted
+            && let Proposal::ObservedAssertion {
+                event: DomainEvent::PutObject { object, .. },
+                ..
+            } = proposal
+            && assertion_targets
+                .get(object)
+                .is_some_and(|count| *count > 1)
+        {
+            disposition = PolicyDisposition::Conflict;
+            reason = "competing_assertion_targets";
+        }
         let input_index = u32::try_from(inputs.len()).map_err(|_| PolicyError::InvalidProposal)?;
         inputs.push(PolicyInputDecision {
             input,
@@ -419,10 +457,6 @@ pub fn evaluate(
     })
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "the policy matrix keeps each input kind's authority rule together"
-)]
 fn disposition_for(
     store: &Store,
     project: &ProjectId,
@@ -430,8 +464,10 @@ fn disposition_for(
     rules: &PolicyRules,
     proposal: &Proposal,
 ) -> Result<(PolicyDisposition, &'static str), PolicyError> {
-    if !matches!(proposal, Proposal::ProviderObservation { .. })
-        && let DomainEvent::PutObject { object, kind, .. } = proposal.event()
+    if !matches!(
+        proposal,
+        Proposal::ProviderObservation { .. } | Proposal::ObservedAssertion { .. }
+    ) && let DomainEvent::PutObject { object, kind, .. } = proposal.event()
         && (kind.as_str() == "provider_issue"
             || store
                 .object(project, object)?
@@ -439,7 +475,8 @@ fn disposition_for(
     {
         return Err(PolicyError::InvalidProposal);
     }
-    if let DomainEvent::PutObject { object, kind, .. } = proposal.event()
+    if !matches!(proposal, Proposal::ObservedAssertion { .. })
+        && let DomainEvent::PutObject { object, kind, .. } = proposal.event()
         && (kind.as_str() == "authority_grant"
             || store
                 .object(project, object)?
@@ -490,57 +527,7 @@ fn disposition_for(
         }
         Proposal::ObservedAssertion {
             run, index, event, ..
-        } => {
-            let status = store
-                .compilation_run_status(project, run.as_str())?
-                .ok_or(PolicyError::InvalidProposal)?;
-            if !status.succeeded || status.needs_context {
-                return Err(PolicyError::InvalidProposal);
-            }
-            let assertion = store
-                .observed_assertions(project, run.as_str())?
-                .into_iter()
-                .nth(*index as usize)
-                .ok_or(PolicyError::InvalidProposal)?;
-            let source = store
-                .source_version(project, &assertion.source)?
-                .ok_or(PolicyError::InvalidProposal)?;
-            let DomainEvent::PutObject {
-                object,
-                kind,
-                payload,
-                issue_scope,
-                ..
-            } = event
-            else {
-                return Err(PolicyError::InvalidProposal);
-            };
-            if assertion.subject != object.as_str()
-                || assertion.predicate != kind.as_str()
-                || assertion.value != payload.as_ref().map_or("none", PayloadId::as_str)
-                || source.source_author.as_ref().map(ActorId::as_str)
-                    != assertion.asserted_by.as_deref()
-                || issue_scope
-                    .as_deref()
-                    .is_some_and(|scope| scope != source.context_scope_id)
-            {
-                return Err(PolicyError::InvalidProposal);
-            }
-            if store.accepted_assertion(project, run, *index)? {
-                return Ok((PolicyDisposition::Duplicate, "assertion_already_accepted"));
-            }
-            if assertion.act == "request"
-                && source
-                    .source_author
-                    .as_ref()
-                    .is_some_and(|author| rules.decision_authors.contains(author))
-            {
-                Ok((PolicyDisposition::Accepted, "authorized_direct_author"))
-            } else {
-                // Quoted attribution is model output, not an authenticated grant.
-                Ok((PolicyDisposition::Candidate, "direct_authority_unverified"))
-            }
-        }
+        } => assertions::disposition(store, project, rules, run, *index, event),
     }
 }
 

@@ -16,7 +16,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 19;
+const SCHEMA_VERSION: i64 = 20;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -949,6 +949,11 @@ impl Store {
             if version < 19 {
                 transaction
                     .execute_batch(include_str!("../migrations/0019_authority_grants.sql"))?;
+            }
+            if version < 20 {
+                transaction.execute_batch(include_str!(
+                    "../migrations/0020_assertion_evidence_conflicts.sql"
+                ))?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -2704,6 +2709,48 @@ impl Store {
         source
             .map(|value| {
                 SourceVersionId::try_from(value.as_str()).map_err(|_| StoreError::CorruptHistory)
+            })
+            .transpose()
+    }
+
+    /// Checks whether a run's source window and protected compiler evidence remain current.
+    ///
+    /// A later source version requires reconsideration. Erased input or response bytes
+    /// cannot support new automatic acceptance, even though structural assertions remain.
+    /// The accepted-state transaction repeats this check to close the preparation race.
+    ///
+    /// # Errors
+    /// Returns a storage error when retained evidence cannot be inspected.
+    pub fn compilation_evidence_current(
+        &self,
+        project: &ProjectId,
+        run: &merl_core::CompilationRunId,
+    ) -> Result<bool, StoreError> {
+        compilation_evidence_current(&self.connection, project, run)
+    }
+
+    /// Reads the protected response of a completed compiler run.
+    ///
+    /// `None` means no response was recorded. An erased response returns
+    /// [`PayloadRead::Unavailable`] so inspection cannot mistake it for an empty result.
+    ///
+    /// # Errors
+    /// Returns a storage or corrupt-history error when the response cannot be resolved.
+    pub fn compilation_response(
+        &self,
+        project: &ProjectId,
+        run: &merl_core::CompilationRunId,
+    ) -> Result<Option<PayloadRead>, StoreError> {
+        let payload: Option<String> = self.connection.query_row(
+            "SELECT response_payload_id FROM compilation_results WHERE project_id=?1 AND run_id=?2",
+            params![project.as_str(), run.as_str()],
+            |row| row.get::<_, Option<String>>(0),
+        ).optional()?.flatten();
+        payload
+            .map(|value| {
+                let id =
+                    PayloadId::try_from(value.as_str()).map_err(|_| StoreError::CorruptHistory)?;
+                self.read_payload(project, &id)
             })
             .transpose()
     }
@@ -5042,10 +5089,50 @@ fn policy_overlap(evaluation: &PolicyEvaluation, duplicates: &[bool]) -> Option<
     }))
 }
 
+fn compilation_evidence_current(
+    connection: &Connection,
+    project: &ProjectId,
+    run: &merl_core::CompilationRunId,
+) -> Result<bool, StoreError> {
+    Ok(connection.query_row(
+        "SELECT EXISTS (
+            SELECT 1 FROM compilation_runs r
+            JOIN compilation_results result ON result.project_id=r.project_id AND result.run_id=r.id
+            JOIN payloads context ON context.project_id=r.project_id AND context.id=r.context_payload_id
+            JOIN payloads response ON response.project_id=r.project_id AND response.id=result.response_payload_id
+            WHERE r.project_id=?1 AND r.id=?2 AND context.bytes IS NOT NULL AND response.bytes IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM compilation_context_sources cs
+                JOIN source_versions s ON s.project_id=cs.project_id AND s.id=cs.source_version_id
+                LEFT JOIN payloads body ON body.project_id=s.project_id AND body.id=s.payload_id
+                WHERE cs.project_id=r.project_id AND cs.run_id=r.id
+                  AND ((s.payload_id IS NOT NULL AND body.bytes IS NULL) OR EXISTS (
+                    SELECT 1 FROM source_versions later WHERE later.project_id=s.project_id
+                      AND later.source_id=s.source_id AND later.sequence>(
+                        SELECT MAX(selected.sequence) FROM compilation_context_sources window
+                        JOIN source_versions selected ON selected.project_id=window.project_id AND selected.id=window.source_version_id
+                        WHERE window.project_id=r.project_id AND window.run_id=r.id AND selected.source_id=s.source_id)))))",
+        params![project.as_str(), run.as_str()], |row| row.get(0),
+    )?)
+}
+
 fn validate_policy_dependencies(
     transaction: &Transaction<'_>,
     evaluation: &PolicyEvaluation,
 ) -> Result<Option<PolicyConflictDetail>, StoreError> {
+    for input in &evaluation.inputs {
+        if input.disposition == PolicyDisposition::Accepted
+            && let merl_core::PolicyInput::ObservedAssertion { run, .. } = &input.input
+            && !compilation_evidence_current(transaction, &evaluation.project, run)?
+        {
+            return Ok(Some(PolicyConflictDetail {
+                reason_code: "assertion_evidence_changed".into(),
+                target_id: Some(run.to_string()),
+                expected_revision: None,
+                actual_revision: None,
+            }));
+        }
+    }
     let basis = to_sql_revision(evaluation.basis_project_revision)?;
     for read in &evaluation.reads {
         match read {
