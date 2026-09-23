@@ -95,8 +95,9 @@ repeatable captures. Without that option, Merl uses the node clock.
 The first capture establishes a binding by immutable repository ID and records
 `github_capture_v1` policy. The defaults are `--mode eager --coverage required`.
 Use `--mode capture_only --coverage optional` to retain prose without compiler
-work. `on_demand` also leaves sources cold. This command rejects `eager` with
-`optional` coverage. A refresh reuses the binding's stored policy, even when the
+work. `on_demand` also leaves sources cold. Use `--mode eager --coverage optional`
+to compile new evidence without making its interpretation a completeness
+requirement. A refresh reuses the binding's stored policy, even when the
 caller supplies different defaults; capture flags cannot change an existing
 binding's policy.
 

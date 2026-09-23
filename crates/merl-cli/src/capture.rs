@@ -35,11 +35,6 @@ impl<'a> Options<'a> {
             "optional" => CoverageRequirement::Optional,
             _ => return Err(invalid_input("--coverage must be required or optional")),
         };
-        if mode == CompilationMode::Eager && coverage == CoverageRequirement::Optional {
-            return Err(invalid_input(
-                "optional capture requires capture_only or on_demand mode",
-            ));
-        }
         Ok(BindingCapturePolicy {
             mode,
             coverage,

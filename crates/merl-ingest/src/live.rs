@@ -11,7 +11,7 @@ use merl_compiler::{
     CompilerAdapter, CompilerLimits, RunMode, RunRequest, execute_compilation,
     prepare_eager_compilation, record_compilation_result,
 };
-use merl_core::{CompilationMode, CoverageRequirement};
+use merl_core::CompilationMode;
 use merl_corpus::{
     fixture::{Fixture, Observation},
     github::{ISSUE_QUERY, fixture_from_graphql_pages},
@@ -257,10 +257,7 @@ pub fn capture_issue(
             prior,
         )?;
         let (version, new) = source;
-        let run = if report.policy.mode == CompilationMode::Eager
-            && report.policy.coverage == CoverageRequirement::Required
-            && observation.body.is_some()
-        {
+        let run = if report.policy.mode == CompilationMode::Eager && observation.body.is_some() {
             let run = digest_id("eager", version.as_str());
             dispatch(
                 store,

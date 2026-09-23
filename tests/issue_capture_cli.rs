@@ -145,3 +145,27 @@ fn an_older_provider_response_cannot_replace_a_captured_edit() {
         .when_an_older_comment_snapshot_arrives()
         .then_rejects_the_stale_body_without_a_new_observation();
 }
+
+#[test]
+fn optional_eager_sources_receive_compiler_work_once() {
+    Capture::given_a_new_project()
+        .given_optional_eager_policy()
+        .when_the_issue_is_captured()
+        .then_captures_and_compiles(1)
+        .then_optional_work_leaves_required_coverage_complete()
+        .when_the_issue_is_captured()
+        .then_changes_nothing();
+}
+
+#[test]
+fn optional_eager_failures_do_not_create_required_coverage_gaps() {
+    Capture::given_a_new_project()
+        .given_optional_eager_policy()
+        .given_a_failing_compiler()
+        .when_the_issue_is_captured()
+        .then_reports_failed_compilation()
+        .then_optional_work_leaves_required_coverage_complete()
+        .when_the_issue_is_captured()
+        .then_reports_the_same_failure_without_dispatch()
+        .then_optional_work_leaves_required_coverage_complete();
+}

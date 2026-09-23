@@ -190,10 +190,10 @@ Capture retries must also agree on the entity author's stable provider ID when b
 
 Live `issue capture` resolves the repository's immutable ID to a durable binding
 and records its initial compilation mode, coverage requirement, and
-`github_capture_v1` policy version. Refresh reuses that policy. The first command
-supports eager/required, capture-only, and on-demand bindings; it rejects
-optional eager capture instead of treating optional coverage as a timing rule.
-Changing a binding policy requires a separate authorized action.
+`github_capture_v1` policy version. Refresh reuses that policy. The command supports
+all combinations of compilation mode and coverage requirement. Eager optional
+sources receive compiler work; a failed interpretation does not create a required
+coverage gap. Changing a binding policy requires a separate authorized action.
 
 A live capture records the latest exposed body of each entity at the current
 Merl observation position. Provider edit IDs and times remain provenance; they

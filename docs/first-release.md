@@ -149,7 +149,7 @@ The release is ready when:
 - cosmetic and material edits exercise policy paths that respectively retain current support or supersede, weaken, or invalidate it;
 - GitHub owns mirrored fields such as open or closed state, labels, and provider timestamps;
 - live `issue capture` establishes a repository binding and durable capture policy, refreshes without duplicate versions or completed compiler work, and reports incomplete provider responses without inferring deletions;
-- live eager bodies receive a causal compilation intent before execution; optional capture-only or on-demand sources stay cold;
+- live eager bodies receive a causal compilation intent before execution regardless of coverage requirement; optional eager failures do not create required coverage gaps, while capture-only and on-demand sources stay cold;
 - the offline corpus importer retains its fixed `fixture_import_v1` capture policy (`eager`, `required`) for every source version; live binding policy does not change fixture imports;
 - Merl owns derived fields such as requirements, blockers, decisions, and research claims;
 - a Merl command cannot report a provider-owned field changed until GitHub reports that change;

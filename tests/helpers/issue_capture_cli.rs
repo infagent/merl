@@ -495,6 +495,24 @@ print((root/'pages.json').read_text())
         assert_eq!(self.latest["inbox"]["entries"].as_array().unwrap().len(), 2);
         self
     }
+    pub fn given_optional_eager_policy(mut self) -> Self {
+        self.flags = vec![
+            "--mode".into(),
+            "eager".into(),
+            "--coverage".into(),
+            "optional".into(),
+        ];
+        self
+    }
+    pub fn then_optional_work_leaves_required_coverage_complete(self) -> Self {
+        assert_eq!(self.latest["policy"]["mode"], "eager");
+        assert_eq!(self.latest["policy"]["coverage"], "optional");
+        let coverage = &self.changes_after["delta"]["coverage"];
+        assert_eq!(coverage["required_gaps"], 0);
+        assert_eq!(coverage["required_failed"], 0);
+        assert_eq!(coverage["required_pending"], 0);
+        self
+    }
     pub fn given_optional_capture_policy(mut self) -> Self {
         self.flags = vec![
             "--mode".into(),
