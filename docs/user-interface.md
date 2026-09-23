@@ -1139,7 +1139,7 @@ The evaluator-side `merl-eval` tool compares Merl with practical alternatives un
 merl-eval run --plan /path/to/frozen-evaluation-plan.json
 ```
 
-The report records model and version, reasoning effort, prompts, available tools, sampling controls, per-trial answers, correctness, total token cost, and variance. It identifies the read count where each approach becomes cheaper than repeated raw-history consumption. A hindsight compilation cannot enter a causal Merl trial. See the [benchmark harness](benchmark-harness.md) for the process protocol and held-out gate.
+The report records model and version, reasoning effort, prompts, available tools, sampling controls, per-trial answers, correctness, total token cost, and variance. It identifies the read count where each approach becomes cheaper than repeated raw-history consumption. A hindsight compilation cannot enter a causal Merl trial. See the [benchmark harness](evaluation/benchmark-harness.md) for the process protocol and held-out gate.
 
 ## Errors and non-interactive use
 
@@ -1161,7 +1161,7 @@ Scenarios interact through public actions and observable results. They do not qu
 
 Provider scenarios use controlled GitHub and artifact-store fakes at the external boundary. The runner supplies deterministic time and aliases for generated IDs while assertions use public output.
 
-Useful tags include `@first_release`, `@local`, `@shared`, `@offline`, `@github`, `@cross_project`, and `@recovery`. The [first release plan](first-release.md) owns which scenarios carry `@first_release`; this larger contract also describes deferred behavior.
+Useful tags include `@first_release`, `@local`, `@shared`, `@offline`, `@github`, `@cross_project`, and `@recovery`. The [first release plan](plans/first-release.md) owns which scenarios carry `@first_release`; this larger contract also describes deferred behavior.
 
 ### Project context is never guessed
 

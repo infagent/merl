@@ -10,12 +10,12 @@ The [product description](product-description.md) defines the full product. The 
 
 | Phase | Outcome | Plan |
 | --- | --- | --- |
-| 0 | Build, release, schema, and corpus foundations | [First release plan](first-release.md) |
-| 1 | One GitHub Issue reaches accepted state, views, and a pollable delta | [First release plan](first-release.md) |
-| 2 | Complete the public workflow and freeze the benchmark contract | [First release plan](first-release.md) |
-| 3 | Run held-out evaluation against the frozen candidate and make the release decision | [First release plan](first-release.md) |
-| 4 | Operate several manually started agents inside one project | [Single-project agent operations](single-project-agent-operations.md) |
-| 5 | Let an authorized manager provision and control agents within human-approved limits | [Delegated agent management](delegated-agent-management.md) |
+| 0 | Build, release, schema, and corpus foundations | [First release plan](plans/first-release.md) |
+| 1 | One GitHub Issue reaches accepted state, views, and a pollable delta | [First release plan](plans/first-release.md) |
+| 2 | Complete the public workflow and freeze the benchmark contract | [First release plan](plans/first-release.md) |
+| 3 | Run held-out evaluation against the frozen candidate and make the release decision | [First release plan](plans/first-release.md) |
+| 4 | Operate several manually started agents inside one project | [Single-project agent operations](plans/single-project-agent-operations.md) |
+| 5 | Let an authorized manager provision and control agents within human-approved limits | [Delegated agent management](plans/delegated-agent-management.md) |
 
 Phases 0 through 3 form the first-release track. Phase 4 is the first multi-agent release.
 

@@ -1031,7 +1031,7 @@ The `merl` CLI is the public interface for humans, agents, scripts, CI, and eval
 
 External compilers receive an immutable rendered `CompilationContext` and return a bounded, versioned response. The schema accepts typed assertions, source spans, relations, confidence, attribution, and structured context or unresolved outcomes. It rejects undeclared prose fields and responses beyond the run budget. Compilers cannot access the database or retrieve extra history directly. Merl records the context manifest and configuration needed to compare runs, while secrets remain outside persisted provenance.
 
-The first process-adapter wire format and historical fixture import path are specified in [compiler process protocol](compiler-protocol.md).
+The first process-adapter wire format and historical fixture import path are specified in [compiler process protocol](reference/compiler-protocol.md).
 
 ### GitHub
 

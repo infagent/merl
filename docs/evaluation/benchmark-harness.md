@@ -1,6 +1,6 @@
 # Benchmark harness
 
-`merl-eval` runs the five Issue-reading methods in [the first-release plan](first-release.md#evaluation-corpus). It is evaluator-side tooling. Keep natural captures that await redistribution review, scoring keys, and held-out files outside implementation-agent workspaces.
+`merl-eval` runs the five Issue-reading methods in [the first-release plan](../plans/first-release.md#evaluation-corpus). It is evaluator-side tooling. Keep natural captures that await redistribution review, scoring keys, and held-out files outside implementation-agent workspaces.
 
 The runner handles several questions per Issue, including questions at different cutoffs. Within a paired trial, all five readers get the same question, system prompt, task prompt, model identity, effort, and sampling settings. Only their context and available tools differ:
 

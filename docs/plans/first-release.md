@@ -2,7 +2,7 @@
 
 Status: draft
 
-This document owns the scope and acceptance criteria for Merl's first release. The [roadmap](roadmap.md) places it in the release sequence. The [product description](product-description.md), [user interface and behavior contract](user-interface.md), and [architecture](architecture.md) describe the larger product.
+This document owns the scope and acceptance criteria for Merl's first release. The [roadmap](../roadmap.md) places it in the release sequence. The [product description](../product-description.md), [user interface and behavior contract](../user-interface.md), and [architecture](../architecture.md) describe the larger product.
 
 ## Goal
 
@@ -24,7 +24,7 @@ This order makes the build and release contract visible from the first Rust chan
 
 ## Evaluation corpus
 
-The [benchmark harness](benchmark-harness.md) runs the five-method comparison and enforces the held-out gate. [Evaluation corpus](evaluation-corpus.md) describes the visible corpus and the sealed material. Held-out v3 is an archive, not a runnable evaluation set.
+The [benchmark harness](../evaluation/benchmark-harness.md) runs the five-method comparison and enforces the held-out gate. [Evaluation corpus](../evaluation/evaluation-corpus.md) describes the visible corpus and the sealed material. Held-out v3 is an archive, not a runnable evaluation set.
 
 Before the evaluator builds v4, we finish the visible benchmark and test every first-release promise that does not need held-out results. If Merl cannot complete a promised workflow through its public interface, we fix it or remove that promise from the release. We then freeze Merl, the corpus format, and the harness. The evaluator builds and reviews v4 from the selected sources against that frozen contract. Only v4 supports the release claim.
 
