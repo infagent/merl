@@ -94,6 +94,8 @@ fn only_a_project_administrator_can_make_optional_evidence_required() {
         .then_the_requirement_is_rejected_and_the_note_stays_optional()
         .when_the_note_is_required_for_the_issue()
         .then_the_note_becomes_a_required_gap_with_an_audit_record()
+        .when_ordinary_project_views_are_read()
+        .then_the_coverage_change_is_auditable_but_not_semantic_context()
         .when_the_same_requirement_is_retried()
         .then_the_retry_returns_the_original_promotion();
 }
