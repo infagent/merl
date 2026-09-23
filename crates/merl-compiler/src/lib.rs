@@ -788,6 +788,15 @@ impl ProcessCompiler {
             configuration_digest,
         })
     }
+
+    fn verify_configuration(&self) -> Result<(), CompileError> {
+        let artifact = std::fs::read(&self.program)
+            .map_err(|error| CompileError::Adapter(format!("cannot read compiler: {error}")))?;
+        if process_configuration_digest(&artifact, &self.args)? != self.configuration_digest {
+            return Err(CompileError::UnauthorizedCompilation);
+        }
+        Ok(())
+    }
 }
 
 fn process_configuration_digest(
@@ -830,6 +839,8 @@ impl CompilerAdapter for ProcessCompiler {
         self.configuration_digest
     }
     fn compile(&self, context: &[u8], limits: CompilerLimits) -> Result<Vec<u8>, CompileError> {
+        // Queued work may outlive the file originally authorized at this path.
+        self.verify_configuration()?;
         let context_value: serde_json::Value =
             serde_json::from_slice(context).map_err(|_| CompileError::InvalidResponse)?;
         let request = serde_json::to_vec(&ProcessRequest {
@@ -973,6 +984,7 @@ pub struct PreparedCompilation {
     compiler_version: String,
     model_id: String,
     prompt_digest: [u8; 32],
+    adapter_config_digest: [u8; 32],
 }
 
 #[derive(Clone, Copy)]
@@ -1072,6 +1084,7 @@ fn prepare_compilation(
             || existing.compiler_version != adapter.version()
             || existing.model_id != adapter.model()
             || existing.prompt_digest != adapter.prompt_digest()
+            || existing.adapter_config_digest != adapter.configuration_digest()
             || existing.limits != limits.as_array()
         {
             return Err(CompileError::InvalidResponse);
@@ -1101,6 +1114,7 @@ fn prepare_compilation(
             compiler_version: adapter.version().into(),
             model_id: adapter.model().into(),
             prompt_digest: adapter.prompt_digest(),
+            adapter_config_digest: existing.adapter_config_digest,
         }));
     }
     if mode == RunMode::Replay {
@@ -1249,6 +1263,7 @@ fn persist_compilation(
         compiler_version: adapter.version(),
         model_id: adapter.model(),
         prompt_digest: adapter.prompt_digest(),
+        adapter_config_digest: adapter.configuration_digest(),
         mode: mode.as_str(),
         max_input_bytes: limits.input_bytes,
         max_output_bytes: limits.output_bytes,
@@ -1270,6 +1285,7 @@ fn persist_compilation(
         compiler_version: adapter.version().into(),
         model_id: adapter.model().into(),
         prompt_digest: adapter.prompt_digest(),
+        adapter_config_digest: adapter.configuration_digest(),
     }))
 }
 
@@ -1285,8 +1301,9 @@ pub fn execute_compilation(
         || prepared.compiler_version != adapter.version()
         || prepared.model_id != adapter.model()
         || prepared.prompt_digest != adapter.prompt_digest()
+        || prepared.adapter_config_digest != adapter.configuration_digest()
     {
-        return Err(CompileError::InvalidResponse);
+        return Err(CompileError::UnauthorizedCompilation);
     }
     adapter.compile(&prepared.context.rendered, prepared.limits)
 }
@@ -1485,10 +1502,13 @@ fn valid_id(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CompilationContext, CompileError, CompilerLimits, process_configuration_digest,
-        validate_response,
+        CompilationContext, CompileError, CompilerLimits, ProcessCompiler,
+        process_configuration_digest, validate_response,
     };
     use merl_core::{ProjectRevision, SourceVersionId};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMPORARY_COMPILER_ID: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn prose_fields_and_out_of_range_spans_cannot_enter_assertions() {
@@ -1563,5 +1583,24 @@ mod tests {
 
         assert_ne!(base, other_artifact);
         assert_ne!(base, other_arguments);
+    }
+
+    #[test]
+    fn process_adapter_rejects_an_executable_replaced_after_construction() {
+        let id = TEMPORARY_COMPILER_ID.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "merl-compiler-configuration-{}-{id}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"compiler-a").expect("initial compiler");
+        let compiler =
+            ProcessCompiler::new(path.to_string_lossy(), Vec::new(), "v1", "model-a", [1; 32])
+                .expect("process compiler");
+        std::fs::write(&path, b"compiler-b").expect("replacement compiler");
+
+        let result = compiler.verify_configuration();
+
+        let _ = std::fs::remove_file(path);
+        assert!(matches!(result, Err(CompileError::UnauthorizedCompilation)));
     }
 }

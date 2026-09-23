@@ -61,6 +61,7 @@ pub struct CompilationAuthorizationScenario {
     eager_source: SourceVersionId,
     exact_prepared: bool,
     eager_prepared: bool,
+    swapped_execution_rejected: bool,
     rejected_attempts: usize,
 }
 
@@ -77,6 +78,7 @@ impl CompilationAuthorizationScenario {
             eager_source: SourceVersionId::try_from("eager-v1").expect("eager source"),
             exact_prepared: false,
             eager_prepared: false,
+            swapped_execution_rejected: false,
             rejected_attempts: 0,
         };
         scenario.capture_on_demand("optional-v1");
@@ -178,7 +180,7 @@ impl CompilationAuthorizationScenario {
         let mut larger_limits = limits();
         larger_limits.output_tokens += 1;
         self.expect_authorization_rejection(&source, "authorized-run", &exact, larger_limits);
-        self.exact_prepared = prepare_authorized_compilation(
+        let prepared = prepare_authorized_compilation(
             &mut self.store,
             &self.project,
             &source,
@@ -190,8 +192,15 @@ impl CompilationAuthorizationScenario {
                 now_millis: 31,
             },
         )
-        .expect("authorized preparation")
-        .is_some();
+        .expect("authorized preparation");
+        self.exact_prepared = prepared.is_some();
+        let swapped = configured_compiler("v1", "model-a", [7; 32], [10; 32]);
+        self.swapped_execution_rejected = prepared.is_some_and(|prepared| {
+            matches!(
+                execute_compilation(&prepared, &swapped),
+                Err(CompileError::UnauthorizedCompilation)
+            )
+        });
         self.eager_prepared = prepare_eager_compilation(
             &mut self.store,
             &self.project,
@@ -236,6 +245,7 @@ impl CompilationAuthorizationScenario {
     pub fn then_only_the_exact_authorized_run_is_prepared(&mut self) -> &mut Self {
         assert_eq!(self.rejected_attempts, 9);
         assert!(self.exact_prepared);
+        assert!(self.swapped_execution_rejected);
         assert_eq!(
             self.store
                 .compilation_run_ids(&self.project)
@@ -324,7 +334,7 @@ impl CompilerAdapter for ConfiguredCompiler {
     }
 
     fn compile(&self, _context: &[u8], _limits: CompilerLimits) -> Result<Vec<u8>, CompileError> {
-        Err(CompileError::InvalidResponse)
+        Ok(br#"{"schema":"merl.compiler-response/v1","assertions":[]}"#.to_vec())
     }
 }
 
@@ -759,6 +769,7 @@ impl CompilationScenario {
                     compiler_version: "v1",
                     model_id: "deterministic",
                     prompt_digest: Sha256::digest(b"legacy").into(),
+                    adapter_config_digest: FakeCompiler.configuration_digest(),
                     mode: "replay",
                     max_input_bytes: budget.input_bytes,
                     max_output_bytes: budget.output_bytes,

@@ -630,6 +630,8 @@ pub struct CompilationIntent<'a> {
     pub model_id: &'a str,
     /// Digest of the externally managed prompt; no prompt prose enters the log.
     pub prompt_digest: [u8; 32],
+    /// Digest of executable bytes and fixed adapter configuration.
+    pub adapter_config_digest: [u8; 32],
     /// `live`, `replay`, `eval`, or `hindsight`.
     pub mode: &'a str,
     /// Hard limits used for this attempt.
@@ -795,6 +797,8 @@ pub struct CompilationRunStatus {
     pub model_id: String,
     /// Prompt or ruleset digest.
     pub prompt_digest: [u8; 32],
+    /// Executable artifact and fixed adapter configuration digest.
+    pub adapter_config_digest: [u8; 32],
     /// Exact compiler budgets fixed by the first attempt with this run ID.
     pub limits: [usize; 9],
 }
@@ -2046,15 +2050,16 @@ impl Store {
               interpretation_basis_revision,source_observation_cutoff,renderer_version,selector_version,
               max_input_bytes,max_output_bytes,max_output_tokens,max_assertions,max_context_requests,max_expansion_rounds,max_payload_bytes,
               max_source_window,max_objects,
-              compiler_id,compiler_version,model_id,prompt_digest,mode,started_at_millis,attempt_order
-             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25)",
+              compiler_id,compiler_version,model_id,prompt_digest,adapter_config_digest,
+              mode,started_at_millis,attempt_order
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)",
             params![project.as_str(), record.id, record.source.as_str(), context_digest.as_slice(),
                 context_payload, interpretation_basis, cutoff,
                 record.renderer_version, record.selector_version, max_input, max_output,
                 max_tokens, max_assertions, max_requests, max_rounds, max_payload,
                 max_source_window, max_objects,
                 record.compiler_id, record.compiler_version, record.model_id, record.prompt_digest.as_slice(),
-                record.mode, record.started_at_millis, attempt_order],
+                record.adapter_config_digest.as_slice(), record.mode, record.started_at_millis, attempt_order],
         )?;
         insert_context_references(&transaction, project, record)?;
         transaction.commit()?;
@@ -2631,6 +2636,7 @@ impl Store {
             String,
             String,
             Vec<u8>,
+            Option<Vec<u8>>,
             [i64; 9],
             i64,
             i64,
@@ -2640,6 +2646,7 @@ impl Store {
         let raw: Option<RawStatus> = self.connection.query_row(
             "SELECT source_version_id,mode,compilation_results.outcome,compilation_results.failure_code,interpretation_basis_revision,
                     source_observation_cutoff,context_digest,compiler_id,compiler_version,model_id,prompt_digest,
+                    adapter_config_digest,
                     max_input_bytes,max_output_bytes,max_output_tokens,max_assertions,
                     max_context_requests,max_expansion_rounds,max_payload_bytes,
                     max_source_window,max_objects,started_at_millis,attempt_order,
@@ -2651,8 +2658,8 @@ impl Store {
             params![project.as_str(), id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?,
                 row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?,
                 row.get(8)?, row.get(9)?, row.get(10)?,
-                [row.get(11)?, row.get(12)?, row.get(13)?, row.get(14)?,
-                 row.get(15)?, row.get(16)?, row.get(17)?, row.get(18)?, row.get(19)?], row.get(20)?,row.get(21)?,row.get(22)?,row.get(23)?)),
+                row.get(11)?, [row.get(12)?, row.get(13)?, row.get(14)?,
+                 row.get(15)?, row.get(16)?, row.get(17)?, row.get(18)?, row.get(19)?, row.get(20)?], row.get(21)?,row.get(22)?,row.get(23)?,row.get(24)?)),
         ).optional()?;
         raw.map(
             |(
@@ -2667,6 +2674,7 @@ impl Store {
                 compiler_version,
                 model_id,
                 prompt_digest,
+                adapter_config_digest,
                 limits,
                 started_at_millis,
                 attempt_order,
@@ -2696,6 +2704,10 @@ impl Store {
                     compiler_version,
                     model_id,
                     prompt_digest: prompt_digest
+                        .try_into()
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                    adapter_config_digest: adapter_config_digest
+                        .ok_or(StoreError::CorruptHistory)?
                         .try_into()
                         .map_err(|_| StoreError::CorruptHistory)?,
                     limits: limits

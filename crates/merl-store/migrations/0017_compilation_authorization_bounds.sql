@@ -20,4 +20,6 @@ ALTER TABLE source_compilation_authorizations ADD COLUMN max_payload_bytes INTEG
 ALTER TABLE source_compilation_authorizations ADD COLUMN max_source_window INTEGER CHECK (max_source_window IS NULL OR max_source_window >= 0);
 ALTER TABLE source_compilation_authorizations ADD COLUMN max_objects INTEGER CHECK (max_objects IS NULL OR max_objects >= 0);
 
+ALTER TABLE compilation_runs ADD COLUMN adapter_config_digest BLOB CHECK (adapter_config_digest IS NULL OR length(adapter_config_digest) = 32);
+
 PRAGMA user_version = 17;

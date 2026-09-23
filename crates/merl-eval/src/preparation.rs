@@ -458,6 +458,7 @@ mod tests {
             compiler_version: "v1".to_owned(),
             model_id: "model-v1".to_owned(),
             prompt_digest: contract,
+            adapter_config_digest: [0; 32],
             limits: [1; 9],
         };
         assert!(validate_run(&record, &run, &stored, &contract).is_ok());
