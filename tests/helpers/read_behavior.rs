@@ -1,6 +1,6 @@
 use merl_compiler::{
     CompileError, CompilerAdapter, CompilerLimits, RunMode, RunRequest, execute_compilation,
-    prepare_compilation, record_compilation_result,
+    prepare_eager_compilation, record_compilation_result,
 };
 use merl_core::{
     ActorId, AgentId, BatchId, CompilationMode, CoverageRequirement, DomainEvent, EventId,
@@ -723,7 +723,7 @@ impl AssertionScenario {
             objects: 4,
         };
         let compiler = DecisionCompiler;
-        let prepared = prepare_compilation(
+        let prepared = prepare_eager_compilation(
             &mut store,
             &project,
             &version,

@@ -924,6 +924,82 @@ impl PreparedCompilation {
     }
 }
 
+/// Persists eager source work selected by the source's capture policy.
+///
+/// # Errors
+/// Rejects non-eager sources and non-live requests before creating a run.
+pub fn prepare_eager_compilation(
+    store: &mut Store,
+    project: &ProjectId,
+    source: &SourceVersionId,
+    adapter: &impl CompilerAdapter,
+    request: RunRequest<'_>,
+) -> Result<Option<PreparedCompilation>, CompileError> {
+    let captured = store
+        .source_version(project, source)?
+        .ok_or(CompileError::NonCausalHistory)?;
+    if request.mode != RunMode::Live
+        || captured.compilation_mode != merl_core::CompilationMode::Eager
+    {
+        return Err(CompileError::UnauthorizedCompilation);
+    }
+    prepare_compilation(store, project, source, adapter, request)
+}
+
+/// Persists live work for controlled bootstrap and fixture construction.
+///
+/// This explicit escape hatch keeps recovery and evaluation fixtures separate
+/// from public on-demand compilation.
+///
+/// # Errors
+/// Rejects non-live requests and invalid compiler context.
+pub fn prepare_bootstrap_compilation(
+    store: &mut Store,
+    project: &ProjectId,
+    source: &SourceVersionId,
+    adapter: &impl CompilerAdapter,
+    request: RunRequest<'_>,
+) -> Result<Option<PreparedCompilation>, CompileError> {
+    if request.mode != RunMode::Live {
+        return Err(CompileError::InvalidResponse);
+    }
+    prepare_compilation(store, project, source, adapter, request)
+}
+
+/// Persists a corpus-evaluation attempt that cannot satisfy live coverage.
+///
+/// # Errors
+/// Rejects non-evaluation requests and invalid compiler context.
+pub fn prepare_evaluation_compilation(
+    store: &mut Store,
+    project: &ProjectId,
+    source: &SourceVersionId,
+    adapter: &impl CompilerAdapter,
+    request: RunRequest<'_>,
+) -> Result<Option<PreparedCompilation>, CompileError> {
+    if request.mode != RunMode::Eval {
+        return Err(CompileError::InvalidResponse);
+    }
+    prepare_compilation(store, project, source, adapter, request)
+}
+
+/// Persists deliberate reinterpretation using current accepted state.
+///
+/// # Errors
+/// Rejects non-hindsight requests and invalid compiler context.
+pub fn prepare_hindsight_compilation(
+    store: &mut Store,
+    project: &ProjectId,
+    source: &SourceVersionId,
+    adapter: &impl CompilerAdapter,
+    request: RunRequest<'_>,
+) -> Result<Option<PreparedCompilation>, CompileError> {
+    if request.mode != RunMode::Hindsight {
+        return Err(CompileError::InvalidResponse);
+    }
+    prepare_compilation(store, project, source, adapter, request)
+}
+
 /// Persists an immutable run intent before external compiler work begins.
 ///
 /// `None` means this identity already has a successful result. A pending
@@ -931,7 +1007,7 @@ impl PreparedCompilation {
 ///
 /// # Errors
 /// Fails on missing causal history, a previous failed result, or an incompatible run ID.
-pub fn prepare_compilation(
+fn prepare_compilation(
     store: &mut Store,
     project: &ProjectId,
     source: &SourceVersionId,

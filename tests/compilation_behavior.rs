@@ -9,7 +9,8 @@ use compilation_behavior::{
 fn on_demand_compilation_requires_the_exact_accepted_authorization() {
     CompilationAuthorizationScenario::given_an_on_demand_source_with_one_accepted_request()
         .when_low_level_preparation_is_attempted()
-        .then_only_the_exact_authorized_run_is_prepared();
+        .then_only_the_exact_authorized_run_is_prepared()
+        .then_eager_work_does_not_need_on_demand_authorization();
 }
 
 #[test]

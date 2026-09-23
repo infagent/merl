@@ -763,7 +763,7 @@ impl CliIssueHistory {
             source_window: 2,
             objects: 4,
         };
-        let prepared = merl_compiler::prepare_compilation(
+        let prepared = merl_compiler::prepare_eager_compilation(
             &mut store,
             &project,
             &source,

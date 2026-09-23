@@ -1,7 +1,9 @@
 use merl_compiler::{
     CompilerLimits, FakeCompiler, ProcessCompiler, RunMode, RunRequest, SequentialReplay,
-    build_context, execute_compilation, prepare_authorized_compilation, prepare_compilation,
-    prepare_replay_compilation, rebuild_recorded_context, record_compilation_result,
+    build_context, execute_compilation, prepare_authorized_compilation,
+    prepare_bootstrap_compilation, prepare_eager_compilation, prepare_evaluation_compilation,
+    prepare_hindsight_compilation, prepare_replay_compilation, rebuild_recorded_context,
+    record_compilation_result,
 };
 use merl_core::{
     ActorId, BatchId, CapturePolicyVersion, CompilationMode, CoverageRequirement, DomainEvent,
@@ -36,7 +38,15 @@ fn run_compiler(
     request: RunRequest<'_>,
 ) -> Result<(), merl_compiler::CompileError> {
     let completed_at = request.now_millis;
-    if let Some(prepared) = prepare_compilation(store, project, source, adapter, request)? {
+    let prepared = match request.mode {
+        RunMode::Live => prepare_bootstrap_compilation(store, project, source, adapter, request),
+        RunMode::Eval => prepare_evaluation_compilation(store, project, source, adapter, request),
+        RunMode::Hindsight => {
+            prepare_hindsight_compilation(store, project, source, adapter, request)
+        }
+        RunMode::Replay => Err(merl_compiler::CompileError::InvalidResponse),
+    }?;
+    if let Some(prepared) = prepared {
         let raw = execute_compilation(&prepared, adapter);
         record_compilation_result(store, project, &prepared, raw, completed_at)?;
     }
@@ -48,7 +58,9 @@ pub struct CompilationAuthorizationScenario {
     project: ProjectId,
     source: SourceVersionId,
     other_source: SourceVersionId,
+    eager_source: SourceVersionId,
     exact_prepared: bool,
+    eager_prepared: bool,
     rejected_attempts: usize,
 }
 
@@ -62,11 +74,14 @@ impl CompilationAuthorizationScenario {
             project,
             source: SourceVersionId::try_from("optional-v1").expect("source"),
             other_source: SourceVersionId::try_from("other-v1").expect("other source"),
+            eager_source: SourceVersionId::try_from("eager-v1").expect("eager source"),
             exact_prepared: false,
+            eager_prepared: false,
             rejected_attempts: 0,
         };
         scenario.capture_on_demand("optional-v1");
         scenario.capture_on_demand("other-v1");
+        scenario.capture("eager-v1", CompilationMode::Eager);
 
         let prompt_digest = [7; 32];
         let intent = scenario
@@ -153,6 +168,24 @@ impl CompilationAuthorizationScenario {
                 self.rejected_attempts += 1;
             }
         }
+        let compiler_id_mismatch = prepare_authorized_compilation(
+            &mut self.store,
+            &self.project,
+            &self.source,
+            &FakeCompiler,
+            RunRequest {
+                id: "authorized-run",
+                limits: limits(),
+                mode: RunMode::Live,
+                now_millis: 30,
+            },
+        );
+        if matches!(
+            compiler_id_mismatch,
+            Err(merl_compiler::CompileError::UnauthorizedCompilation)
+        ) {
+            self.rejected_attempts += 1;
+        }
         self.exact_prepared = prepare_authorized_compilation(
             &mut self.store,
             &self.project,
@@ -167,22 +200,45 @@ impl CompilationAuthorizationScenario {
         )
         .expect("authorized preparation")
         .is_some();
+        self.eager_prepared = prepare_eager_compilation(
+            &mut self.store,
+            &self.project,
+            &self.eager_source,
+            &FakeCompiler,
+            RunRequest {
+                id: "eager-run",
+                limits: limits(),
+                mode: RunMode::Live,
+                now_millis: 31,
+            },
+        )
+        .expect("eager preparation")
+        .is_some();
         self
     }
 
     pub fn then_only_the_exact_authorized_run_is_prepared(&mut self) -> &mut Self {
-        assert_eq!(self.rejected_attempts, 5);
+        assert_eq!(self.rejected_attempts, 6);
         assert!(self.exact_prepared);
         assert_eq!(
             self.store
                 .compilation_run_ids(&self.project)
                 .expect("compiler runs"),
-            vec!["authorized-run"]
+            vec!["authorized-run", "eager-run"]
         );
         self
     }
 
+    pub fn then_eager_work_does_not_need_on_demand_authorization(&mut self) -> &mut Self {
+        assert!(self.eager_prepared);
+        self
+    }
+
     fn capture_on_demand(&mut self, version: &'static str) {
+        self.capture(version, CompilationMode::OnDemand);
+    }
+
+    fn capture(&mut self, version: &'static str, compilation_mode: CompilationMode) {
         let binding = SourceBinding {
             id: SourceBindingId::try_from("authorization-binding").expect("binding"),
             provider: SourceProvider::try_from("controlled").expect("provider"),
@@ -214,7 +270,7 @@ impl CompilationAuthorizationScenario {
                     edit_diff: None,
                     edit_deleted_at_millis: None,
                     missing_body_reason: None,
-                    compilation_mode: CompilationMode::OnDemand,
+                    compilation_mode,
                     coverage_requirement: CoverageRequirement::Optional,
                     policy_version: CapturePolicyVersion::try_from("test-v1").expect("policy"),
                 },
@@ -894,7 +950,7 @@ impl CompilationScenario {
     }
 
     pub fn when_the_note_is_compiled_with_hindsight(&mut self) -> &mut Self {
-        let prepared = prepare_compilation(
+        let prepared = prepare_hindsight_compilation(
             &mut self.store,
             &self.project,
             &self.note,
@@ -1061,7 +1117,7 @@ impl CompilationScenario {
     }
 
     pub fn when_the_authority_prepares_the_compiler_run(&mut self) -> &mut Self {
-        let prepared = prepare_compilation(
+        let prepared = prepare_bootstrap_compilation(
             &mut self.store,
             &self.project,
             &self.note,
@@ -1131,7 +1187,7 @@ impl CompilationScenario {
             mode: RunMode::Live,
             now_millis: 30,
         };
-        let prepared = prepare_compilation(
+        let prepared = prepare_bootstrap_compilation(
             &mut self.store,
             &self.project,
             &self.note,
@@ -1152,7 +1208,7 @@ impl CompilationScenario {
                 source.payload.as_ref().expect("source payload"),
             )
             .expect("erase original source bytes");
-        self.recovery_succeeded = prepare_compilation(
+        self.recovery_succeeded = prepare_bootstrap_compilation(
             &mut self.store,
             &self.project,
             &self.note,
@@ -1165,7 +1221,7 @@ impl CompilationScenario {
             let raw = execute_compilation(&prepared, &FakeCompiler);
             record_compilation_result(&mut self.store, &self.project, &prepared, raw, 31).is_ok()
         });
-        self.recovery_succeeded &= prepare_compilation(
+        self.recovery_succeeded &= prepare_bootstrap_compilation(
             &mut self.store,
             &self.project,
             &self.note,
@@ -1452,7 +1508,7 @@ impl CompilationScenario {
     }
 
     pub fn when_a_retry_is_prepared(&mut self) -> &mut Self {
-        prepare_compilation(
+        prepare_bootstrap_compilation(
             &mut self.store,
             &self.project,
             &self.note,
