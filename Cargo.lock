@@ -210,8 +210,10 @@ dependencies = [
  "merl-core",
  "merl-corpus",
  "merl-ingest",
+ "merl-policy",
  "merl-store",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

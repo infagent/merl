@@ -12,8 +12,10 @@ merl-core = { path = "../merl-core" }
 merl-corpus = { path = "../merl-corpus" }
 merl-compiler = { path = "../merl-compiler" }
 merl-ingest = { path = "../merl-ingest" }
+merl-policy = { path = "../merl-policy" }
 merl-store = { path = "../merl-store" }
 serde_json.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true
