@@ -9,7 +9,7 @@ use std::{
 use merl_corpus::{
     fixture::{Fixture, validate},
     github::fixture_from_graphql_pages,
-    review::independent_review_packet,
+    review::{independent_review_packet, verify_independent_review},
 };
 
 const HELP: &str = "\
@@ -18,6 +18,7 @@ Capture and validate Merl evaluation fixtures.
 Usage:
   merl-corpus validate <fixture>...
   merl-corpus review-packet <fixture> <output>
+  merl-corpus review-verify <fixture> <review-packet>
   merl-corpus capture-github <fixture-id> <owner/repository> <issue-number> <captured-at> <output>
 
 The capture command requires a separately installed GitHub CLI (gh).
@@ -102,6 +103,22 @@ fn run() -> Result<(), String> {
             fs::write(output, format!("{encoded}\n"))
                 .map_err(|error| format!("could not write {output}: {error}"))?;
             println!("wrote gold-blind review packet to {output}");
+            Ok(())
+        }
+        "review-verify" => {
+            let values: Vec<_> = args.collect();
+            let [fixture, packet] = values.as_slice() else {
+                return Err("review-verify requires a fixture and review packet".to_owned());
+            };
+            let packet_path = packet;
+            let fixture_bytes =
+                fs::read(fixture).map_err(|error| format!("could not read {fixture}: {error}"))?;
+            let packet_bytes = fs::read(packet_path)
+                .map_err(|error| format!("could not read {packet_path}: {error}"))?;
+            let packet: serde_json::Value = serde_json::from_slice(&packet_bytes)
+                .map_err(|error| format!("could not parse {packet_path}: {error}"))?;
+            verify_independent_review(&fixture_bytes, &packet)?;
+            println!("verified gold-blind review packet {packet_path}");
             Ok(())
         }
         "capture-github" => {
