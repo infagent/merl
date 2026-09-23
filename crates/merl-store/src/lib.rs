@@ -1368,13 +1368,16 @@ impl Store {
     /// Captures one immutable external version without accepting its meaning.
     ///
     /// A retry is a no-op when upstream identity, lineage, and content agree.
+    /// If both captures include a stable provider author ID, those IDs must agree.
+    /// A retry cannot fill in an unknown author or replace a recorded author.
     /// The first capture fixes observation time and effective compilation policy;
     /// a later poll cannot rewrite them. New versions advance observation sequence
     /// independently of accepted project revision.
     ///
     /// # Errors
-    /// Returns an error for a missing project, invalid lineage, conflicting
-    /// retry, or failed storage transaction.
+    /// Returns [`StoreError::SourceConflict`] for a conflicting retry, including
+    /// different known entity authors. Also returns an error for a missing
+    /// project, invalid lineage, or failed storage transaction.
     pub fn capture_source_version(
         &mut self,
         project: &ProjectId,
@@ -1390,7 +1393,8 @@ impl Store {
     /// earlier observation. This method belongs only to isolated historical imports.
     ///
     /// # Errors
-    /// Uses the same identity and lineage checks as ordinary source capture.
+    /// Uses the same identity, lineage, and author checks as
+    /// [`Self::capture_source_version`].
     pub fn capture_historical_source_version(
         &mut self,
         project: &ProjectId,
@@ -1422,19 +1426,8 @@ impl Store {
             .optional()?;
         let head = head.ok_or(StoreError::ProjectMissing)?;
         ensure_source_binding(&transaction, project, &capture.binding)?;
-        let existing: Option<Vec<u8>> = transaction
-            .query_row(
-                "SELECT capture_digest FROM source_versions WHERE project_id = ?1 AND id = ?2",
-                params![project.as_str(), capture.version.as_str()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(existing) = existing {
-            return if existing == capture_digest {
-                Ok(false)
-            } else {
-                Err(StoreError::SourceConflict)
-            };
+        if source_capture_is_retry(&transaction, project, capture, &capture_digest)? {
+            return Ok(false);
         }
         let previous: Option<String> = transaction
             .query_row(
@@ -6366,6 +6359,36 @@ fn valid_record_id(value: &str) -> bool {
         })
 }
 
+fn source_capture_is_retry(
+    transaction: &Transaction<'_>,
+    project: &ProjectId,
+    capture: &SourceCapture<'_>,
+    capture_digest: &[u8; 32],
+) -> Result<bool, StoreError> {
+    let existing: Option<(Vec<u8>, Option<String>)> = transaction
+        .query_row(
+            "SELECT capture_digest, provider_source_author_id
+             FROM source_versions WHERE project_id = ?1 AND id = ?2",
+            params![project.as_str(), capture.version.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((existing_digest, existing_author)) = existing else {
+        return Ok(false);
+    };
+    if existing_digest != capture_digest {
+        return Err(StoreError::SourceConflict);
+    }
+    if let (Some(stored), Some(retried)) = (
+        existing_author.as_deref(),
+        capture.provider_source_author_id,
+    ) && stored != retried
+    {
+        return Err(StoreError::SourceConflict);
+    }
+    Ok(true)
+}
+
 fn source_capture_digest(
     capture: &SourceCapture<'_>,
     body_digest: Option<&sha2::digest::Output<Sha256>>,
@@ -6394,8 +6417,8 @@ fn source_capture_digest(
         digest.update((value.len() as u64).to_be_bytes());
         digest.update(value.as_bytes());
     }
-    // Author metadata joins poll time and effective policy as first-capture
-    // provenance. Excluding it keeps retries of pre-migration versions stable.
+    // Keep author fields out of the digest so pre-migration captures can retry.
+    // The retry path compares known provider author IDs after checking this digest.
     for value in [capture.created_at_millis, capture.occurred_at_millis] {
         digest.update(value.to_be_bytes());
     }
@@ -6452,6 +6475,55 @@ mod tests {
         let project = merl_core::ProjectId::try_from("P1").expect("project ID");
         assert_eq!(store.project_revision(&project).expect("revision").get(), 7);
         assert_eq!(store.source_observation_head(&project).expect("head"), 0);
+    }
+
+    #[test]
+    fn migrating_a_source_does_not_infer_its_author_from_its_editor() {
+        let connection = Connection::open_in_memory().expect("open SQLite");
+        for migration in [
+            include_str!("../migrations/0001_initial.sql"),
+            include_str!("../migrations/0002_sources.sql"),
+        ] {
+            connection.execute_batch(migration).expect("prior schema");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO projects (id,current_revision,source_observation_head)
+                   VALUES ('P1',0,1);
+                 INSERT INTO source_bindings
+                   (project_id,id,provider,provider_namespace_id,namespace_digest)
+                   VALUES ('P1','binding','github','repo-1',zeroblob(32));
+                 INSERT INTO source_versions
+                   (project_id,id,source_id,provider_entity_id,provider_version_id,
+                    binding_id,kind,ambiguous_order_with_previous,sequence,
+                    occurred_at_millis,created_at_millis,observed_at_millis,
+                    actor_id,provider_actor_id,capture_digest,missing_body_reason,
+                    compilation_mode,coverage_requirement,capture_policy_version)
+                   VALUES ('P1','version','source','issue-1','issue-1:initial',
+                           'binding','issue',0,1,1,1,2,'bob','bob',zeroblob(32),
+                           'prior_version_unavailable','eager','required','initial');",
+            )
+            .expect("source captured before author fields existed");
+        connection
+            .pragma_update(None, "user_version", 2)
+            .expect("mark prior schema");
+
+        let store = Store::from_connection(connection).expect("migrate source");
+        let project = merl_core::ProjectId::try_from("P1").expect("project ID");
+        let source = store
+            .source_version_at(&project, 1)
+            .expect("source metadata")
+            .expect("migrated source");
+        assert_eq!(source.provider_source_author_id, None);
+        assert_eq!(source.source_author, None);
+        assert_eq!(source.provider_actor_id.as_deref(), Some("bob"));
+        assert_eq!(
+            source
+                .version_actor
+                .as_ref()
+                .map(merl_core::ActorId::as_str),
+            Some("bob")
+        );
     }
 
     #[test]
