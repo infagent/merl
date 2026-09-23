@@ -2,6 +2,7 @@
 
 mod assertions;
 mod authority;
+mod candidates;
 mod capture;
 
 use std::{
@@ -112,6 +113,10 @@ impl From<merl_policy::PolicyError> for CliError {
     fn from(error: merl_policy::PolicyError) -> Self {
         match error {
             merl_policy::PolicyError::Store(error) => Self::from(error),
+            merl_policy::PolicyError::CandidateMissing => Self {
+                code: "CANDIDATE_NOT_FOUND",
+                message: error.to_string(),
+            },
             merl_policy::PolicyError::RunIneligible => Self {
                 code: "ASSERTION_RUN_INELIGIBLE",
                 message: error.to_string(),
@@ -194,6 +199,9 @@ fn execute(
     json_output: &mut bool,
     clock: &impl Fn() -> Result<i64, CliError>,
 ) -> Result<String, CliError> {
+    let mut candidate_kind = None;
+    let mut candidate_value = None;
+    let mut candidate_after = None;
     let mut positional = Vec::new();
     let mut database = None;
     let mut id = None;
@@ -321,6 +329,18 @@ fn execute(
                 index += 1;
                 confirm_digest = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
             }
+            "--kind" => {
+                index += 1;
+                candidate_kind = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--value" => {
+                index += 1;
+                candidate_value = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
+            "--after" => {
+                index += 1;
+                candidate_after = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+            }
             "--dry-run" => dry_run = true,
             "--run" => {
                 index += 1;
@@ -369,6 +389,34 @@ fn execute(
     }
 
     match positional.as_slice() {
+        ["help", "candidate"] | ["candidate", "help"] => candidates::help(None, *json_output),
+        ["help", "candidate", operation] | ["candidate", operation, "help"] => {
+            candidates::help(Some(operation), *json_output)
+        }
+        ["candidate", operation, tail @ ..] => {
+            let project = ProjectId::try_from(project.ok_or_else(missing_value)?)
+                .map_err(|_| invalid_input("invalid project"))?;
+            let mut store = Store::open(Path::new(database.ok_or_else(missing_value)?))?;
+            candidates::execute(
+                &mut store,
+                &project,
+                operation,
+                tail,
+                candidates::Options {
+                    id,
+                    actor,
+                    subject,
+                    kind: candidate_kind,
+                    value: candidate_value,
+                    reason,
+                    after: candidate_after,
+                    offset,
+                    dry_run,
+                    json_output: *json_output,
+                },
+                clock()?,
+            )
+        }
         [] | ["help"] => help("", *json_output),
         ["help", "project"] => help("project", *json_output),
         ["help", "project", "init"] => help("project init", *json_output),
@@ -1498,6 +1546,11 @@ fn render_object(
         if let PolicyInput::ObservedAssertion { run, index, .. } = input {
             input_json["assertion"] = assertion_json(store, project, run, *index, expand_source)?;
         }
+        if let PolicyInput::Command(id) = input
+            && let Some(review) = store.candidate_review(project, id)?
+        {
+            input_json["review"] = candidates::review_json(store, project, &review, expand_source)?;
+        }
         origin_json = json!({
             "event": origin.event.as_str(), "evaluation": origin.evaluation.as_str(), "input": input_json
         });
@@ -1509,15 +1562,7 @@ fn render_object(
     };
     let history_json = history.then(|| object_history_json(&history_entries));
     let evidence_history = if expand_source {
-        history_entries.iter().filter_map(|entry| {
-            match &entry.input {
-                Some(PolicyInput::ObservedAssertion { run, index, .. }) =>
-                    Some((entry.event.as_str(), run, *index)),
-                _ => None,
-            }
-        }).map(|(event, run, index)| {
-            Ok(json!({"event": event, "assertion": assertion_json(store, project, run, index, true)?}))
-        }).collect::<Result<Vec<_>, CliError>>()?
+        candidates::evidence_history(store, project, &history_entries)?
     } else {
         Vec::new()
     };
@@ -1616,7 +1661,9 @@ fn assertion_json(
         "span": {"start": assertion.span_start, "end": assertion.span_end},
         "subject": assertion.subject, "predicate": assertion.predicate, "value": assertion.value,
         "asserted_by": assertion.asserted_by, "attributed_to": assertion.attributed_to,
-        "attribution_verified": assertion.attribution_verified
+        "attribution_verified": assertion.attribution_verified,
+        "act": assertion.act, "epistemic_basis": assertion.epistemic_basis,
+        "polarity": assertion.polarity, "confidence_millis": assertion.confidence_millis
     });
     if expand_source {
         let source = store
@@ -1927,8 +1974,8 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
     let (usage, summary, related) = match command {
         "" => (
             "merl <group> <command>",
-            "Groups: project, issue, source, inbox, show. Run `merl help <group>` for commands.",
-            vec!["project", "issue", "source", "inbox", "show"],
+            "Groups: project, issue, source, candidate, inbox, show. Run `merl help <group>` for commands.",
+            vec!["project", "issue", "source", "candidate", "inbox", "show"],
         ),
         "project" => (
             "merl project <command>",
