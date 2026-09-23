@@ -188,6 +188,40 @@ Merl never edits a source event. If a user edits GitHub comment 771, Merl captur
 
 Capture retries must also agree on the entity author's stable provider ID when both captures include one. Merl checks those IDs after the existing identity and content digest and returns `SourceConflict` on disagreement. The entity author may differ from the actor who edited the version. Merl keeps author fields out of the capture digest for compatibility with older captures, preserves the first capture's author, and leaves unknown authors unknown. It does not infer authorship from a login, edit actor, or source text.
 
+Live `issue capture` resolves the repository's immutable ID to a durable binding
+and records its initial compilation mode, coverage requirement, and
+`github_capture_v1` policy version. Refresh reuses that policy. The first command
+supports eager/required, capture-only, and on-demand bindings; it rejects
+optional eager capture instead of treating optional coverage as a timing rule.
+Changing a binding policy requires a separate authorized action.
+
+A live capture records the latest exposed body of each entity at the current
+Merl observation position. Provider edit IDs and times remain provenance; they
+do not move the interpretation basis into the past. Merl preserves observed
+versions across refreshes without claiming historical replay of uncaptured
+bodies. The offline corpus path retains its existing historical-fidelity rules.
+
+A complete refresh that no longer exposes a captured comment appends an
+`observed_deletion` source version. It supersedes the last observed version,
+retains no replacement body, and leaves the upstream deletion timestamp unknown.
+The source transaction creates the existing evidence-impact records for dependent
+accepted objects. Later compiler contexts include a null body and
+`observed_deletion_of` predecessor ID, so the deletion cannot block unrelated new
+prose or masquerade as prose. Merl keeps the earlier payload available for audit.
+Incomplete provider pages produce an incomplete capture result without inferring
+deletions.
+
+The CLI holds an exclusive capture lock across provider fetch and compiler
+dispatch. It rejects overlapping captures and validates incoming timestamps
+before appending source versions.
+
+Eager work uses one run identity derived from the immutable source version.
+Merl persists the causal context and intent before dispatch, then records the
+result through the existing compiler boundary. Repeated refreshes reuse completed
+results, including failures. A pending intent can resume after interruption;
+external execution may repeat if the process died before recording its result.
+Capture-only sources and observed deletions do not invoke the prose compiler.
+
 Merl normally retains captured content because upstream content can change or disappear. An external URL alone is not enough for replay or audit. The metadata record and the retained bytes have different lifetimes: source metadata is append-only, while policy may require deletion or redaction of the content.
 
 An authorized administrative purge removes the retained payload or destroys its encryption key. Merl keeps a tombstone with the source identity, digest, actor, time, scope, and reason. It also marks dependent derivations as having unavailable evidence and reports that affected history can no longer be replayed from the retained store. Purge is an audited exception to byte retention, not a rewrite that pretends the source never existed.

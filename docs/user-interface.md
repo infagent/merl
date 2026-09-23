@@ -76,6 +76,58 @@ merl help session checkpoint --format json
 
 Top-level help lists command groups, not every flag and example. Subcommand help describes arguments, outcomes, error codes, examples, and related commands. JSON help uses a versioned schema so an agent can inspect one operation without loading the whole command surface.
 
+Capture a live Issue after initializing a local project:
+
+```bash
+merl project init --id project-a --database project.sqlite
+merl issue capture --project project-a --database project.sqlite \
+  --repository acme/project-a --issue 204 \
+  --program /path/to/compiler --compiler-version v1 --model model-id \
+  --prompt-digest sha256:<64-hex-digits> --format json
+```
+
+Install GitHub CLI (`gh`) and authenticate with `gh auth login` or its supported
+environment credentials. Merl invokes `gh api graphql` and keeps credentials out
+of project records. `--github-program` selects a compatible executable for a
+controlled provider; `--observed-at` supplies an RFC 3339 observation time for
+repeatable captures. Without that option, Merl uses the node clock.
+
+The first capture establishes a binding by immutable repository ID and records
+`github_capture_v1` policy. The defaults are `--mode eager --coverage required`.
+Use `--mode capture_only --coverage optional` to retain prose without compiler
+work. `on_demand` also leaves sources cold. This command rejects `eager` with
+`optional` coverage. A refresh reuses the binding's stored policy, even when the
+caller supplies different defaults; capture flags cannot change an existing
+binding's policy.
+
+Merl holds an exclusive capture lock across provider fetch and compiler dispatch.
+An overlapping capture reports `AUTHORITY_BUSY` without dispatching work.
+
+Repeat `issue capture` to refresh the Issue. Merl retains each observed body,
+links edits to the previous capture, and records missing comments after a complete
+provider response. A missing comment gets a bodyless deletion observation at
+capture time. Its earlier body remains available; Merl does not infer the upstream
+deletion time. Partial pages cannot establish that a comment disappeared. Merl rejects older
+provider timestamps before appending source versions.
+
+Each new eager body gets a causal compiler intent before execution. A successful
+or failed completed run keeps its identity on refresh and does not run again.
+An interrupted pending intent can resume with the same compiler configuration.
+Compilation records assertions; deterministic provider policy accepts open/closed
+state, labels, assignees, and timestamps through the project revision and inbox.
+Semantic assertion acceptance uses the separate policy workflow.
+
+Both output modes report `captured`, `unchanged`, `failed`, or `incomplete`.
+JSON uses `merl.issue-capture/v1` and reports the binding policy, new version and
+run IDs, capture and compiler counts, observation head, and accepted revision.
+`failed` reports provider-request or compiler failures; `incomplete` means the
+provider response could not establish a complete snapshot. A failed compiler
+leaves its captured source and recorded intent available for inspection. Invalid
+arguments and store conflicts use the existing error envelope and a nonzero exit.
+
+Merl bounds each provider response at 16 MiB. This command performs one refresh;
+it does not start polling or publish to GitHub.
+
 Import a development fixture without GitHub credentials:
 
 ```bash

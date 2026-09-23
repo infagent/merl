@@ -85,7 +85,7 @@ The release includes:
 - Release Please configuration for conventional-commit release pull requests, tags, and GitHub releases;
 - a Rust workspace with SQLite migrations and local commands equivalent to the CI checks;
 - one local project authority with serialized accepted writes;
-- GitHub Issue identity and immutable capture of descriptions, comments, and edits;
+- GitHub Issue identity and public incremental capture of descriptions, comments, edits, and observed deletions;
 - binding-scoped compilation mode and coverage requirement, with selected human Issue comments configured as `eager` and `required`;
 - separate provider-owned Issue facts and Merl-owned semantic state;
 - protected payloads with independent erasure scopes, audited administrative purge, and tombstones;
@@ -148,7 +148,9 @@ The release is ready when:
 - accepted-object lifecycle and evidence-support status remain separate while revalidation is pending;
 - cosmetic and material edits exercise policy paths that respectively retain current support or supersede, weaken, or invalidate it;
 - GitHub owns mirrored fields such as open or closed state, labels, and provider timestamps;
-- the offline corpus importer uses a fixed `fixture_import_v1` capture policy (`eager`, `required`) for every source version. Its `SourceBinding` record identifies the provider namespace; it does not yet select a general binding policy. That selection arrives with the compiler work;
+- live `issue capture` establishes a repository binding and durable capture policy, refreshes without duplicate versions or completed compiler work, and reports incomplete provider responses without inferring deletions;
+- live eager bodies receive a causal compilation intent before execution; optional capture-only or on-demand sources stay cold;
+- the offline corpus importer retains its fixed `fixture_import_v1` capture policy (`eager`, `required`) for every source version; live binding policy does not change fixture imports;
 - Merl owns derived fields such as requirements, blockers, decisions, and research claims;
 - a Merl command cannot report a provider-owned field changed until GitHub reports that change;
 - a trusted provider observation follows deterministic policy, advances the same project revision as semantic changes, and appears through the same delta and inbox cursor;

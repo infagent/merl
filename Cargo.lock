@@ -214,6 +214,7 @@ dependencies = [
  "merl-store",
  "serde_json",
  "sha2",
+ "time",
 ]
 
 [[package]]
@@ -260,6 +261,7 @@ dependencies = [
 name = "merl-ingest"
 version = "0.1.0"
 dependencies = [
+ "merl-compiler",
  "merl-core",
  "merl-corpus",
  "merl-policy",
@@ -534,6 +536,7 @@ dependencies = [
  "deranged",
  "num-conv",
  "powerfmt",
+ "serde_core",
  "time-core",
  "time-macros",
 ]

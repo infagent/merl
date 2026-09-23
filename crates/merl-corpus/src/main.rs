@@ -1,5 +1,7 @@
 //! Maintainer tooling for capturing and validating evaluation fixtures.
 
+use merl_corpus::github::ISSUE_QUERY;
+
 use std::{
     env, fs,
     path::Path,
@@ -24,38 +26,6 @@ Usage:
 The capture command requires a separately installed GitHub CLI (gh).
 Authenticate with gh auth login or supply GH_TOKEN. captured-at must be an
 RFC 3339 timestamp supplied by the caller so fixture creation is explicit.
-";
-
-const ISSUE_QUERY: &str = r"
-query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
-  repository(owner: $owner, name: $name) {
-    id
-    nameWithOwner
-    licenseInfo { spdxId }
-    issue(number: $number) {
-      id number title state closedAt url body createdAt updatedAt lastEditedAt includesCreatedEdit
-      labels(first: 100) { nodes { id name } pageInfo { hasNextPage } }
-      assignees(first: 100) { nodes { id login } pageInfo { hasNextPage } }
-      milestone { title }
-      author { login ... on Node { id } }
-      userContentEdits(first: 100) {
-        nodes { id editedAt editor { login ... on Node { id } } diff deletedAt }
-        pageInfo { hasNextPage }
-      }
-      comments(first: 100, after: $endCursor) {
-        nodes {
-          id body createdAt updatedAt lastEditedAt includesCreatedEdit
-          author { login ... on Node { id } }
-          userContentEdits(first: 100) {
-            nodes { id editedAt editor { login ... on Node { id } } diff deletedAt }
-            pageInfo { hasNextPage }
-          }
-        }
-        pageInfo { hasNextPage endCursor }
-      }
-    }
-  }
-}
 ";
 
 fn main() -> ExitCode {

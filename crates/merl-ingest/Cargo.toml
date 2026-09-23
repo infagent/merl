@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+merl-compiler = { path = "../merl-compiler" }
 merl-core = { path = "../merl-core" }
 merl-corpus = { path = "../merl-corpus" }
 merl-store = { path = "../merl-store" }

@@ -10,6 +10,39 @@ use crate::fixture::{
     validate,
 };
 
+/// GitHub query shared by offline corpus capture and live Issue refresh.
+pub const ISSUE_QUERY: &str = r"
+query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    id
+    nameWithOwner
+    licenseInfo { spdxId }
+    issue(number: $number) {
+      id number title state closedAt url body createdAt updatedAt lastEditedAt includesCreatedEdit
+      labels(first: 100) { nodes { id name } pageInfo { hasNextPage } }
+      assignees(first: 100) { nodes { id login } pageInfo { hasNextPage } }
+      milestone { title }
+      author { login ... on Node { id } }
+      userContentEdits(first: 100) {
+        nodes { id editedAt editor { login ... on Node { id } } diff deletedAt }
+        pageInfo { hasNextPage }
+      }
+      comments(first: 100, after: $endCursor) {
+        nodes {
+          id body createdAt updatedAt lastEditedAt includesCreatedEdit
+          author { login ... on Node { id } }
+          userContentEdits(first: 100) {
+            nodes { id editedAt editor { login ... on Node { id } } diff deletedAt }
+            pageInfo { hasNextPage }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+";
+
 /// Parse captured GraphQL pages and preserve missing prior edit bodies as gaps.
 ///
 /// # Errors

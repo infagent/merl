@@ -155,7 +155,9 @@ struct RenderedSource {
     version_actor_id: Option<String>,
     created_at_millis: i64,
     occurred_at_millis: i64,
-    body: String,
+    body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_deletion_of: Option<String>,
 }
 
 #[derive(JsonSchema, Serialize)]
@@ -344,6 +346,29 @@ fn build_context_with_basis(
     )
 }
 
+fn source_context_body(
+    store: &Store,
+    project: &ProjectId,
+    source: &merl_store::StoredSourceVersion,
+    observed_deletion: bool,
+) -> Result<Vec<u8>, CompileError> {
+    // A live deletion describes an observation, not replacement prose. Its
+    // predecessor remains in the manifest so later interpretations can see the loss.
+    if observed_deletion {
+        return Ok(Vec::new());
+    }
+    match store.read_payload(
+        project,
+        source
+            .payload
+            .as_ref()
+            .ok_or(CompileError::NonCausalHistory)?,
+    )? {
+        PayloadRead::Available(bytes) => Ok(bytes),
+        PayloadRead::Unavailable => Err(CompileError::MissingEvidence),
+    }
+}
+
 fn build_context_from_sources(
     store: &Store,
     project: &ProjectId,
@@ -370,8 +395,12 @@ fn build_context_from_sources(
         let item = store
             .source_version(project, &version)?
             .ok_or(CompileError::NonCausalHistory)?;
+        let observed_deletion = item.kind.as_str() == "observed_deletion"
+            && item.missing_body_reason == Some(merl_store::MissingSourceBody::DeletedByProvider)
+            && item.supersedes.is_some()
+            && item.payload.is_none();
         if item.ambiguous_order_with_previous
-            || item.payload.is_none()
+            || (item.payload.is_none() && !observed_deletion)
             || item.sequence > position.cutoff
             || item.sequence <= previous_sequence
             || item.context_scope_id != source.context_scope_id
@@ -379,15 +408,7 @@ fn build_context_from_sources(
             return Err(CompileError::NonCausalHistory);
         }
         previous_sequence = item.sequence;
-        let body = match store.read_payload(
-            project,
-            item.payload
-                .as_ref()
-                .ok_or(CompileError::NonCausalHistory)?,
-        )? {
-            PayloadRead::Available(bytes) => bytes,
-            PayloadRead::Unavailable => return Err(CompileError::MissingEvidence),
-        };
+        let body = source_context_body(store, project, &item, observed_deletion)?;
         payload_bytes = payload_bytes
             .checked_add(body.len())
             .ok_or(CompileError::InputBudget)?;
@@ -402,7 +423,16 @@ fn build_context_from_sources(
             version_actor_id: item.version_actor.map(|actor| actor.to_string()),
             created_at_millis: item.created_at_millis,
             occurred_at_millis: item.occurred_at_millis,
-            body: String::from_utf8(body).map_err(|_| CompileError::InvalidResponse)?,
+            body: if observed_deletion {
+                None
+            } else {
+                Some(String::from_utf8(body).map_err(|_| CompileError::InvalidResponse)?)
+            },
+            observed_deletion_of: if observed_deletion {
+                item.supersedes.map(|id| id.to_string())
+            } else {
+                None
+            },
         });
     }
     let selection = match selector {
@@ -554,6 +584,8 @@ fn select_objects(
     if let Some(trigger_source) = sources.iter().find(|item| item.id == trigger.as_str()) {
         for token in trigger_source
             .body
+            .as_deref()
+            .unwrap_or_default()
             .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
         {
             // An uppercase handle with a number is a structural hint, not a semantic claim.

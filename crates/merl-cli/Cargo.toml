@@ -16,6 +16,7 @@ merl-policy = { path = "../merl-policy" }
 merl-store = { path = "../merl-store" }
 serde_json.workspace = true
 sha2.workspace = true
+time.workspace = true
 
 [lints]
 workspace = true
