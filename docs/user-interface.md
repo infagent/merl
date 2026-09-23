@@ -169,6 +169,8 @@ merl source compilation-policy set github:acme/project-a \
 
 Compilation policy is part of the project-source binding. Mode is `capture_only`, `on_demand`, or `eager`; coverage is `required` or `optional`. Mode controls when extraction runs. Coverage controls whether an unprocessed observation blocks semantic completeness. A sender cannot override either field on an individual message. Structured commands and trusted provider observations bypass prose compilation.
 
+`source compile` records its authorization before starting the compiler. The authority rejects a missing request or a mismatch in source version, run, compiler and version, model, or prompt digest without creating compiler work. Repeating an existing `source require` with the same content returns the accepted requirement unchanged, even when another actor asks for it.
+
 `merl project status` makes authority and freshness visible:
 
 ```text
