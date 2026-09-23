@@ -155,7 +155,7 @@ On resume, Merl assembles the agent's identity and role, relevant active guidanc
 
 Agents can use different context-lifetime policies. `continuous` keeps one context across related work and suits a project manager that accumulates planning history. `task-scoped` closes the current session after a task stops being actionable and gives the next unrelated task a fresh model context. `manual` records continuity state but leaves reset timing to the user or host.
 
-Before a task-scoped reset, Merl durably records the session outcome, task and artifact references, cursor, checkpoint, and any proposed lessons, then releases the execution lease. Host-context clearing happens afterward as a retryable adapter action.
+Before a task-scoped reset, Merl durably records the checkpoint, cursor, references, and any proposed lessons, then releases the session's execution and workspace leases. Task outcomes and Assignment transitions are accepted separately; ending a model context cannot complete either one. Host-context clearing happens afterward as a retryable adapter action.
 
 The next session receives active guidance and current state for its new task, not the prior task's transcript. If the host cannot clear context, Merl reports that limitation without pretending the reset happened.
 
@@ -167,7 +167,7 @@ Humans can still start an agent outside Merl and attach it to an approved identi
 
 Each active session advertises its runtime: provider and model identifier, reasoning effort, useful capabilities, tool and source access, availability, context-reset support, and a relative cost class. The advertisement describes what is running now, not the logical agent's permanent identity. Merl records where each field came from and when it was observed.
 
-Tasks can state required capabilities, reasoning demand, risk, review requirements, and budget preference. A project manager can ask Merl for eligible agents and see why each candidate matches. A difficult task may favor an Opus session at high effort. A routine task may favor a Sonnet session at medium effort because it meets the requirements at lower expected cost. The project manager still makes or authorizes the assignment.
+Tasks can state required capabilities, reasoning demand, risk, review requirements, and budget preference. A project manager can ask Merl for eligible agents and see why each candidate matches. A difficult task may favor an Opus session at high effort. A routine task may favor a Sonnet session at medium effort because it meets the requirements at lower expected cost. The resulting StaffingDecision preserves that evidence and rationale. The Assignment records the logical agent's durable responsibility, while a disposable session holds the current execution lease.
 
 Model and effort help PMs plan assignments. They confer no repository access and do not satisfy review policy. Merl preserves assignment outcomes and measured token use so later decisions can rely on evidence rather than model branding alone.
 

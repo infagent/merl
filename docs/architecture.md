@@ -27,7 +27,7 @@ This document defines Merl's implementation architecture. The [product descripti
 | Direct prose | Immutable source evidence; delivery grants no semantic authority |
 | Work planning | Commitment, scheduling, and execution remain independent |
 | Agent continuity | Structured guidance and checkpoints outlive model context |
-| Agent selection | Session advertisements match task requirements with visible reasons |
+| Agent staffing | Eligible logical agents, ready sessions, and approved templates are ranked with visible reasons |
 | Agent provisioning | PMs instantiate only human-approved templates within delegated limits |
 | Workspace isolation | One writable worktree and branch per active assignment |
 | Temporary storage | Owned disk-backed scratch with reservations, quotas, and safe cleanup |
@@ -510,13 +510,18 @@ The control model contains:
 
 ```text
 Agent, AgentTemplate, SpawnRequest, ProvisioningAttempt,
-AgentSession, AgentAdvertisement, ContextPolicy, Assignment, Subscription,
+AgentSession, AgentAdvertisement, ContextPolicy, Assignment, StaffingDecision,
+Subscription,
 InboxEntry, Cursor, Lease, Checkpoint, Handoff, WaitCondition, Acknowledgement,
 AgentProfile, AgentGuidance, CrossProjectEnvelope, EnvelopeReceipt,
 MessageDelivery, SessionInboxLease, HostAction
 ```
 
-An `Assignment` connects an agent to a knowledge-plane `Task`. If the assignment expires, the task remains. A `WaitCondition` describes a runtime pause; a knowledge-plane `Blocker` describes an accepted project constraint. A task's durable review condition belongs to its scheduling state, while a `WaitCondition` parks one agent execution.
+An `Assignment` records durable responsibility between one logical `Agent` and a knowledge-plane `Task`. It may exist before a process starts and survives session replacement. Closing an assignment ends that responsibility; it does not delete the task or imply that the task completed.
+
+A `StaffingDecision` records why an authorized actor selected a logical agent, a ready session, or an agent template. It retains the task requirements, policy version, candidate evidence, and rationale. Disposable runtime facts do not become part of the Assignment.
+
+An `AgentSession` may execute an Assignment only while it holds a current execution lease. The lease identifies the concrete session and the advertisement used for that execution. A replacement session receives a new lease; leases are never transferred between sessions. A `WaitCondition` describes a runtime pause; a knowledge-plane `Blocker` describes an accepted project constraint. A task's durable review condition belongs to its scheduling state, while a `WaitCondition` parks one agent execution.
 
 Current leases and process sessions may expire. Assignment history, checkpoints, handoffs, acknowledgements, and failed delivery records remain available for recovery and diagnosis.
 
@@ -551,7 +556,7 @@ A checkpoint preserves continuity, not truth. Current accepted state wins when a
 
 ### Delegated agent provisioning
 
-An `AgentTemplate` defines the limits within which a project manager may create agents. A human or another actor with delegation authority sets:
+An `AgentTemplate` defines the limits within which a project manager may create agents. An authorized human sets:
 
 - role and allowed projects
 - host adapter and model or effort bounds
@@ -559,11 +564,11 @@ An `AgentTemplate` defines the limits within which a project manager may create 
 - context, workspace, review, and storage policies
 - concurrency and relative cost limits
 
-The template contains credential references, never secret values. Changing a template or its delegation requires the same authority as the original grant.
+The template contains credential references, never secret values. An authorized human also grants, changes, or revokes a PM's delegation. Phase 5 does not support recursive delegation.
 
 An authorized PM submits a `SpawnRequest` against one template and task. Policy checks the delegation, task state, concurrency, cost allowance, source access, and storage reservation before accepting it. The accepted transition creates a logical agent instance or selects a reusable identity, reserves its resources, and writes a durable provisioning intent.
 
-A host worker acts after commit. Each `ProvisioningAttempt` records the host, template version, requested runtime, time, result, and external session reference. Host failure leaves the request failed or retryable; it does not mark the agent available. Only a ready session may advertise availability, receive a workspace lease, and start an assignment.
+A host worker acts after commit. Each `ProvisioningAttempt` records the host, template version, requested runtime, time, result, and external session reference. During provisioning, the Assignment already records who is responsible, while execution remains inactive with no session lease. Host failure leaves the request failed or retryable; it does not mark the agent available or the Assignment as executing. Only a ready session may advertise availability, lease the Assignment and workspace, and begin work.
 
 PMs may drain or stop agents created under their delegation. Draining blocks new assignments and lets current work checkpoint. Stopping follows the session-closure rules and releases reservations only after the host confirms exit. A PM cannot widen permissions, reveal credentials, change template limits, or provision an unapproved runtime.
 
@@ -583,11 +588,11 @@ An `AgentSession` is one disposable model-context generation for a logical agent
 
 The mode is configurable by agent and may have a project-specific override. Roles can provide defaults, but Merl does not assume every developer is task-scoped or every manager is continuous.
 
-A task-scoped session closes through a durable transition before any host side effect. The accepted transition records the final checkpoint, task outcome and references, cursor, proposed guidance, assignment state, and lease release. After commit, a host adapter clears or replaces the model context. Failure leaves a retryable context action and never rolls back the checkpoint or task state.
+A task-scoped session closes through a durable transition before any host side effect. The accepted transition records the final checkpoint, cursor, proposed guidance, session closure, and lease releases. It may refer to Task or Assignment transitions that were accepted separately, but closing a session does not complete either one. After commit, a host adapter clears or replaces the model context. Failure leaves a retryable context action and never rolls back the checkpoint or lease release.
 
 Automatic closure requires the bound task to be completed, cancelled, deferred, or otherwise non-actionable according to policy. Merl does not reset an agent with active work merely because another task arrived. A user can request an early close, but the same checkpoint and lease-release rules apply.
 
-The next session receives a new generation ID and the bounded resume projection. Active guidance such as a TDD practice survives; transcript tokens and incidental reasoning from the previous task do not. A continuous session still consumes role deltas and bounded views so its context need not grow without limit.
+The next session receives a new generation ID, new execution and workspace leases, and the bounded resume projection. Active guidance such as a TDD practice survives; transcript tokens and incidental reasoning from the previous task do not. A continuous session still consumes role deltas and bounded views so its context need not grow without limit.
 
 ### Runtime advertisements and assignment
 
@@ -601,7 +606,7 @@ An `AgentAdvertisement` describes the runtime available for one `AgentSession`. 
 - relative cost class and measured usage when available
 - provenance and observation time for every field
 
-The advertisement belongs to the session, not the logical `AgentProfile`. A new session publishes a new advertisement. Historical advertisements remain attached to their assignments and outcomes, while stale sessions are not eligible for new work.
+The advertisement belongs to the session, not the logical `AgentProfile`. A new session publishes a new advertisement. Historical advertisements remain attached to staffing decisions, execution leases, and outcomes, while stale sessions are not eligible for new work.
 
 Host-attested values are preferable. Operator-configured and self-reported values remain useful but carry their actual provenance. Merl does not present a self-reported model, capability, or effort level as independently verified.
 
@@ -609,13 +614,13 @@ Effort names are not assumed to mean the same thing across hosts or providers. M
 
 A `Task` may carry assignment requirements: necessary capabilities and access, minimum reasoning demand, risk, required review path, budget preference, and concurrency constraints. These fields describe the work rather than naming a preferred agent.
 
-Candidate selection first removes ineligible sessions, then orders the remainder through a versioned assignment policy. The result explains each inclusion, exclusion, and tradeoff. A cost-preferring policy selects the least expensive eligible runtime; it never chooses a cheaper session that misses a hard requirement. A capability-preferring policy can favor additional headroom for risky or difficult work.
+Candidate selection first removes ineligible candidates, then orders the remainder through a versioned staffing policy. A candidate may be a logical agent selected for manual startup, a ready session available for reuse, or an approved template that can provision a session. The result explains each inclusion, exclusion, and tradeoff without presenting template declarations as observed runtime facts. A cost-preferring policy selects the least expensive eligible option; it never chooses a cheaper option that misses a hard requirement. A capability-preferring policy can favor additional headroom for risky or difficult work.
 
-Selection is advisory until an authorized actor commits an `Assignment`. That record captures the chosen session advertisement, task requirements, policy version, and human or automated rationale. Runtime properties grant no project membership, source capability, or authority.
+Selection is advisory until an authorized actor commits a `StaffingDecision` and, when responsibility changes, an `Assignment`. The StaffingDecision retains the requirements, policy version, candidate evidence, and rationale. The Assignment records only durable Agent-to-Task responsibility. A session chosen or created for the work receives a separate execution lease carrying its actual advertisement. Runtime properties grant no project membership, source capability, or authority.
 
 ### Concurrent repository work
 
-A `Workspace` is node-local operational state that connects an agent session and assignment to one source checkout. Its record contains the source ID, task and assignment IDs, canonical path, filesystem identity where available, access mode, strategy, Git object store, branch or detached commit, base revision, creation time, and lease state.
+A `Workspace` is node-local operational state belonging to an Assignment or other durable unit of work. Its record contains the source ID, task and assignment IDs, logical agent ID, canonical path, filesystem identity where available, access mode, strategy, Git object store, branch or detached commit, base revision, creation time, and lease state. The active session leases access to the workspace; replacing the session does not replace the workspace.
 
 The default strategy for a writable assignment on one node is a managed Git worktree:
 
@@ -1031,7 +1036,7 @@ The `merl` CLI is the public interface for humans, agents, scripts, CI, and eval
 
 External compilers receive an immutable rendered `CompilationContext` and return a bounded, versioned response. The schema accepts typed assertions, source spans, relations, confidence, attribution, and structured context or unresolved outcomes. It rejects undeclared prose fields and responses beyond the run budget. Compilers cannot access the database or retrieve extra history directly. Merl records the context manifest and configuration needed to compare runs, while secrets remain outside persisted provenance.
 
-The first process-adapter wire format and historical fixture import path are specified in [compiler process protocol](compiler-protocol.md).
+The first process-adapter wire format and historical fixture import path are specified in [compiler process protocol](reference/compiler-protocol.md).
 
 ### GitHub
 
@@ -1116,14 +1121,14 @@ The implementation must preserve these rules:
 - Agent guidance is scoped, attributable, lifecycle-managed, and subordinate to project policy.
 - Every fresh model context receives a bounded resume pointer; durable guidance and command documentation load only on demand.
 - Logical agents and disposable model-context generations are separate identities.
-- Context clears occur only after durable checkpoint, cursor, task-reference, assignment, and lease transitions commit.
+- Context clears occur only after the checkpoint, cursor, session closure, and lease releases commit.
 - A failed or unsupported host reset cannot masquerade as a cleared context.
 - Task-scoped reset removes prior transcript context but preserves active guidance and current project references.
 - Model, effort, availability, and cost describe an agent session rather than its logical identity.
 - Runtime advertisements retain field provenance and observation time; stale sessions are ineligible for new assignments.
 - Runtime advertisements never grant project membership, provider capability, or source access.
-- Candidate ranking excludes agents that miss hard task requirements and explains ordering among eligible agents.
-- An authorized assignment records the task requirements and session advertisement used to make the choice.
+- Candidate ranking excludes candidates that miss hard task requirements and explains ordering among eligible candidates.
+- A `StaffingDecision` records the requirements, candidate evidence, policy, and rationale. An `Assignment` records durable Agent-to-Task responsibility, while runtime advertisements belong to session execution.
 - PM agent creation stays within a human-approved template, delegation, concurrency limit, cost limit, and credential scope.
 - An agent is unavailable until its provisioning attempt produces a durable ready session.
 - Duplicate or ambiguous provisioning attempts cannot start two agents for one accepted spawn request.

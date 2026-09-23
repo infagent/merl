@@ -6,7 +6,7 @@ Thanks for taking the time to contribute. Merl is early in development, so bug r
 
 Read the [README](README.md) and search the [issue tracker](https://github.com/infagent/merl/issues) first. An existing issue may answer the question or provide a better place to add context.
 
-Merl's current implementation scope lives in the [first release plan](docs/first-release.md). The [product description](docs/product-description.md), [UI behavior contract](docs/user-interface.md), and [architecture](docs/architecture.md) describe the intended system beyond that release.
+Merl's current implementation scope lives in the [first release plan](docs/plans/first-release.md). The [product description](docs/product-description.md), [UI behavior contract](docs/user-interface.md), and [architecture](docs/architecture.md) describe the intended system beyond that release.
 
 ## Ask a question
 
@@ -52,7 +52,7 @@ cargo test --locked --workspace --all-features
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
 ```
 
-If you are capturing GitHub fixtures, install and authenticate `gh` separately. See the [corpus capture instructions](docs/evaluation-corpus.md#capture-dependency). Ordinary builds and tests do not require it.
+If you are capturing GitHub fixtures, install and authenticate `gh` separately. See the [corpus capture instructions](docs/evaluation/evaluation-corpus.md#capture-dependency). Ordinary builds and tests do not require it.
 
 Repository-specific engineering rules live in [AGENTS.md](AGENTS.md). They apply to human- and agent-authored changes alike.
 

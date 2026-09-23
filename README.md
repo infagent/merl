@@ -14,7 +14,7 @@ On one computer, concurrent writers use separate Git worktrees and task branches
 
 Merl ships as a Rust CLI and project authority. Local projects use SQLite; shared projects use the same application services behind a reachable authority. Agents discover commands through concise, hierarchical help and consume versioned JSON output when human-readable output is not appropriate.
 
-Merl is under active design. Read the [product description](docs/product-description.md), [UI behavior contract](docs/user-interface.md), [architecture](docs/architecture.md), [first release plan](docs/first-release.md), and [architecture decisions](docs/adr/).
+Merl is under active design. Start with the [product description](docs/product-description.md), then read the [roadmap](docs/roadmap.md), [UI behavior contract](docs/user-interface.md), [architecture](docs/architecture.md), and [architecture decisions](docs/adr/).
 
 ## Contributing
 

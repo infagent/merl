@@ -667,14 +667,16 @@ merl agent context-policy set project-a-researcher --mode manual
 merl agent context-policy show project-a-dev
 ```
 
-With `task-scoped`, Merl closes the session after its bound task becomes completed, cancelled, deferred, or otherwise non-actionable. Before asking the host to clear context, it commits a final checkpoint, result references, cursor, proposed lessons, assignment state, and lease release.
+With `task-scoped`, Merl closes the session after its bound task becomes completed, cancelled, deferred, or otherwise non-actionable. The Task outcome and any Assignment transition are accepted independently. Before asking the host to clear context, session closure commits a final checkpoint, cursor, proposed lessons, and lease releases.
 
 ```bash
+merl task complete T44 \
+  --result github:acme/project-a/pull/229
+
 merl session close \
   --agent project-a-dev \
-  --task T44 \
-  --outcome completed \
-  --ref github:acme/project-a/pull/229 \
+  --assignment A44 \
+  --reason task-non-actionable \
   --propose-lesson 'Run compatibility tests before changing reader framing'
 ```
 
@@ -686,7 +688,7 @@ CHECKPOINT CP91 committed at project-a@512
 CONTEXT CLEAR pending through host adapter
 ```
 
-If the adapter cannot reset context, Merl reports `context_reset_unsupported` and gives the user a manual next step. It does not claim that generation 18 was cleared. Starting the next task creates generation 19 with active guidance and current state for that task, without generation 18's transcript.
+If the adapter cannot reset context, Merl reports `context_reset_unsupported` and gives the user a manual next step. It does not claim that generation 18 was cleared. Starting the next task creates generation 19 with active guidance and current state for that task, without generation 18's transcript. Replacing a context while work remains creates a new session and new leases on the existing Assignment and workspace; it does not transfer generation 18's leases.
 
 An agent with `continuous` policy stays in the same generation after completing a task. It still receives compact deltas and bounded views. A manual clear uses the same safe closure path:
 
@@ -753,7 +755,7 @@ merl task assign T52 --to project-a-senior-dev \
   --reason 'High-risk parser change needs reasoning headroom'
 ```
 
-A runtime advertisement cannot grant access or satisfy a review requirement. Merl records the advertisement and task requirements used for the assignment so the team can compare the prediction with task outcome and token use.
+A runtime advertisement cannot grant access or satisfy a review requirement. Merl records the requirements, candidate evidence, policy, and rationale in a StaffingDecision. The Assignment records the logical agent's durable responsibility, while the concrete session advertisement belongs to its execution lease and outcome. This history lets the team compare the staffing prediction with Task outcome and token use.
 
 ### Spawning agents within delegated limits
 
@@ -1139,7 +1141,7 @@ The evaluator-side `merl-eval` tool compares Merl with practical alternatives un
 merl-eval run --plan /path/to/frozen-evaluation-plan.json
 ```
 
-The report records model and version, reasoning effort, prompts, available tools, sampling controls, per-trial answers, correctness, total token cost, and variance. It identifies the read count where each approach becomes cheaper than repeated raw-history consumption. A hindsight compilation cannot enter a causal Merl trial. See the [benchmark harness](benchmark-harness.md) for the process protocol and held-out gate.
+The report records model and version, reasoning effort, prompts, available tools, sampling controls, per-trial answers, correctness, total token cost, and variance. It identifies the read count where each approach becomes cheaper than repeated raw-history consumption. A hindsight compilation cannot enter a causal Merl trial. See the [benchmark harness](evaluation/benchmark-harness.md) for the process protocol and held-out gate.
 
 ## Errors and non-interactive use
 
@@ -1161,7 +1163,7 @@ Scenarios interact through public actions and observable results. They do not qu
 
 Provider scenarios use controlled GitHub and artifact-store fakes at the external boundary. The runner supplies deterministic time and aliases for generated IDs while assertions use public output.
 
-Useful tags include `@first_release`, `@local`, `@shared`, `@offline`, `@github`, `@cross_project`, and `@recovery`. The [first release plan](first-release.md) owns which scenarios carry `@first_release`; this larger contract also describes deferred behavior.
+Useful tags include `@first_release`, `@local`, `@shared`, `@offline`, `@github`, `@cross_project`, and `@recovery`. The [first release plan](plans/first-release.md) owns which scenarios carry `@first_release`; this larger contract also describes deferred behavior.
 
 ### Project context is never guessed
 
@@ -1796,8 +1798,9 @@ Feature: Control agent context lifetime
     And generation 18 is bound to task "T44"
     And the agent has an active TDD practice
     When task "T44" is completed with its result references
-    Then Merl durably closes generation 18 before requesting a context reset
-    And Merl records the checkpoint, cursor, assignment, and lease transitions
+    Then Merl accepts the Task outcome and closes its Assignment separately from the session
+    And Merl durably closes generation 18 before requesting a context reset
+    And session closure records the checkpoint, cursor, and lease releases
     When the agent starts unrelated task "T52"
     Then generation 19 contains the active TDD practice
     And generation 19 contains current state for task "T52"

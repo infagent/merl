@@ -9,7 +9,7 @@ Read the documents that govern the work before changing code:
 - `README.md` for the product boundary;
 - `docs/architecture.md` for state semantics and invariants;
 - `docs/user-interface.md` for observable behavior;
-- `docs/first-release.md` for current scope and acceptance criteria;
+- `docs/plans/first-release.md` for current scope and acceptance criteria;
 - `docs/adr/` for decisions that should not be reopened casually.
 
 Treat the assigned GitHub issue as the unit of work. Do not pull deferred features into an implementation because the architecture mentions them. If code and a governing document disagree, stop and surface the conflict.
