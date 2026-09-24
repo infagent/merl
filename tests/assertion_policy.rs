@@ -4,6 +4,13 @@ mod assertion_policy;
 use assertion_policy::AssertionScenario;
 
 #[test]
+fn temporal_revalidation_requires_the_same_available_deferral_reason() {
+    assertion_policy::DeferralReviewCases::given_deferred_tasks_with_edited_reasons()
+        .when_each_edit_is_recompiled_and_confirmation_is_requested()
+        .then_only_unchanged_available_reasons_restore_support();
+}
+
+#[test]
 fn temporal_dates_require_recorded_timezone_evidence() {
     assertion_policy::TemporalScenario::given_a_relative_date_without_timezone_evidence()
         .when_the_source_is_compiled()

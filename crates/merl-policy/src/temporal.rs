@@ -1,8 +1,11 @@
-//! Unresolved calendar values cannot gain authority through an acceptance shortcut.
+//! Guard temporal acceptance and preserve planning meaning during support refreshes.
 
 use crate::PolicyError;
-use merl_core::{ObjectId, PolicyDisposition, ProjectId, temporal::TemporalValue};
-use merl_store::{Candidate, Execution, Store, StructuralAssertion};
+use merl_core::{
+    ObjectId, PolicyDisposition, ProjectId,
+    temporal::{Span, TemporalValue},
+};
+use merl_store::{Candidate, Execution, PayloadRead, Store, StructuralAssertion};
 
 pub(super) fn unresolved(assertion: &StructuralAssertion) -> bool {
     assertion
@@ -47,7 +50,7 @@ pub(super) fn changed(
 ) -> Result<bool, PolicyError> {
     let original = store.object_assertion(project, object)?;
     let original_temporal = original.as_ref().map_or(&[][..], |a| a.temporal.as_slice());
-    Ok(assertion
+    if assertion
         .temporal
         .iter()
         .map(|t| (&t.original.role, &t.value))
@@ -56,5 +59,42 @@ pub(super) fn changed(
             .iter()
             .map(|t| (&t.original.role, &t.value))
             .collect::<Vec<_>>()
-        || assertion.deferral != original.and_then(|a| a.deferral))
+    {
+        return Ok(true);
+    }
+    match (
+        original
+            .as_ref()
+            .and_then(|a| a.deferral.as_ref().map(|d| (a, d))),
+        &assertion.deferral,
+    ) {
+        (None, None) => Ok(false),
+        (Some((original, old)), Some(new)) if old.accepted == new.accepted => {
+            // Offsets locate evidence; equal offsets across edits do not establish
+            // equal meaning. Compare the semantic origin, even after support refreshes.
+            let old_reason = reason_bytes(store, project, original, &old.reason)?;
+            let new_reason = reason_bytes(store, project, assertion, &new.reason)?;
+            Ok(old_reason.is_none() || new_reason.is_none() || old_reason != new_reason)
+        }
+        _ => Ok(true),
+    }
+}
+
+/// Resolve only the reason span; erased or missing evidence cannot prove equality.
+fn reason_bytes(
+    store: &Store,
+    project: &ProjectId,
+    assertion: &StructuralAssertion,
+    span: &Span,
+) -> Result<Option<Vec<u8>>, PolicyError> {
+    let Some(payload) = store
+        .source_version(project, &assertion.source)?
+        .and_then(|s| s.payload)
+    else {
+        return Ok(None);
+    };
+    let PayloadRead::Available(bytes) = store.read_payload(project, &payload)? else {
+        return Ok(None);
+    };
+    Ok(bytes.get(span.start..span.end).map(<[u8]>::to_vec))
 }

@@ -2,11 +2,14 @@
 mod relation_health;
 #[path = "assertion_policy/temporal.rs"]
 mod temporal;
+#[path = "assertion_policy/temporal_revalidation.rs"]
+mod temporal_revalidation;
 pub use relation_health::{
     IndependentRelationScenario, RelationHealthScenario, RelationUpgradeScenario,
     WithdrawalRaceScenario,
 };
 pub use temporal::{CalendarCases, CaptureCases, InvalidCases, TemporalScenario};
+pub use temporal_revalidation::DeferralReviewCases;
 
 use merl_compiler::{
     CompileError, CompilerAdapter, CompilerLimits, RunMode, RunRequest, prepare_eager_compilation,

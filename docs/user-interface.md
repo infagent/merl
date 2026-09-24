@@ -1702,6 +1702,11 @@ revision, lifecycle, and payload reference unchanged, including references to
 erased content. `show --source` exposes their reviews in `revalidation_history`;
 `policy_origin` and `history` continue to describe semantic object versions.
 
+For deferred tasks, `confirm` requires the same normalized planning values and
+the same reason text. The text may move to different byte offsets in an edited
+source. A changed reason or unavailable reason bytes returns a conflict with
+`revalidation_temporal_changed`, leaving support unrestored and evidence work pending.
+
 Resolution records use `merl.revalidation-resolution/v1`. They include the review
 request, impact, action, policy evaluation, disposition, reason, and accepted
 revision when present. The list and run schemas are `merl.revalidation-work/v1`
