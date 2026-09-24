@@ -9,9 +9,11 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-/// The first recorded candidate disposition for one immutable assertion input.
+/// The first recorded candidate disposition for one immutable compiler input.
 #[derive(Clone, Debug)]
 pub struct Candidate {
+    /// True for a typed relation; false for an object assertion.
+    pub relation: bool,
     /// Stable input identity used by review commands.
     pub id: PolicyInputId,
     /// Evaluation that first held this interpretation for review.
@@ -113,7 +115,7 @@ impl Store {
         Ok(())
     }
 
-    /// Finds an assertion candidate without expanding source prose.
+    /// Finds an assertion or relation candidate without expanding source prose.
     ///
     /// # Errors
     /// Returns storage errors or invalid recorded identities.
@@ -123,15 +125,16 @@ impl Store {
         id: &PolicyInputId,
     ) -> Result<Option<Candidate>, StoreError> {
         let row = self.connection.query_row(
-            "SELECT i.evaluation_id,a.run_id,a.assertion_index,e.basis_project_revision,i.reason_code
-             FROM policy_evaluation_inputs i JOIN policy_evaluations e
-             ON e.project_id=i.project_id AND e.id=i.evaluation_id
-             JOIN policy_assertion_inputs a ON a.project_id=i.project_id AND a.evaluation_id=i.evaluation_id AND a.input_id=i.input_id
-             WHERE i.project_id=?1 AND i.input_id=?2 AND i.input_kind='observed_assertion' AND i.disposition='candidate'
-             ORDER BY e.rowid LIMIT 1", params![project.as_str(), id.as_str()],
-            |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,u32>(2)?, r.get::<_,i64>(3)?, r.get::<_,String>(4)?))).optional()?;
-        row.map(|(evaluation, run, index, basis, reason)| {
+            "SELECT i.evaluation_id,a.run_id,a.position,e.basis_project_revision,i.reason_code,a.kind
+             FROM policy_evaluation_inputs i JOIN policy_evaluations e ON e.project_id=i.project_id AND e.id=i.evaluation_id
+             JOIN (SELECT project_id,evaluation_id,input_id,run_id,assertion_index AS position,'observed_assertion' AS kind FROM policy_assertion_inputs
+                   UNION ALL SELECT project_id,evaluation_id,input_id,run_id,relation_index,'observed_relation' FROM policy_relation_inputs) a
+             ON a.project_id=i.project_id AND a.evaluation_id=i.evaluation_id AND a.input_id=i.input_id AND a.kind=i.input_kind
+             WHERE i.project_id=?1 AND i.input_id=?2 AND i.disposition='candidate' ORDER BY e.rowid LIMIT 1",
+             params![project.as_str(),id.as_str()], |r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u32>(2)?,r.get::<_,i64>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?))).optional()?;
+        row.map(|(evaluation, run, index, basis, reason, kind)| {
             Ok(Candidate {
+                relation: kind == "observed_relation",
                 id: id.clone(),
                 evaluation: identifier(&evaluation)?,
                 run: identifier(&run)?,
@@ -161,7 +164,7 @@ impl Store {
         }
         self.project_revision(project)?;
         let mut statement = self.connection.prepare(
-            "SELECT DISTINCT input_id FROM policy_evaluation_inputs WHERE project_id=?1 AND input_kind='observed_assertion'
+            "SELECT DISTINCT input_id FROM policy_evaluation_inputs WHERE project_id=?1 AND input_kind IN ('observed_assertion','observed_relation')
              AND disposition='candidate' AND input_id>?2 ORDER BY input_id LIMIT ?3")?;
         let ids = statement
             .query_map(
@@ -219,9 +222,14 @@ impl Store {
             ),
             _ => (None, None, None),
         };
+        let (table, position) = if candidate.relation {
+            ("relation_reviews", "relation_index")
+        } else {
+            ("candidate_reviews", "assertion_index")
+        };
         self.connection.execute(
-            "INSERT INTO candidate_reviews (project_id,id,candidate_id,original_evaluation_id,run_id,assertion_index,actor_id,action,object_id,object_kind,payload_id,reason_payload_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            &format!("INSERT INTO {table} (project_id,id,candidate_id,original_evaluation_id,run_id,{position},actor_id,action,object_id,object_kind,payload_id,reason_payload_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"),
             params![project.as_str(),review.id.as_str(),review.candidate.as_str(),candidate.evaluation.as_str(),candidate.run.as_str(),i64::from(candidate.index),review.actor.as_str(),review.action.as_str(),object,kind,payload,review.reason.as_ref().map(PayloadId::as_str)])?;
         Ok(())
     }
@@ -236,7 +244,7 @@ impl Store {
         id: &PolicyInputId,
     ) -> Result<Option<CandidateReview>, StoreError> {
         let row = self.connection.query_row(
-            "SELECT candidate_id,actor_id,action,object_id,object_kind,payload_id,reason_payload_id FROM candidate_reviews WHERE project_id=?1 AND id=?2",
+            "SELECT candidate_id,actor_id,action,object_id,object_kind,payload_id,reason_payload_id FROM (SELECT * FROM candidate_reviews UNION ALL SELECT * FROM relation_reviews) WHERE project_id=?1 AND id=?2",
             params![project.as_str(),id.as_str()], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,Option<String>>(6)?))).optional()?;
         row.map(
             |(candidate, actor, action, object, kind, payload, reason)| {
@@ -271,7 +279,7 @@ impl Store {
         candidate: &PolicyInputId,
         offset: usize,
     ) -> Result<(Vec<CandidateReview>, bool), StoreError> {
-        let mut statement = self.connection.prepare("SELECT id FROM candidate_reviews WHERE project_id=?1 AND candidate_id=?2 ORDER BY rowid LIMIT 101 OFFSET ?3")?;
+        let mut statement = self.connection.prepare("SELECT id FROM (SELECT id,project_id,candidate_id,rowid AS ordering FROM candidate_reviews UNION ALL SELECT id,project_id,candidate_id,rowid FROM relation_reviews) WHERE project_id=?1 AND candidate_id=?2 ORDER BY ordering LIMIT 101 OFFSET ?3")?;
         let ids = statement
             .query_map(
                 params![
@@ -304,7 +312,16 @@ impl Store {
         project: &ProjectId,
         candidate: &Candidate,
     ) -> Result<Option<String>, StoreError> {
-        resolution(&self.connection, project, &candidate.run, candidate.index)
+        if candidate.relation {
+            super::compiler_relations::resolution(
+                &self.connection,
+                project,
+                &candidate.run,
+                candidate.index,
+            )
+        } else {
+            resolution(&self.connection, project, &candidate.run, candidate.index)
+        }
     }
 }
 

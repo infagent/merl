@@ -2,6 +2,8 @@
 
 mod authority;
 mod candidates;
+mod compiler_relations;
+pub use compiler_relations::{RelationBasis, StructuralRelation};
 mod commands;
 mod expansions;
 mod revalidation;
@@ -26,7 +28,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 25;
+const SCHEMA_VERSION: i64 = 26;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -991,6 +993,10 @@ impl Store {
             if version < 25 {
                 transaction
                     .execute_batch(include_str!("../migrations/0025_support_effects.sql"))?;
+            }
+            if version < 26 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0026_compiler_relations.sql"))?;
             }
             let broken: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
@@ -2221,6 +2227,30 @@ impl Store {
         result: &CompilationResult<'_>,
         requests: &[String],
     ) -> Result<(), StoreError> {
+        self.complete_compilation_with_relations(project, result, requests, &[])
+    }
+
+    /// Commits assertions, typed relations, and expansion requests with one result.
+    ///
+    /// # Errors
+    /// Rejects inconsistent results, invalid structural relations, and storage failures.
+    pub fn complete_compilation_with_relations(
+        &mut self,
+        project: &ProjectId,
+        result: &CompilationResult<'_>,
+        requests: &[String],
+        relations: &[StructuralRelation],
+    ) -> Result<(), StoreError> {
+        if relations.len()
+            > self
+                .compilation_run_status(project, result.run_id)?
+                .ok_or(StoreError::InvalidCompilation)?
+                .limits[3]
+                .saturating_mul(merl_core::RELATIONS_PER_ASSERTION_LIMIT)
+            || (!relations.is_empty() && (result.needs_context || result.failure_code.is_some()))
+        {
+            return Err(StoreError::InvalidCompilation);
+        }
         if !result.needs_context && !requests.is_empty() {
             return Err(StoreError::InvalidCompilation);
         }
@@ -2281,6 +2311,7 @@ impl Store {
             ],
         )?;
         insert_assertions(&transaction, project, result, &source_window)?;
+        compiler_relations::insert(&transaction, project, result.run_id, relations)?;
         if result.needs_context {
             expansions::insert_work(&transaction, project, result, &status, requests)?;
         }
@@ -3654,6 +3685,12 @@ impl Store {
                     "administrative_action" => {
                         merl_core::PolicyInput::AdministrativeAction(input_id)
                     }
+                    "observed_relation" => {
+                        let (run, index): (String, u32) = self.connection.query_row(
+                            "SELECT run_id,relation_index FROM policy_relation_inputs WHERE project_id=?1 AND evaluation_id=?2 AND input_id=?3",
+                            params![project.as_str(), id.as_str(), input_id.as_str()], |r| Ok((r.get(0)?,r.get(1)?)))?;
+                        merl_core::PolicyInput::ObservedRelation { id: input_id, run: merl_core::CompilationRunId::try_from(run.as_str()).map_err(|_|StoreError::CorruptHistory)?, index }
+                    }
                     "observed_assertion" => {
                         // The source reference is loaded below from its immutable assertion link.
                         let (run, index): (String, i64) = self.connection.query_row(
@@ -4791,7 +4828,7 @@ fn collect_purge_consequences(
     }
     let mut relation_statement = connection.prepare(
         "SELECT DISTINCT e.id,e.relation_id
-         FROM policy_assertion_inputs a
+         FROM (SELECT project_id,evaluation_id,input_id,run_id FROM policy_assertion_inputs UNION ALL SELECT project_id,evaluation_id,input_id,run_id FROM policy_relation_inputs) a
          JOIN policy_evaluation_inputs i
            ON i.project_id=a.project_id AND i.evaluation_id=a.evaluation_id AND i.input_id=a.input_id
          JOIN policy_evaluation_relation_events o
@@ -5218,6 +5255,9 @@ fn validate_policy_dependencies(
     if let Some(conflict) = commands::validate_commands(transaction, evaluation)? {
         return Ok(Some(conflict));
     }
+    if let Some(conflict) = compiler_relations::validate_reviews(transaction, evaluation)? {
+        return Ok(Some(conflict));
+    }
     if let Some(conflict) = candidates::validate_reviews(transaction, evaluation)? {
         return Ok(Some(conflict));
     }
@@ -5399,6 +5439,7 @@ fn insert_policy_record(
         }
     }
     candidates::record_review_lineage(transaction, evaluation, conflict.is_none() && !duplicate)?;
+    compiler_relations::record_lineage(transaction, evaluation)?;
     for (index, read) in evaluation.reads.iter().enumerate() {
         let (kind, target, revision) = match read {
             PolicyRead::Object { id, revision } => (
@@ -5669,7 +5710,9 @@ fn policy_evaluation_digest(
     for input in &evaluation.inputs {
         part(input.input.kind().as_bytes());
         part(input.input.id().as_str().as_bytes());
-        if let merl_core::PolicyInput::ObservedAssertion { run, index, .. } = &input.input {
+        if let merl_core::PolicyInput::ObservedAssertion { run, index, .. }
+        | merl_core::PolicyInput::ObservedRelation { run, index, .. } = &input.input
+        {
             part(run.as_str().as_bytes());
             part(&index.to_be_bytes());
         }

@@ -61,6 +61,9 @@ fn build_review(
     let candidate = store
         .candidate(project, &review.candidate)?
         .ok_or(PolicyError::CandidateMissing)?;
+    if candidate.relation {
+        return crate::relations::build_review(store, project, review, &candidate, now);
+    }
     let (original_object, event) = review_event(store, project, review, &candidate)?;
     let semantic = review.action != ReviewAction::Reject;
     let target_event = event.clone();
@@ -258,6 +261,9 @@ pub fn candidate_dependencies_current(
     project: &ProjectId,
     candidate: &Candidate,
 ) -> Result<bool, PolicyError> {
+    if candidate.relation {
+        return crate::relations::dependencies_current(store, project, candidate);
+    }
     let assertion = store
         .observed_assertions(project, candidate.run.as_str())?
         .into_iter()

@@ -34,12 +34,27 @@ pub(super) fn inspect(
         }
         _ => None,
     };
+    let relations = store
+        .observed_relations(project, run)?
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            relation_json(
+                store,
+                project,
+                run,
+                u32::try_from(index).map_err(|_| StoreError::CorruptHistory)?,
+                false,
+            )
+        })
+        .collect::<Result<Vec<_>, CliError>>()?;
     let result = json!({"schema":"merl.assertions/v1", "project":project.as_str(), "run":run.as_str(),
         "mode":status.mode, "completed":status.completed, "succeeded":status.succeeded,
         "needs_context":status.needs_context, "failure_code":status.failure_code,
         "response_available":retained, "assertions":details,
         "unresolved":response.as_ref().map(|r| &r.unresolved),
         "context_required":response.as_ref().map(|r| &r.context_required),
+        "relations":relations,
         "deferred_relations":response.as_ref().map(|r| &r.relations)});
     if json_output {
         return Ok(format!("{result}\n"));
@@ -60,9 +75,21 @@ pub(super) fn inspect(
             assertion.polarity
         ));
     }
+    for relation in &relations {
+        lines.push(format!(
+            "relation {}: {} {} {}{}",
+            relation["index"],
+            relation["subject"].as_str().unwrap_or("invalid"),
+            relation["predicate"].as_str().unwrap_or("invalid"),
+            relation["object"].as_str().unwrap_or("invalid"),
+            relation["rejection"]
+                .as_str()
+                .map_or_else(String::new, |reason| format!(" ({reason})"))
+        ));
+    }
     if let Some(response) = response {
         lines.push(format!(
-            "Unresolved spans: {}; context requests: {}; deferred relations: {}",
+            "Unresolved spans: {}; context requests: {}; relations: {}",
             response.unresolved.len(),
             response.context_required.len(),
             response.relations.len()
@@ -82,10 +109,12 @@ pub(super) fn render_application(
     let mut inputs = Vec::new();
     if let Some(result) = result {
         for input in &result.inputs {
-            let PolicyInput::ObservedAssertion { index, .. } = &input.input else {
+            let (PolicyInput::ObservedAssertion { index, .. }
+            | PolicyInput::ObservedRelation { index, .. }) = &input.input
+            else {
                 return Err(StoreError::CorruptHistory.into());
             };
-            inputs.push(json!({"index":index, "input":input.input.id().as_str(), "outcome":input.disposition.as_str(), "reason":input.reason.as_str()}));
+            inputs.push(json!({"kind":input.input.kind(), "index":index, "input":input.input.id().as_str(), "outcome":input.disposition.as_str(), "reason":input.reason.as_str()}));
         }
     }
     let value = json!({"schema":"merl.assertion-application/v1", "project":project.as_str(), "run":run.as_str(),
@@ -98,10 +127,11 @@ pub(super) fn render_application(
     if json_output {
         return Ok(format!("{value}\n"));
     }
-    let mut lines = vec![format!("Run {run}: {} assertion outcomes", inputs.len())];
+    let mut lines = vec![format!("Run {run}: {} input outcomes", inputs.len())];
     for input in inputs {
         lines.push(format!(
-            "{}: {} ({})",
+            "{} {}: {} ({})",
+            input["kind"].as_str().unwrap_or_default(),
             input["index"],
             input["outcome"].as_str().unwrap_or_default(),
             input["reason"].as_str().unwrap_or_default()
@@ -124,10 +154,12 @@ pub(super) fn render_preview(
     let mut inputs = Vec::new();
     if let Some(evaluation) = evaluation {
         for input in &evaluation.inputs {
-            let PolicyInput::ObservedAssertion { index, .. } = &input.input else {
+            let (PolicyInput::ObservedAssertion { index, .. }
+            | PolicyInput::ObservedRelation { index, .. }) = &input.input
+            else {
                 return Err(StoreError::CorruptHistory.into());
             };
-            inputs.push(json!({"index":index, "input":input.input.id().as_str(), "outcome":input.disposition.as_str(), "reason":input.reason.as_str()}));
+            inputs.push(json!({"kind":input.input.kind(), "index":index, "input":input.input.id().as_str(), "outcome":input.disposition.as_str(), "reason":input.reason.as_str()}));
         }
     }
     let value = json!({"schema":"merl.assertion-preview/v1", "project":project.as_str(), "run":run.as_str(),
@@ -147,11 +179,43 @@ pub(super) fn render_preview(
     )];
     for input in inputs {
         lines.push(format!(
-            "{}: {} ({})",
+            "{} {}: {} ({})",
+            input["kind"].as_str().unwrap_or_default(),
             input["index"],
             input["outcome"].as_str().unwrap_or_default(),
             input["reason"].as_str().unwrap_or_default()
         ));
     }
     Ok(format!("{}\n", lines.join("\n")))
+}
+
+pub(super) fn relation_json(
+    store: &Store,
+    project: &ProjectId,
+    run: &CompilationRunId,
+    index: u32,
+    expand_source: bool,
+) -> Result<serde_json::Value, CliError> {
+    let relation = store
+        .observed_relations(project, run)?
+        .into_iter()
+        .nth(index as usize)
+        .ok_or(StoreError::CorruptHistory)?;
+    let basis = |endpoint: &Option<String>,
+                 basis: &Option<merl_store::RelationBasis>|
+     -> Result<serde_json::Value, CliError> {
+        Ok(match basis {
+            Some(merl_store::RelationBasis::Assertion(i)) => {
+                json!({"assertion":assertion_json(store,project,run,*i,expand_source)?})
+            }
+            Some(merl_store::RelationBasis::Object(revision)) => {
+                json!({"object":endpoint,"revision":revision.get()})
+            }
+            None => serde_json::Value::Null,
+        })
+    };
+    Ok(
+        json!({"run":run.as_str(),"index":index,"subject":relation.subject,"predicate":relation.predicate,"object":relation.object,
+        "subject_basis":basis(&relation.subject,&relation.subject_basis)?,"object_basis":basis(&relation.object,&relation.object_basis)?,"rejection":relation.rejection}),
+    )
 }

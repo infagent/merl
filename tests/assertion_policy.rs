@@ -4,6 +4,35 @@ mod assertion_policy;
 use assertion_policy::AssertionScenario;
 
 #[test]
+fn compiler_relations_keep_independent_policy_and_reviewed_provenance() {
+    AssertionScenario::given_a_decision_and_a_grounded_relation()
+        .when_the_relation_is_applied_reviewed_and_rebuilt()
+        .then_the_relation_retains_its_compiler_basis_and_focused_view();
+}
+
+#[test]
+fn invalid_relations_do_not_discard_an_independent_decision() {
+    AssertionScenario::given_a_decision_and_invalid_relations()
+        .when_the_run_is_inspected_and_applied()
+        .then_only_the_relations_are_rejected();
+}
+
+#[test]
+fn accepted_relations_expand_to_evidence_and_follow_purge_lineage() {
+    AssertionScenario::given_a_decision_and_a_grounded_relation()
+        .when_the_relation_is_applied_reviewed_and_rebuilt()
+        .when_the_accepted_relation_is_expanded_and_its_source_purge_previewed()
+        .then_expansion_and_purge_name_the_exact_relation_origin();
+}
+
+#[test]
+fn relation_only_reviews_require_current_authority_endpoints_and_evidence() {
+    assertion_policy::RelationReviewCases::given_relation_only_candidates()
+        .when_reviews_run_across_dependency_changes()
+        .then_only_current_authorized_reviews_accept_edges();
+}
+
+#[test]
 fn a_compound_comment_gets_independent_outcomes_and_one_accepted_batch() {
     AssertionScenario::given_a_compiled_compound_comment()
         .when_the_run_is_inspected_and_applied()
