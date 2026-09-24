@@ -6,6 +6,7 @@ mod candidates;
 mod capture;
 mod commands;
 mod compilations;
+mod revalidation;
 
 use std::{
     collections::BTreeSet, error::Error, fmt, fmt::Write as _, fs::File, io::Read, path::Path,
@@ -119,6 +120,10 @@ impl From<merl_policy::PolicyError> for CliError {
                 code: "CANDIDATE_NOT_FOUND",
                 message: error.to_string(),
             },
+            merl_policy::PolicyError::RevalidationRunIneligible => Self {
+                code: "REVALIDATION_RUN_INELIGIBLE",
+                message: error.to_string(),
+            },
             merl_policy::PolicyError::RunIneligible => Self {
                 code: "ASSERTION_RUN_INELIGIBLE",
                 message: error.to_string(),
@@ -209,6 +214,9 @@ fn execute(
     let mut candidate_kind = None;
     let mut candidate_value = None;
     let mut candidate_after = None;
+    let mut revalidation_impact = None;
+    let mut revalidation_action = None;
+    let mut assertion_index = None;
     let mut positional = Vec::new();
     let mut database = None;
     let mut id = None;
@@ -244,6 +252,16 @@ fn execute(
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
+            "--impact" | "--action" | "--assertion-index" => {
+                let option = arguments[index].as_str();
+                index += 1;
+                let value = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+                match option {
+                    "--impact" => revalidation_impact = value,
+                    "--action" => revalidation_action = value,
+                    _ => assertion_index = value,
+                }
+            }
             "--summary" | "--statement" | "--note" | "--note-file" | "--review-at" => {
                 let option = arguments[index].as_str();
                 index += 1;
@@ -492,6 +510,34 @@ fn execute(
         ["help", "compilation", operation] | ["compilation", operation, "help"] => {
             compilations::help(Some(operation), *json_output)
         }
+        ["help", "project", "revalidation"] | ["project", "revalidation", "help"] => {
+            revalidation::help(None, *json_output)
+        }
+        ["help", "project", "revalidation", operation]
+        | ["project", "revalidation", operation, "help"] => {
+            revalidation::help(Some(operation), *json_output)
+        }
+        ["project", "revalidation", operation] => revalidation::execute(
+            operation,
+            revalidation::Options {
+                project,
+                database,
+                after: candidate_after,
+                id,
+                impact: revalidation_impact,
+                action: revalidation_action,
+                actor,
+                run: run_id,
+                assertion_index,
+                program,
+                compiler_version,
+                model,
+                prompt_digest,
+                compiler_args: &compiler_args,
+            },
+            *json_output,
+            clock,
+        ),
         ["compilation", operation] => compilations::execute(
             operation,
             compilations::Options {
@@ -1676,6 +1722,7 @@ fn render_object(
         }
         if expand_source {
             result["evidence_history"] = json!(evidence_history);
+            result["revalidation_history"] = json!(revalidation::history(store, project, object)?);
             result["command_history"] = json!(commands::history(store, project, &history_entries)?);
         }
         render_json(&result)
@@ -2105,9 +2152,10 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "project" => (
             "merl project <command>",
-            "Commands: init, revision, rebuild, view, delta, batch, authority.",
+            "Commands: init, revision, rebuild, view, delta, batch, authority, revalidation.",
             vec![
                 "project authority",
+                "project revalidation",
                 "project init",
                 "project revision",
                 "project rebuild",
@@ -2459,6 +2507,12 @@ fn object_origin_json(
             && let Some(command) = store.semantic_command(project, id)?
         {
             input_json["command"] = commands::lineage(store, project, &command, expand_source)?;
+        }
+        if let PolicyInput::Command(id) = input
+            && let Some(review) = store.revalidation_review(project, id)?
+        {
+            input_json["revalidation"] =
+                revalidation::lineage(store, project, &review, expand_source)?;
         }
         origin_json = json!({
             "event": origin.event.as_str(), "evaluation": origin.evaluation.as_str(), "input": input_json

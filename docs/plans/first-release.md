@@ -158,7 +158,11 @@ The release is ready when:
 - `unable_to_determine` remains a compiler outcome rather than a fabricated assertion;
 - relative dates resolve from the recorded author time and timezone, while event-relative phrases remain object predicates;
 - source supersession leaves old assertions unchanged, appends evidence-impact records, and schedules dependent support for revalidation;
-- accepted-object lifecycle and evidence-support status remain separate while revalidation is pending;
+- accepted-object lifecycle/content and evidence-support status remain separate during revalidation and resolution; support-only effects preserve semantic revisions and erased payload references while advancing project revision and inbox;
+- `project revalidation list` pages pending evidence impacts, and an authorized `run` reinterprets the recorded source set with current versions under the original limits;
+- explicit `resolve` commands confirm, weaken, supersede, invalidate, or mark support unavailable through current policy, with immutable review receipts and atomic revision/delta/inbox updates;
+- interrupted revalidation resumes saved input, exact review retries reuse recorded outcomes, concurrent evidence or grant changes reject stale work, and a later edit cannot reuse retired support;
+- hindsight revalidation and its expansion successors remain separate from ordinary live semantic coverage;
 - cosmetic and material edits exercise policy paths that respectively retain current support or supersede, weaken, or invalidate it;
 - GitHub owns mirrored fields such as open or closed state, labels, and provider timestamps;
 - live `issue capture` establishes a repository binding and durable capture policy, refreshes without duplicate versions or completed compiler work, and reports incomplete provider responses without inferring deletions;

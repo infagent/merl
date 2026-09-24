@@ -1,3 +1,6 @@
+#[path = "policy_behavior/revalidation.rs"]
+mod revalidation;
+
 use merl_compiler::{
     CompileError, CompilerAdapter, CompilerLimits, RunMode, RunRequest, execute_compilation,
     prepare_eager_compilation, prepare_hindsight_compilation, record_compilation_result,
@@ -135,6 +138,10 @@ pub struct PolicyScenario {
     expected_provider: Option<merl_store::AcceptedProviderObservation>,
     expected_issue: Option<merl_store::IssueState>,
     pending_purge: Option<merl_store::PurgeAudit>,
+    revalidation_before: serde_json::Value,
+    revalidation_basis: Option<merl_core::ProjectRevision>,
+    revalidation_output: serde_json::Value,
+    revalidation_details: serde_json::Value,
 }
 
 impl PolicyScenario {
@@ -297,13 +304,23 @@ impl PolicyScenario {
     }
 
     fn capture_edit(&mut self, source: &str, version: &str, body: &str, scope: &str) {
+        self.capture_change(source, version, Some(body), scope);
+    }
+
+    fn capture_change(&mut self, source: &str, version: &str, body: Option<&str>, scope: &str) {
+        let stable_source = self
+            .store
+            .source_version(&self.project, &id(source))
+            .unwrap()
+            .unwrap()
+            .source;
         self.store
             .capture_source_version(
                 &self.project,
                 &SourceCapture {
                     binding: binding(),
-                    source: id(source),
-                    provider_entity_id: source,
+                    source: stable_source.clone(),
+                    provider_entity_id: stable_source.as_str(),
                     context_scope_id: scope,
                     version: id(version),
                     provider_version_id: version,
@@ -318,10 +335,12 @@ impl PolicyScenario {
                     provider_actor_id: Some("alice"),
                     source_author: Some(id("alice")),
                     provider_source_author_id: Some("alice"),
-                    body: Some(body.as_bytes()),
+                    body: body.map(str::as_bytes),
                     edit_diff: None,
                     edit_deleted_at_millis: None,
-                    missing_body_reason: None,
+                    missing_body_reason: body
+                        .is_none()
+                        .then_some(merl_store::MissingSourceBody::DeletedByProvider),
                     compilation_mode: CompilationMode::Eager,
                     coverage_requirement: CoverageRequirement::Required,
                     policy_version: id("capture-v1"),
@@ -1266,6 +1285,10 @@ impl PolicyScenario {
             expected_provider: None,
             expected_issue: None,
             pending_purge: None,
+            revalidation_before: serde_json::Value::Null,
+            revalidation_basis: None,
+            revalidation_output: serde_json::Value::Null,
+            revalidation_details: serde_json::Value::Null,
         }
     }
 

@@ -1609,6 +1609,78 @@ Feature: Explain accepted state
     And I do not see a fabricated assertion, compilation run, or source event
 ```
 
+### Execute evidence revalidation
+
+List pending evidence work after an edit, observed deletion, or purge:
+
+```sh
+merl project revalidation list --project P1 --database project.sqlite --json
+```
+
+Each entry names the impact, affected object and support event, earlier run,
+trigger, changed source, replacement, and next action. It also reports unavailable
+evidence and the latest reserved attempt, including pending or failed work. Pages
+contain up to 100 entries. Pass `next_after` as `--after` to continue.
+
+A command actor can execute one affected derivation:
+
+```sh
+merl project revalidation run --project P1 --database project.sqlite \
+  --id impact_123 --actor reviewer --program ./compiler \
+  --compiler-version v1 --model configured-model --prompt-digest sha256:<hex>
+merl source assertions --project P1 --database project.sqlite --run impact_123
+merl compilation context --project P1 --database project.sqlite --run impact_123
+```
+
+The run uses the latest versions of the recorded sources and inherits the original
+limits. It records hindsight interpretation. Live coverage remains unchanged.
+Retrying the run ID reuses its result or resumes its saved input after interruption.
+A failed or stale attempt remains in history; pass a fresh `--run` to try again.
+Use `compilation expand` for a recorded context request, then review the successful
+successor. The compiler cannot resolve the impact itself.
+
+Review the result through current command authority:
+
+```sh
+merl project revalidation resolve --project P1 --database project.sqlite \
+  --id review_123 --impact impact_123 --actor reviewer \
+  --action confirm --run impact_123 --assertion-index 0
+```
+
+| Action | Required evidence | Accepted effect |
+| --- | --- | --- |
+| `confirm` | Successful run and positive assertion matching subject, kind, and value reference | Fresh support for the same object |
+| `weaken` | Successful run | Withdraw this support; keep the object active |
+| `supersede` | Successful run and positive assertion naming a new subject of the same kind | New object and `supersedes` relation; old object becomes superseded |
+| `invalidate` | Successful run | Old object becomes invalidated |
+| `unavailable` | Erased or bodyless evidence; omit run and assertion index | Close the work as unsupported |
+
+A run may be the original hindsight attempt or its completed expansion successor.
+Confirmation and supersession require `--assertion-index`; the other actions omit
+it. Weakening can leave an object partially supported if it has independent evidence.
+An unavailable result does not restore erased content or claim successful compilation.
+
+Confirmation, weakening, and unavailability appear in delta/inbox as
+`resolve_support` changes referencing the affected object. They leave its semantic
+revision, lifecycle, and payload reference unchanged, including references to
+erased content. `show --source` exposes their reviews in `revalidation_history`;
+`policy_origin` and `history` continue to describe semantic object versions.
+
+Resolution records use `merl.revalidation-resolution/v1`. They include the review
+request, impact, action, policy evaluation, disposition, reason, and accepted
+revision when present. The list and run schemas are `merl.revalidation-work/v1`
+and `merl.revalidation-run/v1`. Reusing a request with changed content returns
+`POLICY_INPUT_CONFLICT`; an exact retry returns its prior outcome, including a
+rejection or conflict. A fresh request asks policy to reconsider under current state.
+`COMPILER_UNAUTHORIZED` rejects execution without command authority.
+`REVALIDATION_RUN_INELIGIBLE` rejects incomplete runs and runs outside the
+impact's hindsight chain.
+
+`show <object> --source --history` includes the reviewed impact and revised
+compiler provenance. A support resolution advances the normal revision, delta,
+and inbox together. Grant revocation, source changes or purge, target changes,
+and a competing resolution prevent stale prepared work from committing.
+
 ### Changed evidence triggers reconsideration
 
 ```gherkin

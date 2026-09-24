@@ -137,7 +137,7 @@ pub(super) fn render_preview(
         "inputs":inputs,
         "objects":evaluation.and_then(|e| e.batch.as_ref()).map(|b| b.events.iter().filter_map(|e| match e {
             merl_core::DomainEvent::PutObject { object, .. } => Some(object.as_str()),
-            merl_core::DomainEvent::PutRelation { .. } => None,
+            merl_core::DomainEvent::PutRelation { .. } | merl_core::DomainEvent::ResolveSupport { .. } => None,
         }).collect::<Vec<_>>()).unwrap_or_default()});
     if json_output {
         return Ok(format!("{value}\n"));

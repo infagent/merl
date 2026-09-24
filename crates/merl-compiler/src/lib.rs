@@ -542,39 +542,11 @@ fn build_revalidation_context(
     if impact.next_action != "recompile" || impact.revalidated_by.is_some() {
         return Err(CompileError::NonCausalHistory);
     }
-    let replacement = impact
-        .replacement
-        .as_ref()
-        .ok_or(CompileError::NonCausalHistory)?;
-    let replacement_source = store
-        .source_version(project, replacement)?
-        .ok_or(CompileError::NonCausalHistory)?;
-    if replacement_source.supersedes.as_ref() != Some(&impact.changed_source) {
+    let expected_trigger = store.latest_source_version(project, &impact.trigger)?;
+    if trigger != &expected_trigger {
         return Err(CompileError::NonCausalHistory);
     }
-    let expected_trigger = if impact.trigger == impact.changed_source {
-        replacement
-    } else {
-        &impact.trigger
-    };
-    if trigger != expected_trigger {
-        return Err(CompileError::NonCausalHistory);
-    }
-    let mut selected = store.compilation_context_sources(project, impact.affected_run.as_str())?;
-    let changed = selected
-        .iter_mut()
-        .find(|version| **version == impact.changed_source)
-        .ok_or(CompileError::NonCausalHistory)?;
-    *changed = replacement.clone();
-    let mut ordered = Vec::with_capacity(selected.len());
-    for version in selected {
-        let source = store
-            .source_version(project, &version)?
-            .ok_or(CompileError::NonCausalHistory)?;
-        ordered.push((source.sequence, version));
-    }
-    ordered.sort_by_key(|item| item.0);
-    let selected = ordered.into_iter().map(|(_, version)| version).collect();
+    let selected = store.revalidation_source_window(project, impact)?;
     build_context_from_sources(
         store,
         project,
@@ -1225,7 +1197,7 @@ fn prepare_compilation(
         return Err(CompileError::InvalidResponse);
     }
     let context = if mode == RunMode::Hindsight {
-        if let Some(impact) = store.evidence_impact(project, run_id)? {
+        if let Some(impact) = store.revalidation_impact(project, run_id)? {
             build_revalidation_context(store, project, source, &impact, limits)?
         } else {
             build_context_with_basis(

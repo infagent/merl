@@ -551,6 +551,15 @@ impl TryFrom<u64> for ObjectRevision {
 /// A structural accepted change; prose remains behind a payload reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DomainEvent {
+    /// Resolve reviewed evidence support without changing semantic content or lifecycle.
+    ResolveSupport {
+        /// Stable accepted-effect identity.
+        id: EventId,
+        /// Existing object whose support is affected.
+        object: ObjectId,
+        /// Immutable review containing the impact, outcome, and optional assertion.
+        review: PolicyInputId,
+    },
     /// Create or replace the current representation of an object.
     PutObject {
         /// Stable event identity.

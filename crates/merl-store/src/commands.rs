@@ -201,7 +201,34 @@ impl Store {
         batch.as_deref().map(parse).transpose()
     }
 
-    /// Reads task facets from the current accepted event's command origin.
+    /// Reads the command behind the current semantic state, across support reviews.
+    ///
+    /// Confirmation, weakening, and unavailability change support without changing
+    /// task facets or reopening resolved questions. Other interpretations replace
+    /// semantic state and still make an older command snapshot inapplicable.
+    /// # Errors
+    /// Returns storage or corrupt-history errors.
+    pub fn object_semantic_command(
+        &self,
+        project: &ProjectId,
+        object: &ObjectId,
+    ) -> Result<Option<SemanticCommandRecord>, StoreError> {
+        let row=self.connection.query_row("SELECT i.input_kind,i.input_id FROM semantic_object_events e
+            JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
+            LEFT JOIN policy_evaluation_domain_events o ON o.project_id=e.project_id AND o.event_id=e.id
+            LEFT JOIN policy_evaluation_inputs i ON i.project_id=o.project_id AND i.evaluation_id=o.evaluation_id AND i.input_index=o.input_index
+            LEFT JOIN revalidation_reviews r ON r.project_id=i.project_id AND r.id=i.input_id AND i.input_kind='command'
+            WHERE e.project_id=?1 AND e.object_id=?2 AND (r.action IS NULL OR r.action NOT IN ('confirm','weaken','unavailable'))
+            ORDER BY b.revision DESC,e.event_index DESC LIMIT 1",params![project.as_str(),object.as_str()],|r|Ok((r.get::<_,Option<String>>(0)?,r.get::<_,Option<String>>(1)?))).optional()?;
+        match row {
+            Some((Some(kind), Some(id))) if kind == "command" => {
+                self.semantic_command(project, &parse(&id)?)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Reads task facets from the current semantic command origin.
     ///
     /// A later non-command correction makes those facets unknown rather than
     /// silently retaining a stale planning snapshot. Rebuild uses the same history.
@@ -213,13 +240,9 @@ impl Store {
         project: &ProjectId,
         object: &ObjectId,
     ) -> Result<Option<TaskState>, StoreError> {
-        let Some(origin) = self.object_policy_origin(project, object)? else {
-            return Ok(None);
-        };
-        let PolicyInput::Command(id) = origin.input else {
-            return Ok(None);
-        };
-        Ok(self.semantic_command(project, &id)?.and_then(|c| c.task))
+        Ok(self
+            .object_semantic_command(project, object)?
+            .and_then(|c| c.task))
     }
 }
 

@@ -193,3 +193,98 @@ fn semantic_commands_cannot_change_authority_grants() {
         .when_a_command_tries_to_revoke_a_grant()
         .then_the_command_cannot_change_authority();
 }
+
+#[test]
+fn public_revalidation_discovers_changed_context_after_restart() {
+    PolicyScenario::given_a_decision_compiled_with_an_earlier_comment()
+        .when_the_earlier_comment_is_edited()
+        .when_the_authority_restarts()
+        .when_pending_evidence_work_is_listed_through_the_cli()
+        .then_the_affected_derivation_can_be_resumed();
+}
+
+#[test]
+fn reviewed_revalidation_resolves_support_without_losing_its_history() {
+    for action in [
+        "confirm",
+        "weaken",
+        "supersede",
+        "invalidate",
+        "unavailable",
+    ] {
+        PolicyScenario::given_an_authorized_evidence_reviewer(action)
+            .when_revalidation_is_run_and_resolved_after_restart(action)
+            .then_the_reviewed_support_outcome_is_durable(action);
+    }
+}
+
+#[test]
+fn a_prepared_revalidation_cannot_ignore_concurrent_changes() {
+    for change in [
+        "authority",
+        "evidence",
+        "target",
+        "purge",
+        "competing_review",
+        "unrelated",
+    ] {
+        PolicyScenario::given_a_prepared_revalidation_review()
+            .when_the_project_changes_before_revalidation_commits(change)
+            .then_revalidation_respects_the_changed_dependency(change);
+    }
+}
+
+#[test]
+fn confirming_support_does_not_hide_a_later_edit() {
+    PolicyScenario::given_an_authorized_evidence_reviewer("confirm")
+        .when_revalidation_is_run_and_resolved_after_restart("confirm")
+        .when_the_context_is_edited_again()
+        .then_all_remaining_support_needs_revalidation();
+}
+
+#[test]
+fn revalidation_uses_the_latest_replacement_after_several_edits() {
+    PolicyScenario::given_an_authorized_evidence_reviewer("confirm")
+        .when_the_context_is_edited_again()
+        .when_revalidation_is_run_and_resolved_after_restart("confirm")
+        .then_the_latest_replacement_supports_the_decision();
+}
+
+#[test]
+fn direct_edits_and_deletions_share_the_public_revalidation_path() {
+    for action in ["confirm", "unavailable"] {
+        PolicyScenario::given_changed_direct_and_context_evidence(action)
+            .when_revalidation_is_run_and_resolved_after_restart(action)
+            .then_the_reviewed_support_outcome_is_durable(action);
+    }
+}
+
+#[test]
+fn withdrawn_support_does_not_reopen_a_resolved_question() {
+    PolicyScenario::given_a_resolved_question_with_source_support()
+        .when_its_changed_support_is_withdrawn()
+        .then_the_question_remains_resolved();
+}
+
+#[test]
+fn a_fresh_revalidation_attempt_preserves_the_interrupted_interpretation() {
+    PolicyScenario::given_a_prepared_revalidation_review()
+        .when_the_context_is_edited_again()
+        .when_changed_evidence_is_revalidated_again()
+        .then_both_interpretations_remain_inspectable();
+}
+
+#[test]
+fn unavailable_support_preserves_the_erased_semantic_content_reference() {
+    PolicyScenario::given_a_payload_bearing_decision_with_purged_support()
+        .when_revalidation_is_run_and_resolved_after_restart("unavailable")
+        .then_support_is_resolved_without_a_semantic_revision();
+}
+
+#[test]
+fn purging_confirmed_support_erases_its_derived_content_without_removing_the_reference() {
+    PolicyScenario::given_a_payload_bearing_decision_with_changed_support()
+        .when_revalidation_is_run_and_resolved_after_restart("confirm")
+        .when_the_confirming_source_is_purged()
+        .then_confirmed_content_is_unavailable();
+}
