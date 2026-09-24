@@ -692,6 +692,7 @@ impl AssertionScenario {
                     kind: merl_core::SourceKind::try_from("issue_comment").expect("kind"),
                     supersedes: None,
                     ambiguous_order_with_previous: false,
+                    author_time: None,
                     created_at_millis: 1,
                     occurred_at_millis: 1,
                     upstream_updated_at_millis: Some(1),

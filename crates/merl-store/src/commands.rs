@@ -61,8 +61,16 @@ pub struct TaskState {
     pub execution: Execution,
     /// Protected deferral explanation, if one exists.
     pub reason: Option<PayloadId>,
-    /// Validated UTC calendar date for reconsideration, in YYYY-MM-DD form.
+    /// Local calendar date for reconsideration, in YYYY-MM-DD form.
     pub review_at: Option<String>,
+    /// Exact reason range when an assertion cites part of a source payload.
+    pub reason_span: Option<merl_core::temporal::Span>,
+    /// Reconsider planning after this condition, without assigning it a date.
+    pub review_when: Option<merl_core::temporal::EventPredicate>,
+    /// Execution prerequisite retained independently of the review date.
+    pub start_after: Option<merl_core::temporal::EventPredicate>,
+    /// Temporal provenance inherited by later task commands.
+    pub temporal: Vec<merl_core::temporal::TemporalResult>,
 }
 
 /// A receipt fixes the proposed result and its target dependency before evaluation.
@@ -125,6 +133,9 @@ impl Store {
             }
             return Ok(prior);
         }
+        if let Some(task) = &record.task {
+            super::temporal::validate_task_evidence(&tx, project, task)?;
+        }
         for (id, bytes) in payloads {
             let existing: Option<bool> = tx.query_row(
                 "SELECT digest=?3 AND COALESCE(bytes=?4,0) FROM payloads WHERE project_id=?1 AND id=?2",
@@ -143,8 +154,8 @@ impl Store {
         } else if record.source.is_some() {
             return Err(StoreError::InvalidSource);
         }
-        tx.execute("INSERT INTO semantic_commands (project_id,id,actor,operation,object_id,kind,issue_scope,payload_id,reason_id,source_version_id,expected_revision,request_digest,occurred_at_millis,commitment,scheduling,execution,review_at,rejection) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
-            params![project.as_str(),record.id.as_str(),record.actor.as_str(),record.operation.as_str(),record.object.as_str(),record.kind.as_str(),record.issue_scope,record.payload.as_ref().map(PayloadId::as_str),record.reason.as_ref().map(PayloadId::as_str),record.source.as_ref().map(SourceVersionId::as_str),record.expected_revision.map(|r| i64::try_from(r.get())).transpose().map_err(|_|StoreError::CorruptHistory)?,record.request_digest.as_slice(),record.occurred_at_millis,record.task.as_ref().map(|t|t.commitment.as_str()),record.task.as_ref().map(|t|t.scheduling.as_str()),record.task.as_ref().map(|t|t.execution.as_str()),record.task.as_ref().and_then(|t|t.review_at.as_deref()),record.rejection.as_ref().map(ReasonCode::as_str)])?;
+        tx.execute("INSERT INTO semantic_commands (project_id,id,actor,operation,object_id,kind,issue_scope,payload_id,reason_id,source_version_id,expected_revision,request_digest,occurred_at_millis,commitment,scheduling,execution,review_at,rejection,planning_evidence) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+            params![project.as_str(),record.id.as_str(),record.actor.as_str(),record.operation.as_str(),record.object.as_str(),record.kind.as_str(),record.issue_scope,record.payload.as_ref().map(PayloadId::as_str),record.reason.as_ref().map(PayloadId::as_str),record.source.as_ref().map(SourceVersionId::as_str),record.expected_revision.map(|r| i64::try_from(r.get())).transpose().map_err(|_|StoreError::CorruptHistory)?,record.request_digest.as_slice(),record.occurred_at_millis,record.task.as_ref().map(|t|t.commitment.as_str()),record.task.as_ref().map(|t|t.scheduling.as_str()),record.task.as_ref().map(|t|t.execution.as_str()),record.task.as_ref().and_then(|t|t.review_at.as_deref()),record.rejection.as_ref().map(ReasonCode::as_str),record.task.as_ref().map(|task|serde_json::to_string(&(&task.reason_span,&task.review_when,&task.start_after,&task.temporal))).transpose().map_err(|_|StoreError::InvalidPolicyEvaluation)?])?;
         tx.commit()?;
         Ok(record.clone())
     }
@@ -240,9 +251,10 @@ impl Store {
         project: &ProjectId,
         object: &ObjectId,
     ) -> Result<Option<TaskState>, StoreError> {
-        Ok(self
-            .object_semantic_command(project, object)?
-            .and_then(|c| c.task))
+        if let Some(command) = self.object_semantic_command(project, object)? {
+            return Ok(command.task);
+        }
+        self.assertion_task_state(project, object)
     }
 }
 
@@ -251,8 +263,8 @@ fn read_command(
     project: &ProjectId,
     id: &PolicyInputId,
 ) -> Result<Option<SemanticCommandRecord>, StoreError> {
-    let row = connection.query_row("SELECT actor,operation,object_id,kind,issue_scope,payload_id,reason_id,source_version_id,expected_revision,request_digest,occurred_at_millis,commitment,scheduling,execution,review_at,rejection FROM semantic_commands WHERE project_id=?1 AND id=?2",params![project.as_str(),id.as_str()], |r| {
-        Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<i64>>(8)?,r.get::<_,Vec<u8>>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,Option<String>>(12)?,r.get::<_,Option<String>>(13)?,r.get::<_,Option<String>>(14)?,r.get::<_,Option<String>>(15)?))
+    let row = connection.query_row("SELECT actor,operation,object_id,kind,issue_scope,payload_id,reason_id,source_version_id,expected_revision,request_digest,occurred_at_millis,commitment,scheduling,execution,review_at,rejection,planning_evidence FROM semantic_commands WHERE project_id=?1 AND id=?2",params![project.as_str(),id.as_str()], |r| {
+        Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<i64>>(8)?,r.get::<_,Vec<u8>>(9)?,r.get::<_,i64>(10)?,r.get::<_,Option<String>>(11)?,r.get::<_,Option<String>>(12)?,r.get::<_,Option<String>>(13)?,r.get::<_,Option<String>>(14)?,r.get::<_,Option<String>>(15)?,r.get::<_,Option<String>>(16)?))
     }).optional()?;
     row.map(
         |(
@@ -272,6 +284,7 @@ fn read_command(
             execution,
             review_at,
             rejection,
+            planning_evidence,
         )| {
             let reason: Option<PayloadId> = reason.as_deref().map(parse).transpose()?;
             Ok(SemanticCommandRecord {
@@ -296,6 +309,12 @@ fn read_command(
                 occurred_at_millis: now,
                 task: commitment
                     .map(|c| {
+                        let (reason_span, review_when, start_after, temporal) = planning_evidence
+                            .as_deref()
+                            .map(serde_json::from_str)
+                            .transpose()
+                            .map_err(|_| StoreError::CorruptHistory)?
+                            .unwrap_or_default();
                         Ok::<_, StoreError>(TaskState {
                             commitment: parse(&c)?,
                             scheduling: parse(
@@ -306,6 +325,10 @@ fn read_command(
                             )?,
                             reason,
                             review_at,
+                            reason_span,
+                            review_when,
+                            start_after,
+                            temporal,
                         })
                     })
                     .transpose()?,

@@ -7,5 +7,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[dependencies]
+serde.workspace = true
+schemars.workspace = true
+time.workspace = true
+
 [lints]
 workspace = true

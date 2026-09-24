@@ -1854,7 +1854,8 @@ fn assertion_json(
         "asserted_by": assertion.asserted_by, "attributed_to": assertion.attributed_to,
         "attribution_verified": assertion.attribution_verified,
         "act": assertion.act, "epistemic_basis": assertion.epistemic_basis,
-        "polarity": assertion.polarity, "confidence_millis": assertion.confidence_millis
+        "polarity": assertion.polarity, "confidence_millis": assertion.confidence_millis,
+        "temporal": assertion.temporal, "deferral": assertion.deferral
     });
     detail["context_rounds"] = compilations::lineage(store, project, run.as_str())?;
     if expand_source {

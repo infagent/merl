@@ -217,6 +217,13 @@ pub struct Observation {
     pub author: Option<ActorRef>,
     /// Time this version became visible according to the provider.
     pub occurred_at: String,
+    /// Authored RFC 3339 timestamp with the author's recorded local offset.
+    /// Provider UTC transport timestamps do not establish this evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authored_at: Option<String>,
+    /// Named author timezone, when the source records one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_timezone: Option<String>,
     /// Original provider creation time for the external entity.
     pub created_at: String,
     /// Entity update time at capture, which may follow this body edit.

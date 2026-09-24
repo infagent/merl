@@ -161,6 +161,7 @@ The release is ready when:
 - quoted or relayed authority remains unverified unless it links to an authenticated original source;
 - `unable_to_determine` remains a compiler outcome rather than a fabricated assertion;
 - relative dates resolve from the recorded author time and timezone, while event-relative phrases remain object predicates;
+- unresolved temporal values cannot enter accepted state through automatic policy or candidate acceptance; reviewed task deferrals retain their reason and date or event condition across rebuild and replay;
 - source supersession leaves old assertions unchanged, appends evidence-impact records, and schedules dependent support for revalidation;
 - accepted-object lifecycle/content and evidence-support status remain separate during revalidation and resolution; support-only effects preserve semantic revisions and erased payload references while advancing project revision and inbox;
 - `project revalidation list` pages pending evidence impacts, and an authorized `run` reinterprets the recorded source set with current versions under the original limits;

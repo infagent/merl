@@ -128,6 +128,9 @@ fn build_review(
             revision: expected,
         });
     }
+    if review.action == ReviewAction::Accept {
+        failure = crate::temporal::review_failure(store, project, &candidate)?.or(failure);
+    }
     if let Some((disposition, reason)) = failure {
         prepared.evaluation.inputs[0].disposition = disposition;
         prepared.evaluation.inputs[0].reason =

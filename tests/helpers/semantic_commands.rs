@@ -449,8 +449,25 @@ impl merl_compiler::CompilerAdapter for Compiler {
     }
 }
 impl Commands {
-    pub fn when_a_supplement_is_compiled_with_repeated_and_additional_semantics(mut self) -> Self {
-        let note = "Keep gain fixed. Also use double precision. Measurements support both. Correction: sweep the gain instead.";
+    pub fn when_a_supplement_is_compiled_with_repeated_and_additional_semantics(self) -> Self {
+        self.compile_supplement(false)
+    }
+    pub fn when_a_supplement_adds_a_temporal_condition(self) -> Self {
+        self.compile_supplement(true)
+    }
+    pub fn then_the_temporal_change_remains_a_candidate(self) {
+        assert_eq!(self.results[1]["inputs"][0]["outcome"], "candidate");
+        assert_eq!(
+            self.results[1]["inputs"][0]["reason"],
+            "supplemental_correction"
+        );
+    }
+    fn compile_supplement(mut self, temporal: bool) -> Self {
+        let note = if temporal {
+            "Keep gain fixed. Also use double precision. Measurements support both. Correction: sweep the gain instead. Only after PR 229 merges."
+        } else {
+            "Keep gain fixed. Also use double precision. Measurements support both. Correction: sweep the gain instead."
+        };
         let created = self.cli(&[
             "decision",
             "create",
@@ -523,7 +540,7 @@ impl Commands {
         let original_value = self.results[0]["sources"][0]["semantic_origin"]["value"]
             .as_str()
             .unwrap();
-        let response = supplemental_assertions(source.as_str(), note, original_value);
+        let response = supplemental_assertions(source.as_str(), note, original_value, temporal);
         merl_compiler::record_compilation_result(
             &mut store,
             &project,
@@ -896,7 +913,12 @@ impl Commands {
     }
 }
 
-fn supplemental_assertions(source: &str, note: &str, original_value: &str) -> Value {
+fn supplemental_assertions(
+    source: &str,
+    note: &str,
+    original_value: &str,
+    temporal: bool,
+) -> Value {
     let assertion = |subject: &str, kind: &str, act: &str, text: &str, value: &str| {
         let start = note.find(text).unwrap();
         serde_json::json!({
@@ -906,11 +928,17 @@ fn supplemental_assertions(source: &str, note: &str, original_value: &str) -> Va
             "confidence_millis": 900, "attributed_to": null
         })
     };
-    serde_json::json!({"schema": "merl.compiler-response/v1", "assertions": [
+    let mut response = serde_json::json!({"schema": "merl.compiler-response/v1", "assertions": [
         assertion("D1", "decision", "request", "Keep gain fixed", original_value),
         assertion("D2", "decision", "request", "Also use double precision", "none"),
         assertion("F1", "finding", "report", "Measurements support both", "none"),
         assertion("D1", "decision", "request", "Correction: sweep the gain instead", "gain-correction"),
         assertion("D1", "decision", "request", "Correction: sweep the gain instead", "none")
-    ]})
+    ]});
+    if temporal {
+        let start = note.find("after PR").unwrap();
+        response["assertions"][0]["span_end"] = serde_json::json!(note.len());
+        response["assertions"][0]["temporal"] = serde_json::json!([{"role":"start_after","span_start":start,"span_end":note.len()-1,"expression":{"kind":"after_event","predicate":{"kind":"provider_merged","subject":"github:example/parser/pull/229"}}}]);
+    }
+    response
 }

@@ -232,6 +232,11 @@ dependencies = [
 [[package]]
 name = "merl-core"
 version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "time",
+]
 
 [[package]]
 name = "merl-corpus"
@@ -287,6 +292,7 @@ version = "0.1.0"
 dependencies = [
  "merl-core",
  "rusqlite",
+ "serde_json",
  "sha2",
 ]
 

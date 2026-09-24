@@ -6,6 +6,75 @@ The request has schema `merl.compiler-request/v1`. Its `context` contains the tr
 
 The response has schema `merl.compiler-response/v1`. It may contain `assertions`, `relations`, `context_required`, and `unresolved`. Unknown fields fail validation. Assertions use bounded structural identifiers and cite byte spans in a captured source version. Merl derives `asserted_by` from that source's recorded author; an unknown author remains unknown. A compiler may name an attributed actor, but cannot verify that attribution or borrow the actor's authority. Free-form explanations and copied source prose have no response field. A failure records a stable code such as `output_budget` or `invalid_response`; it leaves no partial assertions. A response with `context_required` records a `needs_context` outcome. It does not satisfy required semantic coverage; the result transaction records references and reserves a separate successor run. A response with context requests contributes no assertions or relations, even if it includes them.
 
+Assertions may include `temporal` and `deferral`. Omitted fields mean no temporal
+interpretation and no task deferral. For the source text `Reconsider tomorrow after
+PR 229 merges.`, an assertion spanning bytes 0 through 40 can include:
+
+```json
+{
+  "temporal": [
+    {
+      "role": "review_at",
+      "span_start": 11,
+      "span_end": 19,
+      "expression": {"kind": "relative_date", "days": 1}
+    },
+    {
+      "role": "start_after",
+      "span_start": 20,
+      "span_end": 39,
+      "expression": {
+        "kind": "after_event",
+        "predicate": {
+          "kind": "provider_merged",
+          "subject": "github:example/parser/pull/229"
+        }
+      }
+    }
+  ],
+  "deferral": {"accepted": true, "reason": {"start": 20, "end": 39}}
+}
+```
+
+Each expression cites a nonempty UTF-8 range inside its assertion span. One
+assertion can supply one value for each role: `review_at`, `start_after`, and
+`needed_by`. `relative_date.days` shifts the author's local calendar date; one
+means tomorrow. It does not mean 24 elapsed hours or promise a time of day.
+`after_event` retains a typed `provider_merged` or `object_resolved` predicate.
+`start_after` requires an event predicate. Provider merge references use a qualified
+`github:.../pull/<positive number>` identity; a bare PR number lacks repository scope.
+Merl does not evaluate these conditions or schedule a wake-up in this release.
+
+The rendered source's optional `author_time` contains `utc_millis`,
+`offset_seconds`, and an optional `timezone` name. Merl supplies this evidence.
+The compiler cannot supply a date result or replace the clock basis. Normalization
+uses the captured offset, so replay does not depend on the process clock or a
+later timezone database. A zone name without its recorded offset remains
+unresolved. Missing evidence produces `missing_author_time` or `missing_timezone`;
+calendar overflow produces `date_out_of_range`.
+
+Fixture observations can provide `authored_at`, an RFC 3339 timestamp with the
+author's local offset, and `author_timezone`. The instant must match the captured
+version's `occurred_at`. Controlled fixtures use their staged `occurred_at` as
+author-time evidence when `authored_at` is absent. GitHub's UTC transport
+timestamps alone do not establish the author's timezone. Existing captures keep
+their first recorded evidence, including an unknown basis; a retry cannot enrich
+or replace it.
+
+`source assertions` returns each normalized value with its source version,
+original expression span, and time basis. The structural record retains no copied
+expression or reason text. Source expansion resolves those spans from protected
+bytes, and erasure leaves the metadata inspectable.
+
+A task assertion's `deferral` requires a reason span and a `review_at` or
+`start_after` trigger. `accepted` describes the proposed commitment; it grants no
+authority. Candidate acceptance requires current command authority and retains
+separate commitment, deferred scheduling, and not-started execution. An unresolved
+temporal value keeps the assertion a candidate with reason `temporal_unresolved`;
+review cannot accept it unchanged. Correct the interpretation or compile a source
+with sufficient evidence. Starting deferred work still requires a later planning
+transition.
+
 Each relation has `subject`, `predicate`, and `object` identifiers. An endpoint must name a unique assertion subject in the same response or an accepted object in the supplied context. Merl stores that assertion index or selected object revision alongside the relation; the compiler cannot supply a newer basis. Policy supports `supports`, `disputes`, `answers`, `addresses`, `updates`, `depends_on`, `blocks`, and `supersedes`. Other predicates receive a rejected disposition. Invalid identifiers or ungrounded endpoints reject the relation without failing valid independent assertions. Responses still share one byte limit, and relation count cannot exceed four times the assertion-count limit.
 
 A completed live run exposes relations through `source assertions` and evaluates them through `source apply`, including runs with no assertions. Grounding alone does not authorize an edge. A reviewer uses `candidate accept` or `candidate reject` under current command authority; Merl preserves the original relation and compiler provenance after review.

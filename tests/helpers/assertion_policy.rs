@@ -1,9 +1,12 @@
 #[path = "assertion_policy/relation_health.rs"]
 mod relation_health;
+#[path = "assertion_policy/temporal.rs"]
+mod temporal;
 pub use relation_health::{
     IndependentRelationScenario, RelationHealthScenario, RelationUpgradeScenario,
     WithdrawalRaceScenario,
 };
+pub use temporal::{CalendarCases, CaptureCases, InvalidCases, TemporalScenario};
 
 use merl_compiler::{
     CompileError, CompilerAdapter, CompilerLimits, RunMode, RunRequest, prepare_eager_compilation,
@@ -326,6 +329,20 @@ impl AssertionScenario {
         author: Option<&str>,
         body: Option<&[u8]>,
     ) {
+        Self::capture_body_at(store, source, version, prior, author, body, None);
+    }
+    fn capture_body_at(
+        store: &mut Store,
+        source: &str,
+        version: &str,
+        prior: Option<&str>,
+        author: Option<&str>,
+        body: Option<&[u8]>,
+        author_time: Option<merl_core::temporal::AuthorTime>,
+    ) {
+        let time = author_time
+            .as_ref()
+            .map_or(NOW, merl_core::temporal::AuthorTime::utc_millis);
         store
             .capture_source_version(
                 &id("P1"),
@@ -344,10 +361,11 @@ impl AssertionScenario {
                     kind: id("issue_comment"),
                     supersedes: prior.map(id),
                     ambiguous_order_with_previous: false,
-                    created_at_millis: NOW,
-                    occurred_at_millis: NOW,
-                    upstream_updated_at_millis: Some(if prior.is_some() { NOW + 3 } else { NOW }),
-                    observed_at_millis: if prior.is_some() { NOW + 3 } else { NOW },
+                    author_time,
+                    created_at_millis: time,
+                    occurred_at_millis: time,
+                    upstream_updated_at_millis: Some(time + 3),
+                    observed_at_millis: time + 3,
                     actor: author.map(id),
                     provider_actor_id: author,
                     source_author: author.map(id),

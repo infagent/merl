@@ -222,6 +222,9 @@ pub(super) fn disposition(
             "unsupported_assertion_predicate",
         ));
     }
+    if crate::temporal::unresolved(&assertion) {
+        return Ok((PolicyDisposition::Candidate, "temporal_unresolved"));
+    }
     if let Some(disposition) = supplemental_disposition(store, project, &assertion)? {
         return Ok(disposition);
     }
@@ -304,10 +307,12 @@ fn supplemental_disposition(
             }
             // Only an exact value reference demonstrates a restatement. A changed
             // or absent value may express a correction to the same object.
-            if command
-                .payload
-                .as_ref()
-                .is_some_and(|value| assertion.value == value.as_str())
+            if assertion.temporal.is_empty()
+                && assertion.deferral.is_none()
+                && command
+                    .payload
+                    .as_ref()
+                    .is_some_and(|value| assertion.value == value.as_str())
             {
                 return Ok(Some((PolicyDisposition::Duplicate, "covered_by_command")));
             }

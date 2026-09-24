@@ -4,6 +4,59 @@ mod assertion_policy;
 use assertion_policy::AssertionScenario;
 
 #[test]
+fn temporal_dates_require_recorded_timezone_evidence() {
+    assertion_policy::TemporalScenario::given_a_relative_date_without_timezone_evidence()
+        .when_the_source_is_compiled()
+        .then_the_date_remains_unresolved();
+}
+
+#[test]
+fn temporal_capture_distinguishes_author_offsets_from_provider_utc_timestamps() {
+    assertion_policy::CaptureCases::given_sources_with_explicit_and_unknown_author_offsets()
+        .when_the_sources_are_imported_and_retried()
+        .then_only_recorded_local_offsets_are_available();
+}
+
+#[test]
+fn temporal_interpretations_reject_forged_bases_and_invalid_conditions() {
+    assertion_policy::InvalidCases::given_invalid_temporal_interpretations()
+        .when_each_interpretation_is_submitted()
+        .then_no_invalid_temporal_assertions_are_retained();
+}
+
+#[test]
+fn temporal_dates_follow_source_offsets_and_calendar_boundaries() {
+    assertion_policy::CalendarCases::given_sources_at_calendar_boundaries()
+        .when_each_source_is_compiled()
+        .then_dates_follow_the_authors_local_calendar();
+}
+
+#[test]
+fn temporal_unresolved_values_cannot_gain_authority_through_review() {
+    assertion_policy::TemporalScenario::given_a_relative_date_without_timezone_evidence()
+        .when_the_source_is_compiled()
+        .when_acceptance_is_attempted()
+        .then_no_guessed_date_enters_accepted_state();
+}
+
+#[test]
+fn temporal_task_deferral_preserves_dates_conditions_and_replay() {
+    assertion_policy::TemporalScenario::given_a_deferred_task_waiting_for_a_pull_request()
+        .when_the_source_is_compiled()
+        .when_the_task_is_reviewed_rebuilt_and_replayed()
+        .then_the_task_retains_its_source_date_predicate_and_reason();
+}
+
+#[test]
+fn temporal_accepted_state_reaches_later_compiler_contexts() {
+    assertion_policy::TemporalScenario::given_a_deferred_task_waiting_for_a_pull_request()
+        .when_the_source_is_compiled()
+        .when_the_task_is_reviewed_rebuilt_and_replayed()
+        .when_a_later_source_needs_the_accepted_schedule()
+        .then_the_compiler_receives_the_accepted_temporal_values();
+}
+
+#[test]
 fn accepted_relations_stop_driving_context_when_their_evidence_changes() {
     assertion_policy::RelationHealthScenario::given_accepted_relations()
         .when_evidence_changes_and_the_project_restarts()

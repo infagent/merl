@@ -269,6 +269,10 @@ fn validate_action(
         }
         if kind == "task" {
             record.task = Some(TaskState {
+                reason_span: None,
+                review_when: None,
+                start_after: None,
+                temporal: Vec::new(),
                 commitment: Commitment::Pending,
                 scheduling: Scheduling::Unscheduled,
                 execution: Execution::NotStarted,
@@ -317,6 +321,7 @@ fn validate_action(
         {
             task.scheduling = Scheduling::Deferred;
             task.reason.clone_from(&record.reason);
+            clear_review_evidence(&mut task);
             task.review_at.clone_from(&command.review_at);
             None
         }
@@ -421,6 +426,7 @@ fn note_capture<'a>(
             .map_err(|_| PolicyError::InvalidProposal)?,
         supersedes: None,
         ambiguous_order_with_previous: false,
+        author_time: None,
         created_at_millis: record.occurred_at_millis,
         occurred_at_millis: record.occurred_at_millis,
         upstream_updated_at_millis: None,
@@ -451,4 +457,11 @@ pub(super) fn source_issue_scope(
         Some(command) => command.issue_scope,
         None => Some(source.context_scope_id.clone()),
     })
+}
+
+fn clear_review_evidence(task: &mut TaskState) {
+    task.reason_span = None;
+    task.review_when = None;
+    task.temporal
+        .retain(|t| t.original.role != merl_core::temporal::TemporalRole::ReviewAt);
 }

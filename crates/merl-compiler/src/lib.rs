@@ -1,6 +1,7 @@
 //! Causal source selection and a bounded, authority-free compiler boundary.
 
 mod expansion;
+mod temporal;
 pub use expansion::prepare_context_expansion;
 
 use std::{
@@ -187,6 +188,8 @@ struct RenderedSource {
     version_actor_id: Option<String>,
     created_at_millis: i64,
     occurred_at_millis: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author_time: Option<merl_core::temporal::AuthorTime>,
     body: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     observed_deletion_of: Option<String>,
@@ -214,6 +217,8 @@ struct RenderedCommandOrigin {
 #[derive(JsonSchema, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RenderedObject {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    temporal: Vec<merl_core::temporal::TemporalResult>,
     id: String,
     revision: u64,
     body: Option<String>,
@@ -472,26 +477,13 @@ fn build_context_from_sources(
             return Err(CompileError::InputBudget);
         }
         source_window.push(item.id.clone());
-        let semantic_origin = render_command_origin(store, project, &item.id)?;
-        sources.push(RenderedSource {
-            semantic_origin,
-            id: item.id.to_string(),
-            observation: item.sequence,
-            source_author_id: item.source_author.map(|actor| actor.to_string()),
-            version_actor_id: item.version_actor.map(|actor| actor.to_string()),
-            created_at_millis: item.created_at_millis,
-            occurred_at_millis: item.occurred_at_millis,
-            body: if observed_deletion {
-                None
-            } else {
-                Some(String::from_utf8(body).map_err(|_| CompileError::InvalidResponse)?)
-            },
-            observed_deletion_of: if observed_deletion {
-                item.supersedes.map(|id| id.to_string())
-            } else {
-                None
-            },
-        });
+        sources.push(render_source(
+            store,
+            project,
+            item,
+            body,
+            observed_deletion,
+        )?);
     }
     let selection = match selector {
         SelectorVersion::ObjectIdPrefixV1 => {
@@ -507,7 +499,14 @@ fn build_context_from_sources(
             matches!(selector, SelectorVersion::IssueContextV2),
         )?,
     };
-    let object_context = render_objects(store, project, selection, &mut payload_bytes, limits)?;
+    let object_context = render_objects(
+        store,
+        project,
+        position.basis,
+        selection,
+        &mut payload_bytes,
+        limits,
+    )?;
     let rendered = serde_json::to_vec(&RenderedContext {
         schema: "merl.compilation-context/v1",
         context_scope_id: source.context_scope_id,
@@ -561,9 +560,40 @@ fn build_revalidation_context(
     )
 }
 
+fn render_source(
+    store: &Store,
+    project: &ProjectId,
+    item: merl_store::StoredSourceVersion,
+    body: Vec<u8>,
+    observed_deletion: bool,
+) -> Result<RenderedSource, CompileError> {
+    let semantic_origin = render_command_origin(store, project, &item.id)?;
+    Ok(RenderedSource {
+        semantic_origin,
+        id: item.id.to_string(),
+        observation: item.sequence,
+        source_author_id: item.source_author.map(|actor| actor.to_string()),
+        version_actor_id: item.version_actor.map(|actor| actor.to_string()),
+        created_at_millis: item.created_at_millis,
+        occurred_at_millis: item.occurred_at_millis,
+        author_time: item.author_time,
+        body: if observed_deletion {
+            None
+        } else {
+            Some(String::from_utf8(body).map_err(|_| CompileError::InvalidResponse)?)
+        },
+        observed_deletion_of: if observed_deletion {
+            item.supersedes.map(|id| id.to_string())
+        } else {
+            None
+        },
+    })
+}
+
 fn render_objects(
     store: &Store,
     project: &ProjectId,
+    basis: ProjectRevision,
     selection: SelectedObjects,
     payload_bytes: &mut usize,
     limits: CompilerLimits,
@@ -587,6 +617,7 @@ fn render_objects(
             None => None,
         };
         views.push(RenderedObject {
+            temporal: store.object_temporal_at_revision(project, &id, basis)?,
             id: id.to_string(),
             revision: revision.get(),
             body,
@@ -756,6 +787,12 @@ pub struct Assertion {
     pub confidence_millis: u16,
     /// Quoted or relayed actor, if any.
     pub attributed_to: Option<String>,
+    /// Temporal expressions normalized against the cited source, never the process clock.
+    #[serde(default)]
+    pub temporal: Vec<merl_core::temporal::TemporalExpression>,
+    /// Proposed task deferral with an exact reason span.
+    #[serde(default)]
+    pub deferral: Option<merl_core::temporal::Deferral>,
 }
 
 /// A bounded request for more source context.
@@ -1554,6 +1591,7 @@ fn validate_response(
             {
                 return Err(CompileError::InvalidResponse);
             }
+            let (temporal, deferral) = temporal::normalize(&item, &rendered)?;
             let asserted_by = rendered["sources"]
                 .as_array()
                 .and_then(|sources| {
@@ -1576,6 +1614,8 @@ fn validate_response(
                 confidence_millis: item.confidence_millis,
                 asserted_by,
                 attributed_to: item.attributed_to,
+                temporal,
+                deferral,
                 attribution_verified: false,
             })
         })
