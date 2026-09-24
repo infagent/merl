@@ -113,10 +113,7 @@ pub(super) fn decorate(
     if let Some(task) = store.task_state(project, object)? {
         value["task"] = task_value(store, project, &task)?;
     }
-    if let Some(origin) = store.object_policy_origin(project, object)?
-        && let PolicyInput::Command(id) = origin.input
-        && let Some(command) = store.semantic_command(project, &id)?
-    {
+    if let Some(command) = store.object_semantic_command(project, object)? {
         value["command"] = lineage(store, project, &command, false)?;
         if command.operation == CommandOperation::Resolve {
             value["status"] = json!("resolved");

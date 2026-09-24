@@ -378,11 +378,41 @@ An assertion remains a historical record of what one compiler inferred from one 
 
 Accepted-object lifecycle and evidence support are separate. An object may remain `active` while its support awaits revalidation. Individual support relations use `current`, `evidence_changed`, `revalidation_pending`, or `unsupported`. The object view derives an aggregate support status: `current`, `revalidation_pending`, `partially_supported`, or `unsupported`.
 
-Source supersession records one impact for each accepted support that cited the old source or used it in its compiler context. The impact names the affected compiler run, so a restarted authority can reconstruct the work. For a context edit, Merl replaces the changed version in that run's recorded source window and records a new hindsight run. The assertion may still cite the original trigger; Merl resolves the impact only after policy accepts the revised interpretation.
+Source supersession records one impact for each accepted support that cited the old source or used it in its compiler context. The impact names the affected compiler run, so a restarted authority can reconstruct the work. For a context edit, Merl replaces changed versions in that run's recorded source set with their latest captured versions and records a new hindsight run. Several edits can accumulate before the work starts; the new manifest records the exact replacements. The assertion may still cite the original trigger; Merl resolves the impact only after policy accepts the revised interpretation.
 
 The impact itself is the queryable `evidence_changed` fact. Its pending action remains visible until resolution, and neither record rewrites the original assertion. A material correction may instead supersede or invalidate the old object through policy. If the source bytes disappear, the view marks that support unavailable. The later administrative purge workflow must audit the erasure and its retention scope; low-level payload erasure alone does not make that claim.
 
 After restart, the authority can list pending impacts across the project. Each entry names the affected object and support event, earlier run, trigger, changed source, replacement when present, and next action. Resolving the work removes it from that list but leaves the impact record in place.
+
+`project revalidation run` requires a current `command_actor` grant. It reserves
+an attempt for the impact, inherits the affected run's nine limits, and commits
+the rendered input before calling the compiler. The impact ID is the default run
+ID. An explicit `--run` starts a separate attempt after a failure or further edit;
+reusing a run resumes its saved bytes and requires the same compiler configuration.
+The context uses current accepted state and only the recorded source identities.
+It remains `hindsight`, so completing it cannot close a live coverage gap.
+Context requests use the ordinary bounded expansion path.
+
+A reviewer then calls `project revalidation resolve` under current command
+authority. Confirmation adopts a positive assertion with the same subject, kind,
+and represented value reference. It appends fresh support without replacing the
+object's identity or content. Support-only reviews preserve task facets and resolved
+question or finding status. Weakening withdraws the affected support and leaves
+the object active; remaining independent support determines the aggregate status.
+Supersession accepts a distinct assertion subject of the same kind and commits
+its object, the old object's superseded lifecycle, and their `supersedes` relation
+in one batch. Invalidation changes the old lifecycle. Unavailable evidence closes
+the work as unsupported without requiring or pretending to have a compiler result.
+Purged payloads remain erased.
+
+The immutable review receipt fixes the request's actor, impact, action, run, and
+assertion index. Exact retries return the recorded policy outcome. The accepted
+transaction checks current grants, object revisions, retained values, revised
+source versions, and competing resolutions again before committing. A successful
+review resolves the pending impacts on that support event together. Confirmation
+retires the old support in favor of the new derivation, so another edit cannot
+leave obsolete support counted as current. Object expansion exposes the review,
+original support event, and revised compiler lineage.
 
 ### Policy evaluations
 

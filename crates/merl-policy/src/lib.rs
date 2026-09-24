@@ -4,6 +4,7 @@ mod assertions;
 mod authority;
 mod candidates;
 mod commands;
+mod revalidation;
 pub use candidates::{
     candidate_dependencies_current, candidate_review_evaluation, prepare_candidate_review,
     preview_candidate_review, review_candidate,
@@ -11,6 +12,9 @@ pub use candidates::{
 pub use commands::{
     MAX_COMMAND_TEXT_BYTES, SemanticCommand, prepare_semantic_command, preview_semantic_command,
     semantic_command_evaluation, submit_semantic_command,
+};
+pub use revalidation::{
+    prepare_revalidation_review, resolve_revalidation, revalidation_evaluation,
 };
 
 pub use assertions::{apply_assertions, prepare_assertions};
@@ -176,6 +180,8 @@ pub enum PolicyError {
     InvalidProposal,
     /// A run is unfinished or requires explicit promotion before causal application.
     RunIneligible,
+    /// A review lacks a completed hindsight attempt linked to its impact.
+    RevalidationRunIneligible,
     /// No recorded assertion candidate has this identity in the project.
     CandidateMissing,
     /// Structured command arguments violate the public content or date contract.
@@ -188,6 +194,8 @@ impl fmt::Display for PolicyError {
             Self::InvalidCommand(message) => formatter.write_str(message),
             Self::CandidateMissing => formatter.write_str("candidate does not exist"),
             Self::Store(error) => write!(formatter, "{error}"),
+            Self::RevalidationRunIneligible => formatter
+                .write_str("revalidation requires a completed hindsight run linked to the impact"),
             Self::RunIneligible => formatter.write_str(
                 "assertion application requires a completed live run without context requests",
             ),

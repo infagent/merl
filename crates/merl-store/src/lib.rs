@@ -4,11 +4,13 @@ mod authority;
 mod candidates;
 mod commands;
 mod expansions;
+mod revalidation;
 pub use candidates::{Candidate, CandidateReview, ReviewAction};
 pub use commands::{
     CommandOperation, Commitment, Execution, Scheduling, SemanticCommandRecord, TaskState,
 };
 pub use expansions::{COMPILATION_WORK_PAGE_SIZE, ExpansionWork};
+pub use revalidation::{RevalidationAction, RevalidationReview};
 
 pub use authority::AuthorityGrants;
 
@@ -24,7 +26,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 23;
+const SCHEMA_VERSION: i64 = 24;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -978,6 +980,10 @@ impl Store {
             if version < 23 {
                 transaction
                     .execute_batch(include_str!("../migrations/0023_context_expansions.sql"))?;
+            }
+            if version < 24 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0024_revalidation_reviews.sql"))?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
@@ -4185,7 +4191,11 @@ impl Store {
                      WHERE r.project_id=i.project_id AND r.impact_id=i.id
                        AND r.outcome='unsupported'))
               ) THEN 1 ELSE 0 END),0)
-             FROM evidence_supports s WHERE s.project_id=?1 AND s.object_id=?2",
+             FROM evidence_supports s WHERE s.project_id=?1 AND s.object_id=?2
+               AND NOT EXISTS (SELECT 1 FROM evidence_impacts old
+                 JOIN evidence_revalidations resolved ON resolved.project_id=old.project_id
+                   AND resolved.impact_id=old.id AND resolved.outcome='current'
+                 WHERE old.project_id=s.project_id AND old.support_event_id=s.event_id)",
                 params![project.as_str(), object.as_str()],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )?;
@@ -4221,7 +4231,7 @@ impl Store {
         project: &ProjectId,
         object: &ObjectId,
     ) -> Result<Vec<EvidenceImpact>, StoreError> {
-        self.evidence_impacts_query(project, Some(object))
+        self.evidence_impacts_query(project, Some(object), None)
     }
 
     /// Lists unresolved reconsideration work after restart without scanning objects.
@@ -4232,13 +4242,42 @@ impl Store {
         &self,
         project: &ProjectId,
     ) -> Result<Vec<EvidenceImpact>, StoreError> {
-        self.evidence_impacts_query(project, None)
+        self.evidence_impacts_query(project, None, None)
+    }
+
+    /// Lists up to 100 pending impacts after a stable lexical cursor.
+    ///
+    /// # Errors
+    /// Returns missing-project, storage, or corrupt-lineage errors.
+    pub fn evidence_impact_page(
+        &self,
+        project: &ProjectId,
+        after: Option<&str>,
+    ) -> Result<(Vec<EvidenceImpact>, bool), StoreError> {
+        self.project_revision(project)?;
+        let mut statement = self.connection.prepare("SELECT i.id FROM evidence_impacts i WHERE i.project_id=?1 AND i.id>?2 AND NOT EXISTS (SELECT 1 FROM evidence_revalidations r WHERE r.project_id=i.project_id AND r.impact_id=i.id) ORDER BY i.id LIMIT 101")?;
+        let ids = statement
+            .query_map(params![project.as_str(), after.unwrap_or("")], |r| {
+                r.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let more = ids.len() > 100;
+        let work = ids
+            .into_iter()
+            .take(100)
+            .map(|id| {
+                self.evidence_impact(project, &id)?
+                    .ok_or(StoreError::CorruptHistory)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((work, more))
     }
 
     fn evidence_impacts_query(
         &self,
         project: &ProjectId,
         object: Option<&ObjectId>,
+        impact: Option<&str>,
     ) -> Result<Vec<EvidenceImpact>, StoreError> {
         let mut statement = self.connection.prepare(
             "SELECT i.id,i.object_id,i.support_event_id,i.source_version_id,i.replacement_version_id,
@@ -4247,12 +4286,13 @@ impl Store {
                ON r.project_id=i.project_id AND r.impact_id=i.id
              LEFT JOIN compilation_runs cr
                ON cr.project_id=i.project_id AND cr.id=i.affected_run_id
-             WHERE i.project_id=?1 AND (?2 IS NOT NULL AND i.object_id=?2
-               OR ?2 IS NULL AND r.impact_id IS NULL)
+             WHERE i.project_id=?1 AND (?3 IS NOT NULL AND i.id=?3
+               OR ?3 IS NULL AND (?2 IS NOT NULL AND i.object_id=?2
+               OR ?2 IS NULL AND r.impact_id IS NULL))
              ORDER BY i.id",
         )?;
         let rows = statement.query_map(
-            params![project.as_str(), object.map(ObjectId::as_str)],
+            params![project.as_str(), object.map(ObjectId::as_str), impact],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -4318,20 +4358,10 @@ impl Store {
         project: &ProjectId,
         impact_id: &str,
     ) -> Result<Option<EvidenceImpact>, StoreError> {
-        let object: Option<String> = self
-            .connection
-            .query_row(
-                "SELECT object_id FROM evidence_impacts WHERE project_id=?1 AND id=?2",
-                params![project.as_str(), impact_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(object) = object else {
-            return Ok(None);
-        };
-        let object = ObjectId::try_from(object.as_str()).map_err(|_| StoreError::CorruptHistory)?;
-        self.evidence_impacts_for_object(project, &object)
-            .map(|items| items.into_iter().find(|item| item.id == impact_id))
+        Ok(self
+            .evidence_impacts_query(project, None, Some(impact_id))?
+            .into_iter()
+            .next())
     }
 
     /// Reads the current Issue state without mixing provider facts into semantic objects.
@@ -4999,11 +5029,13 @@ fn validate_policy_shape(
                     .inputs
                     .get(index)
                     .is_some_and(|input| input.disposition == PolicyDisposition::Accepted)
-                    || !origin_inputs.insert(index)
                     || !origin_events.insert(origin.event.as_str())
                 {
                     return Err(StoreError::InvalidPolicyEvaluation);
                 }
+                // One reviewed supersession produces both object events and its edge.
+                // Every event still names exactly one accepted input.
+                origin_inputs.insert(index);
             }
             if evaluation
                 .inputs
@@ -5156,6 +5188,9 @@ fn validate_policy_dependencies(
         return Ok(Some(conflict));
     }
     if let Some(conflict) = candidates::validate_reviews(transaction, evaluation)? {
+        return Ok(Some(conflict));
+    }
+    if let Some(conflict) = revalidation::validate_reviews(transaction, evaluation)? {
         return Ok(Some(conflict));
     }
     let basis = to_sql_revision(evaluation.basis_project_revision)?;
@@ -5375,6 +5410,7 @@ fn insert_policy_record(
         )?;
     }
     if conflict.is_none() && !duplicate {
+        revalidation::record_resolutions(transaction, evaluation)?;
         for origin in &evaluation.event_origins {
             let event = evaluation
                 .batch
@@ -5420,13 +5456,23 @@ fn record_accepted_support(
     let lineage = match input {
         merl_core::PolicyInput::ObservedAssertion { run, index, .. } => Some((run.clone(), *index)),
         merl_core::PolicyInput::Command(id) => {
-            candidates::review_lineage(transaction, &evaluation.project, id)?
+            revalidation::assertion_lineage(transaction, &evaluation.project, id)?.or(
+                candidates::review_lineage(transaction, &evaluation.project, id)?,
+            )
         }
         _ => None,
     };
     let Some((run, index)) = lineage else {
         return Ok(());
     };
+    if let merl_core::PolicyInput::Command(id) = input
+        && revalidation::assertion_lineage(transaction, &evaluation.project, id)?.is_some()
+    {
+        let matches: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM domain_events e JOIN observed_assertions a ON a.project_id=e.project_id AND a.subject_id=e.object_id WHERE e.project_id=?1 AND e.id=?2 AND a.run_id=?3 AND a.assertion_index=?4 AND e.lifecycle='active')",params![evaluation.project.as_str(),origin.event.as_str(),run.as_str(),index],|r|r.get(0))?;
+        if !matches {
+            return Ok(());
+        }
+    }
     let source: String = transaction.query_row(
         "SELECT source_version_id FROM observed_assertions
          WHERE project_id=?1 AND run_id=?2 AND assertion_index=?3",
@@ -5507,7 +5553,12 @@ fn record_evidence_impacts(
          JOIN policy_assertion_inputs pa
            ON pa.project_id=pi.project_id AND pa.evaluation_id=pi.evaluation_id
           AND pa.input_id=pi.input_id
-         WHERE s.project_id=?1 AND (s.source_version_id=?2 OR EXISTS (
+         WHERE s.project_id=?1
+           AND NOT EXISTS (SELECT 1 FROM evidence_impacts old
+             JOIN evidence_revalidations resolved ON resolved.project_id=old.project_id
+               AND resolved.impact_id=old.id
+             WHERE old.project_id=s.project_id AND old.support_event_id=s.event_id)
+           AND (s.source_version_id=?2 OR EXISTS (
            SELECT 1 FROM compilation_context_sources cs
            WHERE cs.project_id=pa.project_id AND cs.run_id=pa.run_id
              AND cs.source_version_id=?2))
@@ -6480,7 +6531,7 @@ fn validate_compilation_intent(
             return Err(StoreError::InvalidCompilation);
         }
     }
-    if let Some(impact) = store.evidence_impact(project, record.id)? {
+    if let Some(impact) = store.revalidation_impact(project, record.id)? {
         validate_revalidation_intent(store, project, record, &impact)?;
     }
     Ok(())
@@ -6492,36 +6543,10 @@ fn validate_revalidation_intent(
     record: &CompilationIntent<'_>,
     impact: &EvidenceImpact,
 ) -> Result<(), StoreError> {
-    let replacement = impact
-        .replacement
-        .as_ref()
-        .ok_or(StoreError::InvalidCompilation)?;
-    let expected_trigger = if impact.trigger == impact.changed_source {
-        replacement
-    } else {
-        &impact.trigger
-    };
-    let mut expected_window =
-        store.compilation_context_sources(project, impact.affected_run.as_str())?;
-    let changed = expected_window
-        .iter_mut()
-        .find(|version| **version == impact.changed_source)
-        .ok_or(StoreError::InvalidCompilation)?;
-    *changed = replacement.clone();
-    let mut expected_order = Vec::with_capacity(expected_window.len());
-    for version in expected_window {
-        let source = store
-            .source_version(project, &version)?
-            .ok_or(StoreError::InvalidCompilation)?;
-        expected_order.push((source.sequence, version));
-    }
-    expected_order.sort_by_key(|item| item.0);
-    let expected_window: Vec<_> = expected_order
-        .into_iter()
-        .map(|(_, version)| version)
-        .collect();
+    let expected_trigger = store.latest_source_version(project, &impact.trigger)?;
+    let expected_window = store.revalidation_source_window(project, impact)?;
     if record.mode != "hindsight"
-        || record.source != expected_trigger
+        || record.source != &expected_trigger
         || record.source_window != expected_window
         || record.interpretation_basis_revision != store.project_revision(project)?
         || record.source_observation_cutoff != store.source_observation_head(project)?
