@@ -92,7 +92,7 @@ impl AuthorityScenario {
             assert_eq!(grant["outcome"], "accepted");
             assert_eq!(grant["actor"], "admin");
             assert_eq!(grant["revision"], index + 1);
-            assert_eq!(grant["policy_version"], "authority_v6");
+            assert_eq!(grant["policy_version"], "authority_v8");
             assert!(grant["evaluation"].is_string());
         }
         assert_ne!(

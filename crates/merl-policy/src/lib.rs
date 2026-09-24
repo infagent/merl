@@ -4,6 +4,9 @@ mod assertions;
 mod authority;
 mod candidates;
 mod commands;
+mod relation_evidence;
+mod relations;
+pub use relation_evidence::{prepare_relation_withdrawal, withdraw_relation};
 mod revalidation;
 pub use candidates::{
     candidate_dependencies_current, candidate_review_evaluation, prepare_candidate_review,
@@ -46,6 +49,17 @@ pub enum Proposal {
         /// Proposed change, checked against the stored assertion.
         event: DomainEvent,
     },
+    /// A compiler relation with endpoint evidence loaded from its recorded run.
+    ObservedRelation {
+        /// Stable identity of this policy input.
+        id: PolicyInputId,
+        /// Compiler origin.
+        run: merl_core::CompilationRunId,
+        /// Position in the relation list.
+        index: u32,
+        /// Proposed edge, checked against the stored relation.
+        event: DomainEvent,
+    },
     /// A structured action by the authenticated evaluation actor.
     Command {
         /// Stable client retry identity.
@@ -77,6 +91,11 @@ impl Proposal {
                 run: run.clone(),
                 index: *index,
             },
+            Self::ObservedRelation { id, run, index, .. } => PolicyInput::ObservedRelation {
+                id: id.clone(),
+                run: run.clone(),
+                index: *index,
+            },
             Self::Command { id, .. } => PolicyInput::Command(id.clone()),
             Self::ProviderObservation { observation, .. } => {
                 PolicyInput::ProviderObservation(observation.id.clone())
@@ -88,6 +107,7 @@ impl Proposal {
     fn event(&self) -> &DomainEvent {
         match self {
             Self::ObservedAssertion { event, .. }
+            | Self::ObservedRelation { event, .. }
             | Self::Command { event, .. }
             | Self::ProviderObservation { event, .. }
             | Self::AdministrativeAction { event, .. } => event,
@@ -120,7 +140,7 @@ impl PolicyRules {
 
     fn from_grants(grants: merl_store::AuthorityGrants) -> Result<Self, StoreError> {
         Ok(Self {
-            version: PolicyVersion::try_from("authority_v6")
+            version: PolicyVersion::try_from("authority_v8")
                 .map_err(|_| StoreError::CorruptHistory)?,
             decision_authors: grants.decision_authors,
             command_actors: grants.command_actors,
@@ -563,6 +583,9 @@ fn disposition_for(
             }
             Ok((PolicyDisposition::Accepted, "trusted_provider_fact"))
         }
+        Proposal::ObservedRelation {
+            run, index, event, ..
+        } => relations::disposition(store, project, run, *index, event),
         Proposal::ObservedAssertion {
             run, index, event, ..
         } => assertions::disposition(store, project, rules, run, *index, event),
@@ -584,7 +607,9 @@ fn input_digest(proposal: &Proposal, actor: &ActorId) -> [u8; 32] {
     ) {
         part(actor.as_str().as_bytes());
     }
-    if let Proposal::ObservedAssertion { run, index, .. } = proposal {
+    if let Proposal::ObservedAssertion { run, index, .. }
+    | Proposal::ObservedRelation { run, index, .. } = proposal
+    {
         part(run.as_str().as_bytes());
         part(&index.to_be_bytes());
     }

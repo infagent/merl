@@ -4,6 +4,44 @@ mod assertion_policy;
 use assertion_policy::AssertionScenario;
 
 #[test]
+fn accepted_relations_stop_driving_context_when_their_evidence_changes() {
+    assertion_policy::RelationHealthScenario::given_accepted_relations()
+        .when_evidence_changes_and_the_project_restarts()
+        .then_stale_edges_are_qualified_and_pending_work_is_durable()
+        .when_the_work_is_reviewed()
+        .then_review_restores_or_withdraws_support_without_rewriting_history();
+}
+
+#[test]
+fn compiler_relations_keep_independent_policy_and_reviewed_provenance() {
+    AssertionScenario::given_a_decision_and_a_grounded_relation()
+        .when_the_relation_is_applied_reviewed_and_rebuilt()
+        .then_the_relation_retains_its_compiler_basis_and_focused_view();
+}
+
+#[test]
+fn invalid_relations_do_not_discard_an_independent_decision() {
+    AssertionScenario::given_a_decision_and_invalid_relations()
+        .when_the_run_is_inspected_and_applied()
+        .then_only_the_relations_are_rejected();
+}
+
+#[test]
+fn accepted_relations_expand_to_evidence_and_follow_purge_lineage() {
+    AssertionScenario::given_a_decision_and_a_grounded_relation()
+        .when_the_relation_is_applied_reviewed_and_rebuilt()
+        .when_the_accepted_relation_is_expanded_and_its_source_purge_previewed()
+        .then_expansion_and_purge_name_the_exact_relation_origin();
+}
+
+#[test]
+fn relation_only_reviews_require_current_authority_endpoints_and_evidence() {
+    assertion_policy::RelationReviewCases::given_relation_only_candidates()
+        .when_reviews_run_across_dependency_changes()
+        .then_only_current_authorized_reviews_accept_edges();
+}
+
+#[test]
 fn a_compound_comment_gets_independent_outcomes_and_one_accepted_batch() {
     AssertionScenario::given_a_compiled_compound_comment()
         .when_the_run_is_inspected_and_applied()
@@ -122,4 +160,26 @@ fn interrupted_review_retries_reuse_matching_reasons_without_overwriting_or_rest
     assertion_policy::ReviewRecoveryCases::given_review_reasons_without_requests()
         .when_the_same_commands_are_retried_after_restart()
         .then_matching_reasons_recover_and_conflicting_or_erased_reasons_stay_unchanged();
+}
+
+#[test]
+fn relation_withdrawal_checks_authority_and_competing_reviews_at_commit() {
+    assertion_policy::WithdrawalRaceScenario::given_prepared_withdrawals()
+        .when_authority_or_support_changes_before_commit()
+        .then_stale_withdrawals_leave_durable_conflicts();
+}
+
+#[test]
+fn independent_relation_derivations_share_context_without_sharing_evidence_health() {
+    assertion_policy::IndependentRelationScenario::given_independent_support_for_the_same_edge()
+        .when_one_derivations_source_changes()
+        .then_only_stale_support_needs_review_and_the_neighbor_stays_current();
+}
+
+#[test]
+fn relation_health_upgrade_respects_the_compilers_recorded_source_window() {
+    assertion_policy::RelationUpgradeScenario::given_reviewed_edges_before_and_after_a_source_edit(
+    )
+    .when_relation_health_is_migrated_from_accepted_history()
+    .then_only_the_derivation_before_the_edit_needs_review();
 }

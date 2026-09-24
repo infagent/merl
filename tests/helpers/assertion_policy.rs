@@ -1,3 +1,10 @@
+#[path = "assertion_policy/relation_health.rs"]
+mod relation_health;
+pub use relation_health::{
+    IndependentRelationScenario, RelationHealthScenario, RelationUpgradeScenario,
+    WithdrawalRaceScenario,
+};
+
 use merl_compiler::{
     CompileError, CompilerAdapter, CompilerLimits, RunMode, RunRequest, prepare_eager_compilation,
     prepare_evaluation_compilation, prepare_hindsight_compilation, prepare_replay_compilation,
@@ -75,6 +82,157 @@ pub struct AssertionScenario {
     basis: u64,
 }
 impl AssertionScenario {
+    pub fn when_the_accepted_relation_is_expanded_and_its_source_purge_previewed(mut self) -> Self {
+        let store = self.store();
+        let relation = store
+            .issue_state(&id("P1"), &id("D1"), "issue-1")
+            .unwrap()
+            .relations[0]
+            .relation
+            .id
+            .clone();
+        self.inspected = Some(self.cli(&["show", relation.as_str(), "--source"]));
+        let preview = store
+            .preview_source_purge(&id("P1"), &id("source-compound"))
+            .unwrap();
+        self.inbox = Some(
+            json!({"relations":preview.relations.iter().map(merl_core::RelationId::as_str).collect::<Vec<_>>(),"expected":relation.as_str()}),
+        );
+        self
+    }
+    pub fn then_expansion_and_purge_name_the_exact_relation_origin(self) {
+        let expanded = self.inspected.as_ref().unwrap();
+        assert_eq!(expanded["schema"], "merl.relation/v1", "{expanded}");
+        assert_eq!(
+            expanded["policy_origin"]["input"]["review"]["relation"]["run"],
+            "compound"
+        );
+        assert_eq!(
+            expanded["policy_origin"]["input"]["review"]["relation"]["subject_basis"]["assertion"]
+                ["source_version"],
+            "source-compound"
+        );
+        let preview = self.inbox.as_ref().unwrap();
+        assert_eq!(preview["relations"], json!([preview["expected"]]));
+    }
+    pub fn given_a_decision_and_a_grounded_relation() -> Self {
+        let mut s = Self::new();
+        let mut store = s.store();
+        merl_policy::apply_current(
+            &mut store,
+            &id("P1"),
+            &id("agent"),
+            id("seed-eval"),
+            id("seed-batch"),
+            NOW,
+            &[merl_policy::Proposal::Command {
+                id: id("seed"),
+                event: merl_core::DomainEvent::PutObject {
+                    id: id("seed-event"),
+                    object: id("D0"),
+                    kind: id("decision"),
+                    payload: None,
+                    issue_scope: None,
+                    lifecycle: merl_core::ObjectLifecycle::Active,
+                },
+            }],
+        )
+        .unwrap();
+        drop(store);
+        let mut response = Self::response(&[Self::assertion("D1")]);
+        response["relations"] = json!([{"subject":"D1","predicate":"supports","object":"D0"}]);
+        s.compile("compound", Some("alice"), RunMode::Live, Some(response));
+        s.basis = s.store().project_revision(&id("P1")).unwrap().get();
+        s
+    }
+    pub fn given_a_decision_and_invalid_relations() -> Self {
+        let mut s = Self::new();
+        let mut response = Self::response(&[Self::assertion("D1")]);
+        response["relations"] = json!([
+            {"subject":"D1","predicate":"supports","object":"missing"},
+            {"subject":"invalid endpoint prose","predicate":"supports","object":"D1"}
+        ]);
+        s.compile("compound", Some("alice"), RunMode::Live, Some(response));
+        s.basis = s.store().project_revision(&id("P1")).unwrap().get();
+        s
+    }
+    pub fn then_only_the_relations_are_rejected(self) {
+        let output = &self.outputs[0];
+        let outcomes: Vec<_> = output["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["outcome"].as_str().unwrap())
+            .collect();
+        assert_eq!(outcomes, ["accepted", "rejected", "rejected"]);
+        assert_eq!(output["revision"], self.basis + 1);
+        assert_eq!(
+            self.inspected.as_ref().unwrap()["relations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+    pub fn when_the_relation_is_applied_reviewed_and_rebuilt(mut self) -> Self {
+        self = self.when_the_run_is_inspected_and_applied();
+        let candidate = self.outputs[0]["inputs"][1]["input"]
+            .as_str()
+            .unwrap_or("missing-relation")
+            .to_owned();
+        self.outputs
+            .push(self.cli(&["candidate", "show", &candidate]));
+        self.outputs.push(self.cli(&[
+            "candidate",
+            "accept",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "accept-relation",
+        ]));
+        self.outputs.push(self.cli(&["project", "rebuild"]));
+        self.outputs
+            .push(self.cli(&["project", "view", "--focus", "D1"]));
+        self.retry = Some(self.cli(&[
+            "candidate",
+            "accept",
+            &candidate,
+            "--actor",
+            "agent",
+            "--id",
+            "accept-relation",
+        ]));
+        self.detail = Some(self.cli(&["candidate", "show", &candidate]));
+        self
+    }
+    pub fn then_the_relation_retains_its_compiler_basis_and_focused_view(self) {
+        assert_eq!(self.outputs[0]["inputs"][0]["outcome"], "accepted");
+        assert_eq!(self.outputs[0]["inputs"][1]["outcome"], "candidate");
+        assert_eq!(
+            self.outputs[2]["outcome"], "accepted",
+            "{}",
+            self.outputs[2]
+        );
+        assert_eq!(self.retry.as_ref().unwrap(), &self.outputs[2]);
+        let detail = self.detail.as_ref().unwrap();
+        assert_eq!(detail["status"], "accepted", "{detail}");
+        assert_eq!(detail["relation"]["run"], "compound");
+        assert_eq!(detail["relation"]["index"], 0);
+        assert_eq!(
+            detail["relation"]["subject_basis"]["assertion"]["span"],
+            json!({"start":0,"end":13})
+        );
+        assert_eq!(detail["relation"]["object_basis"]["object"], "D0");
+        let objects = self.outputs[4]["objects"]
+            .as_array()
+            .expect("focused objects");
+        assert!(
+            objects.iter().any(|o| o["id"] == "D0"),
+            "{}",
+            self.outputs[4]
+        );
+    }
     fn new() -> Self {
         let scenario = Self {
             database: Database::new(),
@@ -147,6 +305,27 @@ impl AssertionScenario {
         prior: Option<&str>,
         author: Option<&str>,
     ) {
+        Self::capture_body(
+            store,
+            source,
+            version,
+            prior,
+            author,
+            Some(if prior.is_some() {
+                b"Correction: use variable gain."
+            } else {
+                b"Use fixed gain. Please add a task. The other item is unclear."
+            }),
+        );
+    }
+    fn capture_body(
+        store: &mut Store,
+        source: &str,
+        version: &str,
+        prior: Option<&str>,
+        author: Option<&str>,
+        body: Option<&[u8]>,
+    ) {
         store
             .capture_source_version(
                 &id("P1"),
@@ -173,14 +352,12 @@ impl AssertionScenario {
                     provider_actor_id: author,
                     source_author: author.map(id),
                     provider_source_author_id: author,
-                    body: Some(if prior.is_some() {
-                        b"Correction: use variable gain."
-                    } else {
-                        b"Use fixed gain. Please add a task. The other item is unclear."
-                    }),
+                    body,
                     edit_diff: None,
                     edit_deleted_at_millis: None,
-                    missing_body_reason: None,
+                    missing_body_reason: body
+                        .is_none()
+                        .then_some(merl_store::MissingSourceBody::DeletedByProvider),
                     compilation_mode: CompilationMode::Eager,
                     coverage_requirement: CoverageRequirement::Required,
                     policy_version: id("capture-v1"),
@@ -189,6 +366,16 @@ impl AssertionScenario {
             .unwrap();
     }
     fn compile(&mut self, run: &str, author: Option<&str>, mode: RunMode, response: Option<Value>) {
+        self.compile_with_window(run, author, mode, response, 1);
+    }
+    fn compile_with_window(
+        &mut self,
+        run: &str,
+        author: Option<&str>,
+        mode: RunMode,
+        response: Option<Value>,
+        window: usize,
+    ) {
         let mut store = self.store();
         let source = format!("source-{run}");
         Self::capture(&mut store, &source, &source, None, author);
@@ -200,7 +387,7 @@ impl AssertionScenario {
             context_requests: 2,
             expansion_rounds: 1,
             payload_bytes: 4096,
-            source_window: 1,
+            source_window: window,
             objects: 4,
         };
         let request = RunRequest {
@@ -1414,5 +1601,170 @@ impl ReviewRecoveryCases {
                 assert_eq!(store.read_payload(&id("P1"), &payload).unwrap(), expected);
             }
         }
+    }
+}
+
+pub struct RelationReviewCases {
+    cases: Vec<(AssertionScenario, String)>,
+    outcomes: Vec<(String, String, usize)>,
+}
+impl RelationReviewCases {
+    pub fn given_relation_only_candidates() -> Self {
+        let cases = ["unchanged", "unauthorized", "endpoint", "evidence", "revocation", "rejection"]
+            .into_iter().map(|change| {
+                let mut s=AssertionScenario::given_a_decision_and_a_grounded_relation().when_the_run_is_inspected_and_applied();
+                let response=json!({"schema":"merl.compiler-response/v1","assertions":[],"relations":[{"subject":"D0","predicate":"answers","object":"D1"}]});
+                s.compile("edges-only",Some("alice"),RunMode::Live,Some(response));
+                s.outputs.push(s.cli(&["source","apply","--run","edges-only","--actor","worker","--id","apply-edges"]));
+                (s,change.to_owned())
+            }).collect();
+        Self {
+            cases,
+            outcomes: Vec::new(),
+        }
+    }
+    pub fn when_reviews_run_across_dependency_changes(mut self) -> Self {
+        for (s, change) in &self.cases {
+            let candidate = s.outputs.last().unwrap()["inputs"][0]["input"]
+                .as_str()
+                .expect("relation-only candidate");
+            let review = merl_store::CandidateReview {
+                id: id("guarded-review"),
+                candidate: id(candidate),
+                actor: id(if change == "unauthorized" {
+                    "outsider"
+                } else {
+                    "agent"
+                }),
+                action: merl_store::ReviewAction::Accept,
+                reason: None,
+            };
+            let mut store = s.store();
+            let prepared =
+                merl_policy::prepare_candidate_review(&mut store, &id("P1"), &review, NOW + 10)
+                    .unwrap();
+            change_relation_review_dependency(s, &mut store, candidate, change);
+            match prepared.commit(&mut store) {
+                Ok(_) | Err(merl_store::StoreError::PolicyConflict) => {}
+                Err(e) => panic!("{change}: {e}"),
+            }
+            let result = store
+                .policy_evaluation(&id("P1"), &prepared.evaluation.id)
+                .unwrap()
+                .unwrap();
+            let edges = store
+                .issue_state(&id("P1"), &id("D1"), "issue-1")
+                .unwrap()
+                .relations
+                .len();
+            self.outcomes.push((
+                change.clone(),
+                result.inputs[0].disposition.as_str().into(),
+                edges,
+            ));
+            if change == "unchanged" {
+                let detail = s.cli(&["candidate", "show", candidate]);
+                assert_eq!(
+                    detail["reviews"][0]["relation"]["run"], "edges-only",
+                    "{detail}"
+                );
+                let reapplied = s.cli(&[
+                    "source",
+                    "apply",
+                    "--run",
+                    "edges-only",
+                    "--actor",
+                    "worker",
+                    "--id",
+                    "apply-again",
+                ]);
+                assert_eq!(reapplied["inputs"][0]["outcome"], "duplicate");
+            }
+        }
+        self
+    }
+    pub fn then_only_current_authorized_reviews_accept_edges(self) {
+        for (change, outcome, edges) in self.outcomes {
+            assert_eq!(
+                outcome,
+                match change.as_str() {
+                    "unchanged" => "accepted",
+                    "unauthorized" => "rejected",
+                    _ => "conflict",
+                },
+                "{change}"
+            );
+            assert_eq!(edges, usize::from(change == "unchanged"), "{change}");
+        }
+    }
+}
+
+fn change_relation_review_dependency(
+    s: &AssertionScenario,
+    store: &mut Store,
+    candidate: &str,
+    change: &str,
+) {
+    match change {
+        "endpoint" => {
+            merl_policy::apply_current(
+                store,
+                &id("P1"),
+                &id("agent"),
+                id("change-eval"),
+                id("change-batch"),
+                NOW + 11,
+                &[merl_policy::Proposal::Command {
+                    id: id("change"),
+                    event: merl_core::DomainEvent::PutObject {
+                        id: id("change-event"),
+                        object: id("D0"),
+                        kind: id("decision"),
+                        payload: None,
+                        issue_scope: None,
+                        lifecycle: merl_core::ObjectLifecycle::Superseded,
+                    },
+                }],
+            )
+            .unwrap();
+        }
+        "evidence" => {
+            store
+                .erase_payload(&id("P1"), &id("ctx_edges-only"))
+                .unwrap();
+        }
+        "revocation" => {
+            let result = s.cli(&[
+                "project",
+                "authority",
+                "revoke",
+                "--id",
+                "revoke-reviewer",
+                "--actor",
+                "admin",
+                "--subject",
+                "agent",
+                "--permission",
+                "command_actor",
+                "--reason",
+                "End responsibility",
+            ]);
+            assert_eq!(result["outcome"], "accepted");
+        }
+        "rejection" => {
+            let result = s.cli(&[
+                "candidate",
+                "reject",
+                candidate,
+                "--actor",
+                "agent",
+                "--id",
+                "reject-edge",
+                "--reason",
+                "The evidence does not answer this question",
+            ]);
+            assert_eq!(result["outcome"], "accepted");
+        }
+        _ => {}
     }
 }

@@ -455,9 +455,42 @@ Replay and evaluation results do not enter accepted state on their own. Promotio
 
 ### Applying recorded assertions
 
-`source assertions` exposes a run's assertions, unresolved spans, and context requests. `source apply` evaluates a completed live run through `merl-policy`. The application loads the run and source records itself; callers supply a run ID, evaluation request ID, and audit actor. They cannot supply an assertion author, source span, or proposed event.
+`source assertions` exposes a run's assertions, typed relations, unresolved spans, and context requests. `source apply` evaluates a completed live run through `merl-policy`. The application loads the run and source records itself; callers supply a run ID, evaluation request ID, and audit actor. They cannot supply an assertion author, source span, or proposed event.
 
-The first-release object mapping uses the assertion subject as the object ID and its predicate as the kind. Supported predicates are `decision`, `requirement`, `question`, `fact`, `blocker`, `finding`, `hypothesis`, `claim`, `task`, `experiment`, and `next_action`. A value names a retained project payload, or `none` for no object payload. Other predicates and unavailable value references receive a rejected disposition. The mapping creates active objects scoped to the recorded source conversation. It cannot change an existing object's kind or scope. Typed relations await #66.
+The first-release object mapping uses the assertion subject as the object ID and its predicate as the kind. Supported predicates are `decision`, `requirement`, `question`, `fact`, `blocker`, `finding`, `hypothesis`, `claim`, `task`, `experiment`, and `next_action`. A value names a retained project payload, or `none` for no object payload. Other predicates and unavailable value references receive a rejected disposition. The mapping creates active objects scoped to the recorded source conversation. It cannot change an existing object's kind or scope.
+
+Typed relations retain separate run/index identities and policy dispositions. Each endpoint names either a unique assertion subject in the same response or an accepted object selected into that run's context. Merl records the assertion index or exact object revision as the endpoint basis. An unknown endpoint, an ambiguous assertion subject, or an invalid identifier rejects only that relation. Invalid identifier text remains in the erasable response; structural records retain a rejection code.
+
+The first-release relation predicates are `supports`, `disputes`, `answers`, `addresses`, `updates`, `depends_on`, `blocks`, and `supersedes`. These edges remain candidates until a reviewer with `command_actor` authority accepts them. An endpoint's decision-author grant does not authorize the edge. A relation can wait while policy accepts an independent object assertion.
+
+Relation candidates use the existing accept and reject commands. Correction remains an object-assertion operation. Acceptance requires both endpoints in accepted state: an assertion endpoint must still have its original accepted derivation, and an object endpoint must retain the recorded revision. Review checks source availability and current grants; the commit repeats those checks and guards both endpoint revisions. A successful review writes the existing relation event and projection with an exact command-to-relation-to-run link. Rebuild restores the edge, focused views include its neighbor, and expansion follows each endpoint basis. Purge follows relation lineage even after the response bytes disappear.
+
+An accepted compiler relation has immutable derivation support, separate from its
+semantic event. An edit or deletion of any source selected by that run appends a
+relation evidence impact. Erasing source, context, or response bytes does the same,
+including compiler contexts erased through transitive purge. Affected derivations
+leave current graph selection immediately. `show` reports `revalidation_pending`
+while review is open, or `unsupported` when evidence is erased or review has retired
+the support. Rebuild preserves this distinction. Migration discovers impacts for
+previously accepted relations from their recorded source windows and retained bytes.
+
+For the first release, review restores an edge through a fresh live compiler run
+and explicit candidate acceptance. Accepting the same subject/predicate/object
+triple closes pending work for its stale predecessors in the same transaction.
+Accepting a different triple leaves the earlier work open; the reviewer can close
+it with `project revalidation resolve --action withdraw`. Withdrawal requires
+current `command_actor` authority and appends a control receipt. It preserves the
+relation's semantic revision and original provenance. The receipt fixes the actor
+and impact; exact retries return the original outcome, and competing resolutions
+or grant changes prevent a prepared withdrawal from committing.
+
+Relation IDs remain specific to `(project, run, index)` in this release. Independent
+current derivations of the same triple can coexist, each with its own evidence
+health. Focus selection counts distinct neighbors before applying its limit.
+Retiring one derivation cannot hide a neighbor that another current edge still
+supports. A replacement review links the retired support to the new relation ID;
+Merl does not rewrite the old edge or merge its history into the replacement.
+
 
 The `decision_author` grant has this bounded meaning:
 
@@ -478,7 +511,7 @@ Before accepting new support, policy checks that the source window includes the 
 
 ### Reviewing candidate interpretations
 
-`candidate list` and `candidate show` find assertion inputs with a recorded candidate disposition. The input ID identifies the candidate across later application attempts. Inspection retains the first candidate evaluation, the original assertion and source span, its proposed effect, and whether the evidence and original target still match. Listing and review history use bounded pages; neither loads unrelated source prose.
+`candidate list` and `candidate show` find assertion and relation inputs with a recorded candidate disposition. The input ID identifies the candidate across later application attempts. Inspection retains the first candidate evaluation, the original assertion and source span, its proposed effect, and whether the evidence and original target still match. Listing and review history use bounded pages; neither loads unrelated source prose.
 
 A reviewer with a current `command_actor` grant may accept, reject, or correct a candidate. `decision_author` alone does not grant review authority. Acceptance adopts the recorded proposal. Correction submits a new typed object proposal with an explicit subject, supported kind, and retained payload reference or `none`; it keeps the original Issue scope. Policy rejects provider and control kinds and prevents kind or scope substitution on an existing target. The compiler assertion stays unchanged, including when the reviewer corrects its subject or predicate.
 

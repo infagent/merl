@@ -45,7 +45,9 @@ fn status(store: &Store, project: &ProjectId, candidate: &Candidate) -> Result<S
                 _ => "corrected",
             }
             .into()
-        } else if store.accepted_assertion(project, &candidate.run, candidate.index)? {
+        } else if !candidate.relation
+            && store.accepted_assertion(project, &candidate.run, candidate.index)?
+        {
             "accepted".into()
         } else {
             "pending".into()
@@ -78,6 +80,22 @@ pub(super) fn execute(
                 .iter()
                 .map(|review| review_json(store, project, review, false))
                 .collect::<Result<Vec<_>, _>>()?;
+            if candidate.relation {
+                let relation = crate::assertions::relation_json(
+                    store,
+                    project,
+                    &candidate.run,
+                    candidate.index,
+                    false,
+                )?;
+                return Ok(render(
+                    &json!({"schema":"merl.candidate/v1","project":project.as_str(),"id":candidate.id.as_str(),"status":status(store,project,&candidate)?,
+                    "original_evaluation":candidate.evaluation.as_str(),"basis_project_revision":candidate.basis.get(),"reason":candidate.reason.as_str(),
+                    "relation":relation,"proposal":relation,"reviews":rows,"next_offset":if more {Some(offset+100)}else{None},
+                    "dependency_state":if merl_policy::candidate_dependencies_current(store,project,&candidate)? {"current"}else{"changed"}}),
+                    options.json_output,
+                ));
+            }
             let assertion = assertion_json(store, project, &candidate.run, candidate.index, false)?;
             json!({"schema":"merl.candidate/v1","project":project.as_str(),"id":candidate.id.as_str(),"status":status(store,project,&candidate)?,
                 "original_evaluation":candidate.evaluation.as_str(),"basis_project_revision":candidate.basis.get(),"reason":candidate.reason.as_str(),
@@ -210,13 +228,34 @@ pub(super) fn review_json(
         }
         _ => Value::Null,
     };
-    Ok(
-        json!({"request":review.id.as_str(),"candidate":review.candidate.as_str(),"actor":review.actor.as_str(),"action":review.action.as_str(),
-        "original_evaluation":candidate.evaluation.as_str(),"assertion":assertion_json(store,project,&candidate.run,candidate.index,expand_source)?,"proposal":proposal,
+    let evidence = if candidate.relation {
+        crate::assertions::relation_json(
+            store,
+            project,
+            &candidate.run,
+            candidate.index,
+            expand_source,
+        )?
+    } else {
+        assertion_json(
+            store,
+            project,
+            &candidate.run,
+            candidate.index,
+            expand_source,
+        )?
+    };
+    let mut value = json!({"request":review.id.as_str(),"candidate":review.candidate.as_str(),"actor":review.actor.as_str(),"action":review.action.as_str(),
+        "original_evaluation":candidate.evaluation.as_str(),"proposal":proposal,
         "evaluation":record.as_ref().map(|r|r.id.as_str()),"outcome":record.as_ref().and_then(|r|r.inputs.first()).map(|i|i.disposition.as_str()),
         "reason_payload":review.reason.as_ref().map(PayloadId::as_str),"reason_available":matches!(reason,Some(PayloadRead::Available(_))),
-        "reason_text":match reason {Some(PayloadRead::Available(bytes))=>Some(String::from_utf8_lossy(&bytes).into_owned()),_=>None}}),
-    )
+        "reason_text":match reason {Some(PayloadRead::Available(bytes))=>Some(String::from_utf8_lossy(&bytes).into_owned()),_=>None}});
+    value[if candidate.relation {
+        "relation"
+    } else {
+        "assertion"
+    }] = evidence;
+    Ok(value)
 }
 fn render(value: &Value, json_output: bool) -> String {
     if json_output {
@@ -243,6 +282,18 @@ fn render(value: &Value, json_output: bool) -> String {
                 text(value, "next_after")
             ));
         }
+    } else if !value["relation"].is_null() {
+        lines.push(format!("{}: {}", text(value, "id"), text(value, "status")));
+        let relation = &value["relation"];
+        lines.push(format!(
+            "{} {} {} ({}[{}])",
+            text(relation, "subject"),
+            text(relation, "predicate"),
+            text(relation, "object"),
+            text(relation, "run"),
+            relation["index"]
+        ));
+        lines.push(format!("Dependencies: {}", text(value, "dependency_state")));
     } else if !value["assertion"].is_null() {
         lines.push(format!("{}: {}", text(value, "id"), text(value, "status")));
         lines.push(format!(
@@ -349,7 +400,7 @@ pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String,
         ),
         Some("show") => (
             "merl candidate show <candidate> --project <id> --database <path> [--offset <n>] [--json]",
-            "Inspect the original assertion, dependency state, and up to 100 review attempts.",
+            "Inspect the original assertion or relation, dependency state, and up to 100 review attempts.",
             vec!["candidate accept", "candidate reject", "candidate correct"],
         ),
         Some("accept") => (
@@ -359,12 +410,12 @@ pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String,
         ),
         Some("reject") => (
             "merl candidate reject <candidate> --project <id> --database <path> --actor <id> --id <request> --reason <text> [--dry-run] [--json]",
-            "Close the candidate with an erasable reason while preserving its assertion.",
+            "Close the candidate with an erasable reason while preserving its compiler input.",
             vec!["candidate show"],
         ),
         Some("correct") => (
             "merl candidate correct <candidate> --project <id> --database <path> --actor <id> --id <request> --subject <object> --kind <kind> --value <payload|none> --reason <text> [--dry-run] [--json]",
-            "Submit a replacement interpretation linked to the original candidate and assertion.",
+            "Submit a replacement object interpretation linked to the original assertion. Relation candidates support accept or reject.",
             vec!["candidate show", "show"],
         ),
         _ => return Err(invalid_input("unknown candidate help topic")),

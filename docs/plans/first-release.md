@@ -147,6 +147,10 @@ The release is ready when:
 - every accepted object expands to its policy evaluation and typed derivation inputs;
 - extracted objects also expand through their assertions and compilation runs to available source content;
 - one compound comment may yield several assertions with independent policy dispositions and precise source spans;
+- typed compiler relations retain independent outcomes and exact endpoint bases; authorized review accepts grounded edges through relation events, and rebuild, focused views, expansion, and purge preserve their lineage;
+- accepted compiler relations leave current graph use after source edits, deletions, or evidence erasure; durable relation impacts survive rebuild and upgrade, and authorized fresh acceptance or withdrawal closes stale support without rewriting semantic history;
+- independent relation derivations retain separate evidence health while focused views count distinct neighbors;
+- invalid or ungrounded relation endpoints reject only that relation while valid independent assertions remain applicable;
 - public `source assertions` and `source apply` commands connect completed live compiler output to policy, one accepted revision, and one inbox batch without caller-supplied provenance;
 - automatic decision-author acceptance is limited to direct, positive, reported `decision` directives with act `request`; other requests and quoted authority remain candidates;
 - assertion application retries preserve recorded outcomes, new attempts deduplicate accepted run/index pairs, and concurrent grant or evidence changes cannot accept stale work;

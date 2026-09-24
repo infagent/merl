@@ -13,8 +13,8 @@ use std::{
 
 use merl_core::{ObjectId, ObjectRevision, ProjectId, ProjectRevision, SourceVersionId};
 use merl_store::{
-    CompilationIntent, CompilationResult, PayloadRead, SelectedObjects, Store, StoreError,
-    StructuralAssertion,
+    CompilationIntent, CompilationResult, PayloadRead, RelationBasis, SelectedObjects, Store,
+    StoreError, StructuralAssertion, StructuralRelation,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -715,15 +715,18 @@ pub struct CompilerResponse {
     pub relations: Vec<TypedRelation>,
 }
 
-/// A bounded relation inferred from a source span.
+/// An edge whose endpoints name assertion subjects or objects in the supplied context.
+///
+/// Merl records each endpoint's assertion index or selected object revision. Missing
+/// or ambiguous grounding rejects this relation without discarding valid assertions.
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TypedRelation {
-    /// Source or object identifier at the start of the relation.
+    /// Object identifier at the start of the relation.
     pub subject: String,
     /// Relation predicate, such as `supports` or `disputes`.
     pub predicate: String,
-    /// Source or object identifier at the end of the relation.
+    /// Object identifier at the end of the relation.
     pub object: String,
 }
 
@@ -1416,26 +1419,33 @@ pub fn record_compilation_result(
         return Err(CompileError::InvalidResponse);
     }
     let validated = raw.and_then(|bytes| {
-        validate_response(&bytes, &prepared.context, prepared.limits)
-            .map(|(assertions, needs_context)| (bytes, assertions, needs_context))
+        validate_response(&bytes, &prepared.context, prepared.limits).map(
+            |(assertions, relations, needs_context)| (bytes, assertions, relations, needs_context),
+        )
     });
-    let (response, assertions, needs_context, failure): (
-        Option<&[u8]>,
-        &[StructuralAssertion],
-        bool,
-        Option<&str>,
-    ) = match &validated {
-        Ok((bytes, assertions, needs_context)) => (Some(bytes), assertions, *needs_context, None),
-        Err(error) => (None, &[], false, Some(error_code(error))),
-    };
+    let failure = validated.as_ref().err().map(error_code);
     let result = CompilationResult {
         run_id: &prepared.id,
         failure_code: failure,
-        response,
-        assertions,
-        needs_context,
+        response: validated
+            .as_ref()
+            .ok()
+            .map(|(bytes, _, _, _)| bytes.as_slice()),
+        assertions: validated
+            .as_ref()
+            .ok()
+            .map_or(&[], |(_, assertions, _, _)| assertions.as_slice()),
+        needs_context: validated
+            .as_ref()
+            .is_ok_and(|(_, _, _, needs_context)| *needs_context),
         completed_at_millis,
     };
+    let relations = validated
+        .as_ref()
+        .ok()
+        .map_or(&[][..], |(_, _, relations, _)| relations.as_slice());
+    let needs_context = result.needs_context;
+    let response = result.response;
     let requests = if needs_context {
         serde_json::from_slice::<CompilerResponse>(response.ok_or(CompileError::InvalidResponse)?)
             .map_err(|_| CompileError::InvalidResponse)?
@@ -1446,9 +1456,9 @@ pub fn record_compilation_result(
     } else {
         Vec::new()
     };
-    store.complete_compilation_with_requests(project, &result, &requests)?;
+    store.complete_compilation_with_relations(project, &result, &requests, relations)?;
     match validated {
-        Ok((_, _, true)) => Err(CompileError::ContextRequired),
+        Ok((_, _, _, true)) => Err(CompileError::ContextRequired),
         Ok(_) => Ok(()),
         Err(error) => Err(error),
     }
@@ -1483,7 +1493,7 @@ fn validate_response(
     bytes: &[u8],
     context: &CompilationContext,
     limits: CompilerLimits,
-) -> Result<(Vec<StructuralAssertion>, bool), CompileError> {
+) -> Result<(Vec<StructuralAssertion>, Vec<StructuralRelation>, bool), CompileError> {
     if bytes.len() > limits.output_bytes {
         return Err(CompileError::OutputBudget);
     }
@@ -1494,12 +1504,10 @@ fn validate_response(
     if response.schema != "merl.compiler-response/v1"
         || response.assertions.len() > limits.assertions
         || response.context_required.len() > limits.context_requests
-        || response.relations.len() > limits.assertions.saturating_mul(4)
-        || response.relations.iter().any(|relation| {
-            !valid_id(&relation.subject)
-                || !valid_id(&relation.predicate)
-                || !valid_id(&relation.object)
-        })
+        || response.relations.len()
+            > limits
+                .assertions
+                .saturating_mul(merl_core::RELATIONS_PER_ASSERTION_LIMIT)
         || response
             .context_required
             .iter()
@@ -1516,6 +1524,7 @@ fn validate_response(
         return Err(CompileError::InvalidResponse);
     }
     let needs_context = !response.context_required.is_empty();
+    let relations = ground_relations(&response, context);
     let assertions = response
         .assertions
         .into_iter()
@@ -1578,8 +1587,57 @@ fn validate_response(
         } else {
             assertions
         },
+        if needs_context { Vec::new() } else { relations },
         needs_context,
     ))
+}
+
+fn ground_relations(
+    response: &CompilerResponse,
+    context: &CompilationContext,
+) -> Vec<StructuralRelation> {
+    response
+        .relations
+        .iter()
+        .map(|r| {
+            let valid = valid_id(&r.subject) && valid_id(&r.predicate) && valid_id(&r.object);
+            let grounding = |endpoint: &str| {
+                let mut matches = response
+                    .assertions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, a)| a.subject == endpoint);
+                if let Some((i, _)) = matches.next() {
+                    if matches.next().is_none() {
+                        return u32::try_from(i).ok().map(RelationBasis::Assertion);
+                    }
+                    return None;
+                }
+                context
+                    .objects
+                    .iter()
+                    .find(|(id, _)| id.as_str() == endpoint)
+                    .map(|(_, revision)| RelationBasis::Object(*revision))
+            };
+            let subject_basis = grounding(&r.subject);
+            let object_basis = grounding(&r.object);
+            let rejection = if !valid {
+                Some("invalid_relation_identifier")
+            } else if subject_basis.is_none() || object_basis.is_none() {
+                Some("ungrounded_relation_endpoint")
+            } else {
+                None
+            };
+            StructuralRelation {
+                subject: valid_id(&r.subject).then(|| r.subject.clone()),
+                predicate: valid_id(&r.predicate).then(|| r.predicate.clone()),
+                object: valid_id(&r.object).then(|| r.object.clone()),
+                subject_basis,
+                object_basis,
+                rejection: rejection.map(str::to_owned),
+            }
+        })
+        .collect()
 }
 
 fn source_span_valid(rendered: &serde_json::Value, source: &str, start: usize, end: usize) -> bool {

@@ -5,6 +5,9 @@ use merl_store::Store;
 use serde_json::json;
 use std::path::Path;
 
+// Both store cursors use this public page bound; their merged result must too.
+const WORK_PAGE_SIZE: usize = 100;
+
 #[derive(Clone, Copy, Default)]
 pub(super) struct Options<'a> {
     pub project: Option<&'a str>,
@@ -67,22 +70,37 @@ pub(super) fn execute(
         return Err(invalid_input("unknown revalidation command"));
     }
     let (impacts, more) = store.evidence_impact_page(&project, options.after)?;
-    let work = impacts.iter().map(|i| {
+    let mut work = impacts.iter().map(|i| {
         let run=store.latest_revalidation_attempt(&project,&i.id)?;
         let status=store.compilation_run_status(&project,run.as_ref().map_or(i.id.as_str(),merl_core::CompilationRunId::as_str))?;
         Ok(json!({"impact":i.id,"object":i.object.as_str(),"support_event":i.support_event.as_str(),"affected_run":i.affected_run.as_str(),"trigger":i.trigger.as_str(),"changed_source":i.changed_source.as_str(),"replacement":i.replacement.as_ref().map(merl_core::SourceVersionId::as_str),"next_action":i.next_action,"evidence_unavailable":store.revalidation_evidence_unavailable(&project,&i.id)?,"latest_attempt":run.as_ref().map(merl_core::CompilationRunId::as_str),"run_outcome":status.map(|s|if !s.completed {"pending"} else if s.needs_context {"needs_context"} else if s.succeeded {"succeeded"} else {"failed"})}))
     }).collect::<Result<Vec<_>,CliError>>()?;
+    let (relations, relation_more) = store.relation_impact_page(&project, options.after)?;
+    work.extend(relations.iter().map(|i| json!({"impact":i.id,"relation":i.relation.as_str(),"support_event":i.support_event.as_str(),"affected_run":i.run.as_str(),"changed_source":i.source.as_str(),"replacement":i.replacement.as_ref().map(merl_core::SourceVersionId::as_str),"evidence_unavailable":i.unavailable,"next_action":"review_new_relation_or_withdraw"})));
+    work.sort_by(|a, b| a["impact"].as_str().cmp(&b["impact"].as_str()));
+    let more = more || relation_more || work.len() > WORK_PAGE_SIZE;
+    work.truncate(WORK_PAGE_SIZE);
+    let next = more
+        .then(|| work.last().and_then(|i| i["impact"].as_str()))
+        .flatten();
     if json_output {
         return Ok(format!(
             "{}\n",
-            json!({"schema":"merl.revalidation-work/v1","project":project.as_str(),"work":work,"next_after":more.then(||impacts.last().map(|i|i.id.as_str())).flatten()})
+            json!({"schema":"merl.revalidation-work/v1","project":project.as_str(),"work":work,"next_after":next})
         ));
     }
     Ok(format!(
         "{}\n",
-        impacts
-            .iter()
-            .map(|i| format!("{}: {} {}", i.id, i.object, i.next_action))
+        work.iter()
+            .map(|i| format!(
+                "{}: {} {}",
+                i["impact"].as_str().unwrap_or_default(),
+                i["object"]
+                    .as_str()
+                    .or_else(|| i["relation"].as_str())
+                    .unwrap_or_default(),
+                i["next_action"].as_str().unwrap_or_default()
+            ))
             .collect::<Vec<_>>()
             .join("\n")
     ))
@@ -107,6 +125,14 @@ fn run(
         .contains(&actor)
     {
         return Err(merl_compiler::CompileError::UnauthorizedCompilation.into());
+    }
+    if store
+        .relation_evidence_impact(project, required(options.id, "--id is required")?)?
+        .is_some()
+    {
+        return Err(invalid_input(
+            "for relation work, compile current source and review a new relation candidate, or resolve with --action withdraw",
+        ));
     }
     let impact = store
         .evidence_impact(project, required(options.id, "--id is required")?)?
@@ -167,6 +193,22 @@ fn resolve(
     options: &Options<'_>,
     now: i64,
 ) -> Result<serde_json::Value, CliError> {
+    if options.action == Some("withdraw") {
+        if options.run.is_some() || options.assertion_index.is_some() {
+            return Err(invalid_input(
+                "relation withdrawal takes no run or assertion index",
+            ));
+        }
+        let review = merl_store::RelationWithdrawal {
+            id: identifier(required(options.id, "--id is required")?)?,
+            impact: required(options.impact, "--impact is required")?.into(),
+            actor: identifier(required(options.actor, "--actor is required")?)?,
+        };
+        let result = merl_policy::withdraw_relation(store, project, &review, now)?;
+        return Ok(
+            json!({"schema":"merl.revalidation-resolution/v1","impact":review.impact,"request":review.id.as_str(),"action":"withdraw","evaluation":result.id.as_str(),"revision":result.committed_revision.map(merl_core::ProjectRevision::get),"disposition":result.inputs[0].disposition.as_str(),"reason":result.inputs[0].reason.as_str()}),
+        );
+    }
     let review = merl_store::RevalidationReview {
         id: identifier(required(options.id, "--id is required")?)?,
         impact: required(options.impact, "--impact is required")?.into(),
@@ -176,7 +218,9 @@ fn resolve(
             "--action is required",
         )?)
         .map_err(|_| {
-            invalid_input("action must be confirm, weaken, supersede, invalidate, or unavailable")
+            invalid_input(
+                "action must be confirm, weaken, supersede, invalidate, unavailable, or withdraw",
+            )
         })?,
         run: options.run.map(identifier).transpose()?,
         assertion_index: options
@@ -236,7 +280,7 @@ pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String,
         Some("list") => (
             "project revalidation list",
             "merl project revalidation list --project <id> --database <path> [--after <impact>] [--json]",
-            "List up to 100 pending impacts, with the affected object, support event, and compiler trigger.",
+            "List up to 100 pending impacts, with the affected object or relation, support event, and compiler run.",
         ),
         Some("run") => (
             "project revalidation run",
@@ -245,8 +289,8 @@ pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String,
         ),
         Some("resolve") => (
             "project revalidation resolve",
-            "merl project revalidation resolve --project <id> --database <path> --id <request> --impact <id> --actor <id> --action <confirm|weaken|supersede|invalidate|unavailable> [--run <id>] [--assertion-index <n>] [--json]",
-            "Review under current command authority. Confirm and supersede require a completed run and assertion index; weaken and invalidate require a completed run. Unavailable requires erased or bodyless evidence and takes no run. Exact retries return the recorded result.",
+            "merl project revalidation resolve --project <id> --database <path> --id <request> --impact <id> --actor <id> --action <confirm|weaken|supersede|invalidate|unavailable|withdraw> [--run <id>] [--assertion-index <n>] [--json]",
+            "Review under current command authority. Confirm and supersede require a completed run and assertion index; weaken and invalidate require a completed run. Unavailable requires erased or bodyless evidence and takes no run. Withdraw closes stale relation support and takes no run. A fresh accepted relation with the same triple also closes its stale work. Exact retries return the recorded result.",
         ),
         _ => return Err(invalid_input("unknown revalidation help topic")),
     };

@@ -1,4 +1,4 @@
-//! Applies recorded assertions without accepting caller-supplied authors or events.
+//! Applies recorded assertions and relations without caller-supplied provenance.
 
 use crate::{
     PolicyError, PolicyRules, PreparedPolicy, Proposal, evaluate_current, recorded_outcome,
@@ -39,7 +39,7 @@ fn proposals(
     if status.mode != "live" || !status.completed || !status.succeeded || status.needs_context {
         return Err(PolicyError::RunIneligible);
     }
-    store
+    let mut proposals = store
         .observed_assertions(project, run.as_str())?
         .into_iter()
         .enumerate()
@@ -78,10 +78,12 @@ fn proposals(
                 },
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, PolicyError>>()?;
+    proposals.extend(crate::relations::proposals(store, project, run, request)?);
+    Ok(proposals)
 }
 
-/// Prepares one run's assertions against current state and durable grants.
+/// Prepares one run's assertions and relations against current state and grants.
 ///
 /// The request ID identifies this evaluation attempt. Input identities depend on
 /// the project, run, and assertion index, so a new attempt cannot accept an input twice.

@@ -219,6 +219,7 @@ impl Store {
                     | "source_compilation_request"
                     | "authority_grant"
                     | "candidate_review"
+                    | "relation_revalidation"
             )
         }) {
             return Ok(None);

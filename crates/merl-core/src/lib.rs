@@ -209,6 +209,11 @@ pub struct SourceRef {
     pub version: SourceVersionId,
 }
 
+/// The v1 relation-count multiplier for a run's assertion budget.
+///
+/// This cap bounds graph output without requiring assertions in a relation-only result.
+pub const RELATIONS_PER_ASSERTION_LIMIT: usize = 4;
+
 /// The kind and identity of a semantic proposal presented to policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PolicyInput {
@@ -219,6 +224,15 @@ pub enum PolicyInput {
         /// Compiler run that recorded the original assertion.
         run: CompilationRunId,
         /// Position of the assertion in its immutable compiler result.
+        index: u32,
+    },
+    /// A typed compiler relation, independent of the response's assertions.
+    ObservedRelation {
+        /// Stable policy identity for this relation.
+        id: PolicyInputId,
+        /// Run that recorded the relation and endpoint bases.
+        run: CompilationRunId,
+        /// Position in the response's relation list.
         index: u32,
     },
     /// A structured action submitted by an authenticated actor.
@@ -235,6 +249,7 @@ impl PolicyInput {
     pub const fn id(&self) -> &PolicyInputId {
         match self {
             Self::ObservedAssertion { id, .. }
+            | Self::ObservedRelation { id, .. }
             | Self::Command(id)
             | Self::ProviderObservation(id)
             | Self::AdministrativeAction(id) => id,
@@ -246,6 +261,7 @@ impl PolicyInput {
     pub const fn kind(&self) -> &'static str {
         match self {
             Self::ObservedAssertion { .. } => "observed_assertion",
+            Self::ObservedRelation { .. } => "observed_relation",
             Self::Command(_) => "command",
             Self::ProviderObservation(_) => "provider_observation",
             Self::AdministrativeAction(_) => "administrative_action",

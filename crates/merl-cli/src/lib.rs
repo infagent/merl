@@ -1676,6 +1676,36 @@ fn render_purge_audit(
     }
 }
 
+fn render_relation(
+    store: &Store,
+    project: &ProjectId,
+    object: &ObjectId,
+    expand_source: bool,
+    json_output: bool,
+) -> Result<Option<String>, CliError> {
+    let id = merl_core::RelationId::try_from(object.as_str())
+        .map_err(|_| invalid_input("invalid relation ID"))?;
+    let Some(relation) = store.relation(project, &id)? else {
+        return Ok(None);
+    };
+    let origin = store.relation_policy_origin(project, &id)?;
+    let provenance = object_origin_json(store, project, origin.as_ref(), expand_source)?;
+    let resolution = store.relation_evidence_resolution(project, &id)?.map(|r| json!({"evaluation":r.evaluation.as_str(),"replacement_relation":r.replacement.as_ref().map(merl_core::RelationId::as_str)}));
+    let edge = &relation.relation;
+    let value = json!({"schema":"merl.relation/v1","project":project.as_str(),"id":id.as_str(),"subject":edge.subject.as_str(),"predicate":edge.kind.as_str(),"object":edge.object.as_str(),"support":support_name(relation.support),"support_resolution":resolution,"revision":relation.revision.get(),"project_revision":relation.project_revision.get(),"policy_origin":provenance});
+    if json_output {
+        render_json(&value).map(Some)
+    } else {
+        Ok(Some(format!(
+            "{id}: {} {} {} ({})\nProvenance: {provenance}\n",
+            edge.subject,
+            edge.kind,
+            edge.object,
+            support_name(relation.support)
+        )))
+    }
+}
+
 fn render_object(
     store: &Store,
     project: &ProjectId,
@@ -1684,10 +1714,14 @@ fn render_object(
     expand_source: bool,
     json_output: bool,
 ) -> Result<String, CliError> {
-    let state = store.object(project, object)?.ok_or_else(|| CliError {
-        code: "OBJECT_NOT_FOUND",
-        message: "object does not exist".to_owned(),
-    })?;
+    let Some(state) = store.object(project, object)? else {
+        return render_relation(store, project, object, expand_source, json_output)?.ok_or_else(
+            || CliError {
+                code: "OBJECT_NOT_FOUND",
+                message: "object does not exist".into(),
+            },
+        );
+    };
     let origin = store.object_policy_origin(project, object)?;
     let origin_json = object_origin_json(store, project, origin.as_ref(), expand_source)?;
     let history_entries = if history || expand_source {
@@ -2255,12 +2289,12 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "source assertions" => (
             "merl source assertions --project <id> --database <path> --run <id> [--json]",
-            "Inspect recorded assertions, unresolved spans, and context requests. Reading does not accept state.",
+            "Inspect recorded assertions, relations, unresolved spans, and context requests. Reading does not accept state.",
             vec!["source apply", "source show"],
         ),
         "source apply" => (
             "merl source apply --project <id> --database <path> --run <id> --actor <id> --id <request-id> [--dry-run] [--json]",
-            "Evaluate a completed live run with current grants. Reuse the request ID for retries; use a new ID to reevaluate candidates. Only direct explicit decisions qualify for decision-author acceptance.",
+            "Evaluate a completed live run with current grants. Reuse the request ID for retries; use a new ID to reevaluate candidates. Only direct explicit decisions qualify for decision-author acceptance. Grounded relations require candidate review.",
             vec!["source assertions", "project authority", "show"],
         ),
         "source compile" => (
