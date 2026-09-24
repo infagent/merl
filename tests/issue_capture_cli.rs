@@ -178,3 +178,31 @@ fn callers_cannot_set_merls_observation_time() {
         .when_the_issue_is_captured()
         .then_captures_and_compiles(1);
 }
+
+#[test]
+fn binding_policy_changes_apply_only_to_future_captures() {
+    issue_capture_cli::PolicyCases::given_cold_bindings_for_each_policy()
+        .when_an_administrator_changes_policy_and_captures_new_activity()
+        .then_each_version_keeps_its_policy_and_only_eager_work_runs();
+}
+
+#[test]
+fn binding_policy_changes_require_authority_and_preserve_retry_results() {
+    issue_capture_cli::PolicyCases::given_a_binding_with_an_administrator()
+        .when_policy_changes_are_rejected_accepted_retried_and_contested()
+        .then_only_authorized_current_changes_reach_the_audit_stream();
+}
+
+#[test]
+fn prepared_binding_changes_guard_their_binding_and_authority() {
+    issue_capture_cli::PolicyCases::given_bindings_with_competing_administrative_work()
+        .when_prepared_changes_commit_after_other_work()
+        .then_only_unrelated_binding_changes_can_commit();
+}
+
+#[test]
+fn binding_policy_commands_explain_their_contract_and_reject_changed_retries() {
+    issue_capture_cli::PolicyCases::given_a_binding_with_an_administrator()
+        .when_help_human_results_and_retries_are_read()
+        .then_help_and_results_preserve_policy_and_retry_identity();
+}

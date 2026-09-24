@@ -102,7 +102,7 @@ pub fn change_authority(
     )
 }
 
-fn digest_parts(parts: &[&str]) -> String {
+pub(super) fn digest_parts(parts: &[&str]) -> String {
     let mut hash = Sha256::new();
     for part in parts {
         hash.update((part.len() as u64).to_be_bytes());

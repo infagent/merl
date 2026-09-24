@@ -257,22 +257,28 @@ pub fn capture_issue(
             prior,
         )?;
         let (version, new) = source;
-        let run = if report.policy.mode == CompilationMode::Eager && observation.body.is_some() {
-            let run = digest_id("eager", version.as_str());
-            dispatch(
-                store,
-                project,
-                &version,
-                &run,
-                adapter,
-                limits,
-                now,
-                &mut report,
-            );
-            Some(run)
-        } else {
-            None
-        };
+        // A later binding change cannot dispatch historical cold evidence or cancel
+        // the eager policy already attached to an immutable source version.
+        let captured = store
+            .source_version(project, &version)?
+            .ok_or(StoreError::CorruptHistory)?;
+        let run =
+            if captured.compilation_mode == CompilationMode::Eager && observation.body.is_some() {
+                let run = digest_id("eager", version.as_str());
+                dispatch(
+                    store,
+                    project,
+                    &version,
+                    &run,
+                    adapter,
+                    limits,
+                    now,
+                    &mut report,
+                );
+                Some(run)
+            } else {
+                None
+            };
         if new {
             report.sources.push(CapturedSource {
                 entity: observation.provider_id.clone(),

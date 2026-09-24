@@ -2,6 +2,10 @@
 
 mod assertions;
 mod authority;
+mod binding_policy;
+pub use binding_policy::{
+    BindingPolicyChange, change_binding_policy, prepare_binding_policy_change,
+};
 mod candidates;
 mod commands;
 mod relation_evidence;
@@ -141,7 +145,7 @@ impl PolicyRules {
 
     fn from_grants(grants: merl_store::AuthorityGrants) -> Result<Self, StoreError> {
         Ok(Self {
-            version: PolicyVersion::try_from("authority_v8")
+            version: PolicyVersion::try_from("authority_v9")
                 .map_err(|_| StoreError::CorruptHistory)?,
             decision_authors: grants.decision_authors,
             command_actors: grants.command_actors,
@@ -536,12 +540,20 @@ fn disposition_for(
     }
     if !matches!(proposal, Proposal::ObservedAssertion { .. })
         && let DomainEvent::PutObject { object, kind, .. } = proposal.event()
-        && (kind.as_str() == "authority_grant"
-            || store
-                .object(project, object)?
-                .is_some_and(|current| current.kind.as_str() == "authority_grant"))
+        && (matches!(
+            kind.as_str(),
+            "authority_grant" | "binding_compilation_policy"
+        ) || store.object(project, object)?.is_some_and(|current| {
+            matches!(
+                current.kind.as_str(),
+                "authority_grant" | "binding_compilation_policy"
+            )
+        }))
         && (!matches!(proposal, Proposal::AdministrativeAction { .. })
-            || kind.as_str() != "authority_grant")
+            || !matches!(
+                kind.as_str(),
+                "authority_grant" | "binding_compilation_policy"
+            ))
     {
         return Ok((PolicyDisposition::Rejected, "administrator_required"));
     }

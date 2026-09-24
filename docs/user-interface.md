@@ -216,14 +216,46 @@ merl project coverage [--role researcher]
 merl source list
 merl source show github:acme/project-a
 merl source bindings github:acme/project-a
-merl source compilation-policy github:acme/project-a
-merl source compilation-policy set github:acme/project-a \
-  --kind issue_comment \
-  --mode eager \
-  --coverage required
+merl source compilation-policy <binding-id> --project P1 --database project.sqlite
+merl source compilation-policy set <binding-id> --project P1 --database project.sqlite \
+  --id policy-change-1 --actor owner --expected-version github_capture_v1 \
+  --mode eager --coverage optional --reason 'Compile new evidence as it arrives'
 ```
 
 Compilation policy is part of the project-source binding. Mode is `capture_only`, `on_demand`, or `eager`; coverage is `required` or `optional`. Mode controls when extraction runs. Coverage controls whether an unprocessed observation blocks semantic completeness. A sender cannot override either field on an individual message. Structured commands and trusted provider observations bypass prose compilation.
+
+Use the binding ID returned by `issue capture`. Inspection reports the effective
+`policy` (`mode`, `coverage`, and `version`) and its accepted `change`: control
+object, actor, project revision, evaluation, authorization policy, and reason
+payload reference. The initial capture has no administrative change, so `change`
+is null. JSON uses `merl.binding-policy/v1`; a set result uses
+`merl.binding-policy-change/v1`. Human output names the policy and its provenance.
+Use `merl help source compilation-policy` or its `set` child for command help.
+
+`set` requires a project administrator, a nonempty reason, and the version from
+inspection. `command_actor`, source authorship, and capture flags do not grant
+this permission. The result reports `accepted`, `rejected`, or `conflict`. An
+outdated `--expected-version` reports `binding_policy_changed`; rejected and
+conflicting requests leave the effective policy, accepted revision, and compiler
+work unchanged. Unknown bindings return `BINDING_NOT_FOUND`.
+
+An accepted change advances the project revision and reaches delta and inbox.
+Merl stores the reason in an erasable payload. Policy control objects stay out of
+semantic views and compiler contexts; `show <object> --history` exposes their
+accepted history. An identical `--id` retry returns the original result, including
+after later policy changes or erasure. Different content under that ID returns
+`POLICY_INPUT_CONFLICT`.
+
+New captures and edited successors use the accepted defaults. Earlier immutable
+versions and existing compiler intents retain their policy. Switching to eager
+does not compile historical cold evidence; switching to required does not promote
+prior captures. Use authorized `source require` and `source compile` commands for
+those actions. `capture_only` plus `required` leaves new evidence cold and reports
+coverage gaps. Eager optional evidence receives compiler work, and its failures
+do not create required gaps.
+
+This command manages binding defaults. Source-kind and actor-class selectors
+remain separate policy-selection work; `--kind` is not accepted here.
 
 `source compile` records its authorization before starting the compiler. The authority rejects a missing request or a mismatch in source version, run, compiler and version, executable configuration, model, prompt digest, or work limits without creating compiler work. Repeating an existing `source require` with the same content returns the accepted requirement unchanged, even when another actor asks for it.
 
