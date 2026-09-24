@@ -99,6 +99,14 @@ pub fn prepare_revalidation_review(
                 .into_iter()
                 .nth(index as usize)
                 .ok_or(PolicyError::InvalidProposal)?;
+            if crate::temporal::unresolved(&assertion) {
+                failure = Some("temporal_unresolved");
+            }
+            if review.action == Confirm
+                && crate::temporal::changed(store, project, &impact.object, &assertion)?
+            {
+                failure = Some("revalidation_temporal_changed");
+            }
             let subject = ObjectId::try_from(assertion.subject.as_str())
                 .map_err(|_| PolicyError::InvalidProposal)?;
             let payload = if assertion.value == "none" {

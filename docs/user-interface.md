@@ -518,6 +518,19 @@ Starting pending or deferred work, or restarting completed work, is rejected.
 This slice uses review dates as reconsideration triggers; condition relations,
 owner schedules, and execution leases remain outside these commands.
 
+Compiler interpretations can also retain event predicates. After an authorized
+`candidate accept`, a deferred task can show a local `review_at` date beside a
+`start_after` PR merge predicate, or use `review_when` to revisit planning after
+an event. `show ID --source` includes the original temporal spans and authored-time
+basis. Merl retains the reason behind a source payload reference. These fields
+survive restart and rebuild; they do not schedule execution or claim that the
+provider event has occurred.
+
+Missing author time or local-offset evidence produces an unresolved temporal
+value in `source assertions`. `source apply` keeps that assertion as a candidate
+with reason `temporal_unresolved`; `candidate accept` rejects it unchanged.
+`candidate correct` can replace the interpretation under command authority.
+
 Add `--note TEXT` or `--note-file PATH` to retain supplemental prose. Statements,
 reasons, and notes each allow at most 8192 UTF-8 bytes. Merl retains the command
 receipt and note together. The note stays `capture_only` and `optional`; ordinary
@@ -1688,6 +1701,11 @@ Confirmation, weakening, and unavailability appear in delta/inbox as
 revision, lifecycle, and payload reference unchanged, including references to
 erased content. `show --source` exposes their reviews in `revalidation_history`;
 `policy_origin` and `history` continue to describe semantic object versions.
+
+For deferred tasks, `confirm` requires the same normalized planning values and
+the same reason text. The text may move to different byte offsets in an edited
+source. A changed reason or unavailable reason bytes returns a conflict with
+`revalidation_temporal_changed`, leaving support unrestored and evidence work pending.
 
 Resolution records use `merl.revalidation-resolution/v1`. They include the review
 request, impact, action, policy evaluation, disposition, reason, and accepted

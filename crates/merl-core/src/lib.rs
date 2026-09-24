@@ -1,5 +1,8 @@
 //! Structural identities and accepted changes shared by Merl adapters.
 
+/// Source-grounded calendar values and unevaluated event conditions.
+pub mod temporal;
+
 use std::{error::Error, fmt};
 
 /// A structural identifier rejected before it reaches persistent history.

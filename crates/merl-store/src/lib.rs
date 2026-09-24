@@ -11,6 +11,7 @@ pub use relation_evidence::{
 mod commands;
 mod expansions;
 mod revalidation;
+mod temporal;
 pub use candidates::{Candidate, CandidateReview, ReviewAction};
 pub use commands::{
     CommandOperation, Commitment, Execution, Scheduling, SemanticCommandRecord, TaskState,
@@ -32,7 +33,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 27;
+const SCHEMA_VERSION: i64 = 28;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -532,6 +533,8 @@ pub struct SourceCapture<'a> {
     pub ambiguous_order_with_previous: bool,
     /// Provider creation time, normalized to UTC milliseconds.
     pub created_at_millis: i64,
+    /// Authored instant and local offset supplied by the source, never inferred from capture time.
+    pub author_time: Option<merl_core::temporal::AuthorTime>,
     /// Time this version became visible upstream.
     pub occurred_at_millis: i64,
     /// Entity update time known at capture, not the time of this body edit.
@@ -593,6 +596,8 @@ pub struct StoredSourceVersion {
     pub occurred_at_millis: i64,
     /// Provider creation time of the external entity.
     pub created_at_millis: i64,
+    /// Authored instant and local offset supplied by the source, never inferred from capture time.
+    pub author_time: Option<merl_core::temporal::AuthorTime>,
     /// Entity update time retained by the first capture, when known.
     pub upstream_updated_at_millis: Option<i64>,
     /// Time Merl captured the provider snapshot.
@@ -735,6 +740,10 @@ pub struct StructuralAssertion {
     pub attributed_to: Option<String>,
     /// Whether the attribution was independently verified.
     pub attribution_verified: bool,
+    /// Source-grounded temporal values with their original expression spans.
+    pub temporal: Vec<merl_core::temporal::TemporalResult>,
+    /// Proposed task deferral, with an erasable reason span.
+    pub deferral: Option<merl_core::temporal::Deferral>,
 }
 
 /// A view of required coverage that does not confuse cold optional material with gaps.
@@ -1008,6 +1017,9 @@ impl Store {
                 transaction
                     .execute_batch(include_str!("../migrations/0027_relation_evidence.sql"))?;
                 relation_evidence::migrate(&transaction)?;
+            }
+            if version < 28 {
+                transaction.execute_batch(include_str!("../migrations/0028_temporal.sql"))?;
             }
             let broken: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
@@ -1641,7 +1653,7 @@ impl Store {
                     provider_actor_id, compilation_mode, coverage_requirement,
                     capture_policy_version, body_digest, missing_body_reason, payload_id,
                     edit_diff_payload_id, edit_deleted_at_millis, context_scope_id,
-                    source_author_id, provider_source_author_id, actor_id
+                    source_author_id, provider_source_author_id, actor_id, author_time
              FROM source_versions WHERE project_id = ?1 AND id = ?2",
                 params![project.as_str(), id.as_str()],
                 RawSourceVersion::from_row,
@@ -1677,6 +1689,12 @@ impl Store {
                 interpretation_basis_known: row.interpretation_basis_known != 0,
                 occurred_at_millis: row.occurred_at_millis,
                 created_at_millis: row.created_at_millis,
+                author_time: row
+                    .author_time
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|_| StoreError::CorruptHistory)?,
                 upstream_updated_at_millis: row.upstream_updated_at_millis,
                 observed_at_millis: row.observed_at_millis,
                 provider_actor_id: row.provider_actor_id,
@@ -3116,7 +3134,7 @@ impl Store {
         let mut statement = self.connection.prepare(
             "SELECT source_version_id,span_start,span_end,subject_id,predicate_id,value_id,
                     act,epistemic_basis,polarity,confidence_millis,asserted_by,attributed_to,
-                    attribution_verified
+                    attribution_verified, temporal, deferral
              FROM observed_assertions WHERE project_id=?1 AND run_id=?2 ORDER BY assertion_index",
         )?;
         let rows = statement.query_map(params![project.as_str(), run_id], |row| {
@@ -3134,6 +3152,8 @@ impl Store {
                 row.get::<_, Option<String>>(10)?,
                 row.get::<_, Option<String>>(11)?,
                 row.get::<_, i64>(12)?,
+                row.get::<_, String>(13)?,
+                row.get::<_, Option<String>>(14)?,
             ))
         })?;
         rows.map(|row| {
@@ -3151,6 +3171,8 @@ impl Store {
                 asserted_by,
                 attributed_to,
                 verified,
+                temporal,
+                deferral,
             ) = row?;
             Ok(StructuralAssertion {
                 source: SourceVersionId::try_from(source.as_str())
@@ -3168,6 +3190,13 @@ impl Store {
                 asserted_by,
                 attributed_to,
                 attribution_verified: verified != 0,
+                temporal: serde_json::from_str(&temporal)
+                    .map_err(|_| StoreError::CorruptHistory)?,
+                deferral: deferral
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|_| StoreError::CorruptHistory)?,
             })
         })
         .collect()
@@ -6452,8 +6481,8 @@ fn insert_source_version(
              occurred_at_millis, created_at_millis, upstream_updated_at_millis, observed_at_millis, actor_id, provider_actor_id,
              body_digest, edit_diff_digest, capture_digest, payload_id, edit_diff_payload_id, edit_deleted_at_millis, missing_body_reason,
              compilation_mode, coverage_requirement, capture_policy_version, interpretation_basis_revision,
-             interpretation_basis_known, source_author_id, provider_source_author_id
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)",
+             interpretation_basis_known, source_author_id, provider_source_author_id, author_time
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32)",
         params![
             project.as_str(), capture.version.as_str(), capture.source.as_str(),
             capture.provider_entity_id, capture.context_scope_id, capture.provider_version_id,
@@ -6468,7 +6497,8 @@ fn insert_source_version(
             capture.missing_body_reason.map(MissingSourceBody::as_str),
             capture.compilation_mode.as_str(), capture.coverage_requirement.as_str(),
             capture.policy_version.as_str(), basis.revision, i64::from(basis.known),
-            capture.source_author.as_ref().map(ActorId::as_str), capture.provider_source_author_id
+            capture.source_author.as_ref().map(ActorId::as_str), capture.provider_source_author_id,
+            capture.author_time.as_ref().map(serde_json::to_string).transpose().map_err(|_|StoreError::InvalidSource)?
         ],
     )?;
     Ok(())
@@ -6494,6 +6524,7 @@ struct RawSourceVersion {
     source_author_id: Option<String>,
     provider_source_author_id: Option<String>,
     version_actor_id: Option<String>,
+    author_time: Option<String>,
     compilation_mode: String,
     coverage_requirement: String,
     capture_policy_version: String,
@@ -6534,6 +6565,7 @@ impl RawSourceVersion {
             source_author_id: row.get(24)?,
             provider_source_author_id: row.get(25)?,
             version_actor_id: row.get(26)?,
+            author_time: row.get(27)?,
         })
     }
 }
@@ -6560,6 +6592,13 @@ struct CaptureBasis {
 }
 
 fn validate_source_capture(capture: &SourceCapture<'_>) -> Result<(), StoreError> {
+    if capture
+        .author_time
+        .as_ref()
+        .is_some_and(|time| time.utc_millis() != capture.occurred_at_millis)
+    {
+        return Err(StoreError::InvalidSource);
+    }
     if capture.created_at_millis > capture.occurred_at_millis
         || capture.occurred_at_millis > capture.observed_at_millis
         || capture.upstream_updated_at_millis.is_some_and(|updated| {
@@ -6693,6 +6732,7 @@ fn insert_assertions(
     source_window: &[SourceVersionId],
 ) -> Result<(), StoreError> {
     for (index, assertion) in result.assertions.iter().enumerate() {
+        temporal::validate(transaction, project, assertion)?;
         if !source_window.contains(&assertion.source)
             || assertion.span_start >= assertion.span_end
             || assertion.confidence_millis > 1000
@@ -6720,8 +6760,8 @@ fn insert_assertions(
         transaction.execute(
             "INSERT INTO observed_assertions (project_id,run_id,assertion_index,source_version_id,
               span_start,span_end,subject_id,predicate_id,value_id,act,epistemic_basis,polarity,
-              confidence_millis,asserted_by,attributed_to,attribution_verified)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+              confidence_millis,asserted_by,attributed_to,attribution_verified,temporal,deferral)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
             params![
                 project.as_str(),
                 result.run_id,
@@ -6738,7 +6778,15 @@ fn insert_assertions(
                 assertion.confidence_millis,
                 assertion.asserted_by,
                 assertion.attributed_to,
-                i64::from(assertion.attribution_verified)
+                i64::from(assertion.attribution_verified),
+                serde_json::to_string(&assertion.temporal)
+                    .map_err(|_| StoreError::InvalidCompilation)?,
+                assertion
+                    .deferral
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|_| StoreError::InvalidCompilation)?
             ],
         )?;
     }
@@ -6759,17 +6807,26 @@ fn source_capture_is_retry(
     capture: &SourceCapture<'_>,
     capture_digest: &[u8; 32],
 ) -> Result<bool, StoreError> {
-    let existing: Option<(Vec<u8>, Option<String>)> = transaction
+    let existing: Option<(Vec<u8>, Option<String>, Option<String>)> = transaction
         .query_row(
-            "SELECT capture_digest, provider_source_author_id
+            "SELECT capture_digest, provider_source_author_id, author_time
              FROM source_versions WHERE project_id = ?1 AND id = ?2",
             params![project.as_str(), capture.version.as_str()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    let Some((existing_digest, existing_author)) = existing else {
+    let Some((existing_digest, existing_author, existing_time)) = existing else {
         return Ok(false);
     };
+    let retried_time = capture
+        .author_time
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|_| StoreError::InvalidSource)?;
+    if existing_time.is_some() && retried_time.is_some() && existing_time != retried_time {
+        return Err(StoreError::SourceConflict);
+    }
     if existing_digest != capture_digest {
         return Err(StoreError::SourceConflict);
     }

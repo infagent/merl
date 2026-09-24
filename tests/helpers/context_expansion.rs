@@ -754,6 +754,7 @@ impl Expansion {
                     kind: SourceKind::try_from("note").expect("kind"),
                     supersedes: None,
                     ambiguous_order_with_previous: false,
+                    author_time: None,
                     created_at_millis: 10,
                     occurred_at_millis: 10,
                     upstream_updated_at_millis: None,

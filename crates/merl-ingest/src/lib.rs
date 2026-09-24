@@ -224,6 +224,7 @@ fn import_fixture_inner(
             kind: SourceKind::try_from(kind).map_err(|_| ImportError::InvalidIdentity)?,
             supersedes,
             ambiguous_order_with_previous: observation.ambiguous_order_with_previous,
+            author_time: observation_author_time(observation)?,
             created_at_millis: utc_millis(&observation.created_at)?,
             occurred_at_millis: utc_millis(&observation.occurred_at)?,
             upstream_updated_at_millis: observation
@@ -511,4 +512,38 @@ fn accept_provider_snapshot(
         }],
     )?;
     Ok(prepared.commit(store)?.is_some())
+}
+
+// Controlled fixtures record author-local timestamps. GitHub captures need explicit
+// author evidence because the provider normalizes transport timestamps to UTC.
+fn observation_author_time(
+    observation: &merl_corpus::fixture::Observation,
+) -> Result<Option<merl_core::temporal::AuthorTime>, ImportError> {
+    let authored = observation.authored_at.as_deref().or_else(|| {
+        matches!(observation.kind, ObservationKind::Controlled)
+            .then_some(observation.occurred_at.as_str())
+    });
+    let Some(authored) = authored else {
+        return if observation.author_timezone.is_some() {
+            merl_core::temporal::AuthorTime::new(
+                utc_millis(&observation.occurred_at)?,
+                None,
+                observation.author_timezone.clone(),
+            )
+            .map(Some)
+            .map_err(|_| ImportError::InvalidIdentity)
+        } else {
+            Ok(None)
+        };
+    };
+    let parsed =
+        time::OffsetDateTime::parse(authored, &time::format_description::well_known::Rfc3339)
+            .map_err(|_| ImportError::InvalidIdentity)?;
+    merl_core::temporal::AuthorTime::new(
+        utc_millis(authored)?,
+        Some(parsed.offset().whole_seconds()),
+        observation.author_timezone.clone(),
+    )
+    .map(Some)
+    .map_err(|_| ImportError::InvalidIdentity)
 }

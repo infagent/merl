@@ -471,6 +471,7 @@ fn capture_current(
         .map_err(|_| ImportError::InvalidIdentity)?,
         supersedes: prior.map(|item| item.id.clone()),
         ambiguous_order_with_previous: false,
+        author_time: super::observation_author_time(observation)?,
         created_at_millis: utc_millis(&observation.created_at)?,
         occurred_at_millis: utc_millis(&observation.occurred_at)?,
         upstream_updated_at_millis: observation
@@ -526,6 +527,7 @@ fn capture_deletion(
                 .map_err(|_| ImportError::InvalidIdentity)?,
             supersedes: Some(prior.id.clone()),
             ambiguous_order_with_previous: false,
+            author_time: None,
             created_at_millis: prior.created_at_millis,
             occurred_at_millis: now,
             upstream_updated_at_millis: None,

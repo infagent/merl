@@ -368,6 +368,29 @@ Contradiction is a relation or support status derived by comparing evidence, not
 
 Relative time is normalized against the authored timestamp and timezone while preserving the original expression. Expressions tied to events, such as "after the pull request merges," become object predicates or wait conditions rather than guessed dates.
 
+The compiler identifies a relative calendar expression and its source span. A
+deterministic stage resolves it from the captured authored instant and local UTC
+offset. Named timezones remain provenance; a name without its recorded offset
+does not resolve a date. Provider UTC transport timestamps do not establish the
+author's local timezone. Captures without enough evidence retain an unresolved
+value, which policy and candidate review cannot accept unchanged.
+
+Normalized values retain the source version, expression span, and captured time
+basis. Accepted semantic event origins select their temporal state, including
+reviewed task deferrals. Rebuild follows those origins without running a compiler.
+Later compiler contexts select temporal values at their historical basis, so a
+new schedule cannot change an older interpretation. Supplemental assertions that
+add temporal fields require review even when their subject and content reference
+match the originating command.
+Support-only reviews preserve temporal state. A changed date, event predicate,
+or deferral reason requires a new semantic interpretation. Confirmation compares
+the reason bytes at the current semantic assertion's source span with those at
+the proposed assertion's span. Moving unchanged text within an edited source
+preserves the reason; reusing offsets for different text does not. If either span's
+bytes are unavailable, Merl cannot confirm equality. Deferral reasons remain spans
+in protected source payloads, so erasure removes the prose without deleting
+temporal provenance.
+
 Compilation runs and assertions are append-only. Running compiler version 0.7 against a source previously handled by version 0.4 creates another run and another set of assertions. It does not replace the earlier interpretation.
 
 Compilers cannot write accepted objects or domain events. Built-in Rust compilers call a narrow core API. Experimental compilers use a versioned process or service protocol and return assertions through the same boundary.

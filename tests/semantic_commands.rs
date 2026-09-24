@@ -69,3 +69,10 @@ fn supplemental_corrective_requests_preserve_the_original_decision_for_review() 
         .when_the_original_decision_is_corrected()
         .then_review_preserves_the_original_and_accepts_the_correction();
 }
+
+#[test]
+fn supplemental_temporal_conditions_are_not_duplicate_commands() {
+    Commands::given_a_project_with_a_command_actor()
+        .when_a_supplement_adds_a_temporal_condition()
+        .then_the_temporal_change_remains_a_candidate();
+}

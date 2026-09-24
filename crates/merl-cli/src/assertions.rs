@@ -74,6 +74,10 @@ pub(super) fn inspect(
             assertion.epistemic_basis,
             assertion.polarity
         ));
+        let temporal = crate::commands::temporal_lines(&json!(assertion.temporal));
+        if !temporal.is_empty() {
+            lines.push(temporal.trim_end().to_owned());
+        }
     }
     for relation in &relations {
         lines.push(format!(

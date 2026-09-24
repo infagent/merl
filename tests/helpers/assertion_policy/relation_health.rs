@@ -284,6 +284,10 @@ fn remove_relation_health_schema(database: &super::Database) {
         DROP TABLE relation_withdrawals;
         DROP TABLE relation_evidence_impacts;
         DROP TABLE relation_evidence_supports;
+        ALTER TABLE source_versions DROP COLUMN author_time;
+        ALTER TABLE observed_assertions DROP COLUMN temporal;
+        ALTER TABLE observed_assertions DROP COLUMN deferral;
+        ALTER TABLE semantic_commands DROP COLUMN planning_evidence;
         PRAGMA user_version=26;",
         )
         .unwrap();

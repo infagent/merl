@@ -83,15 +83,28 @@ pub(super) fn task_value(
     project: &ProjectId,
     task: &merl_store::TaskState,
 ) -> Result<Value, CliError> {
+    let mut reason = task
+        .reason
+        .as_ref()
+        .map(|p| crate::payload_json(store, project, p))
+        .transpose()?;
+    if let (Some(span), Some(value)) = (&task.reason_span, &mut reason)
+        && let Some(text) = value["text"].as_str()
+    {
+        value["text"] = json!(
+            text.get(span.start..span.end)
+                .ok_or(merl_store::StoreError::CorruptHistory)?
+        );
+    }
     Ok(
-        json!({"commitment":task.commitment.as_str(),"scheduling":task.scheduling.as_str(),"execution":task.execution.as_str(),"reason_ref":task.reason.as_ref().map(merl_core::PayloadId::as_str),"reason":task.reason.as_ref().map(|p|crate::payload_json(store,project,p)).transpose()?,"review_at":task.review_at}),
+        json!({"commitment":task.commitment.as_str(),"scheduling":task.scheduling.as_str(),"execution":task.execution.as_str(),"reason_ref":task.reason.as_ref().map(merl_core::PayloadId::as_str),"reason":reason,"review_at":task.review_at,"review_when":task.review_when,"start_after":task.start_after}),
     )
 }
 pub(super) fn task_lines(task: &Value) -> String {
     if task.is_null() {
         return String::new();
     }
-    format!(
+    let mut output = format!(
         "Commitment: {}; scheduling: {}; execution: {}\n{}{}",
         task["commitment"].as_str().unwrap_or("unknown"),
         task["scheduling"].as_str().unwrap_or("unknown"),
@@ -102,7 +115,49 @@ pub(super) fn task_lines(task: &Value) -> String {
         task["reason"]["text"]
             .as_str()
             .map_or(String::new(), |text| format!("Reason: {text}\n"))
-    )
+    );
+    for (field, label) in [
+        ("review_when", "Review after"),
+        ("start_after", "Start after"),
+    ] {
+        if !task[field].is_null() {
+            writeln!(output, "{label}: {}", predicate_text(&task[field])).expect("String write");
+        }
+    }
+    output
+}
+
+fn predicate_text(value: &Value) -> String {
+    let state = if value["kind"] == "provider_merged" {
+        "merges"
+    } else {
+        "resolves"
+    };
+    format!("{} {state}", value["subject"].as_str().unwrap_or("unknown"))
+}
+
+pub(super) fn temporal_lines(values: &Value) -> String {
+    let mut output = String::new();
+    if let Some(values) = values.as_array() {
+        for temporal in values {
+            let value = &temporal["value"];
+            let text = match value["kind"].as_str() {
+                Some("date") => value["date"].as_str().unwrap_or("unknown").to_owned(),
+                Some("predicate") => format!("after {}", predicate_text(&value["predicate"])),
+                _ => format!(
+                    "unresolved ({})",
+                    value["reason"].as_str().unwrap_or("unknown")
+                ),
+            };
+            writeln!(
+                output,
+                "{}: {text}",
+                temporal["original"]["role"].as_str().unwrap_or("time")
+            )
+            .expect("String write");
+        }
+    }
+    output
 }
 pub(super) fn decorate(
     store: &Store,
@@ -110,8 +165,16 @@ pub(super) fn decorate(
     object: &ObjectId,
     value: &mut Value,
 ) -> Result<(), CliError> {
+    if let Some(assertion) = store.object_assertion(project, object)?
+        && !assertion.temporal.is_empty()
+    {
+        value["temporal"] = json!(assertion.temporal);
+    }
     if let Some(task) = store.task_state(project, object)? {
         value["task"] = task_value(store, project, &task)?;
+        if !task.temporal.is_empty() {
+            value["temporal"] = json!(task.temporal);
+        }
     }
     if let Some(command) = store.object_semantic_command(project, object)? {
         value["command"] = lineage(store, project, &command, false)?;
@@ -248,6 +311,9 @@ pub(super) fn object_details(
     let mut value = json!({});
     decorate(store, project, &object.id, &mut value)?;
     let mut output = task_lines(&value["task"]);
+    if value["task"].is_null() {
+        output.push_str(&temporal_lines(&value["temporal"]));
+    }
     if let Some(status) = value["status"].as_str() {
         writeln!(output, "Status: {status}").expect("String write");
     }
@@ -264,6 +330,9 @@ pub(super) fn object_details(
 
 pub(super) fn view_lines(value: &Value) -> String {
     let mut output = task_lines(&value["task"]);
+    if value["task"].is_null() {
+        output.push_str(&temporal_lines(&value["temporal"]));
+    }
     if let Some(status) = value["status"].as_str() {
         writeln!(output, "Status: {status}").expect("String write");
     }

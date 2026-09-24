@@ -386,6 +386,8 @@ fn observation(
         ambiguous_order_with_previous: false,
         author,
         occurred_at: occurred_at.to_owned(),
+        authored_at: None,
+        author_timezone: None,
         created_at: created_at.to_owned(),
         updated_at: None,
         body: body.map(str::to_owned),
