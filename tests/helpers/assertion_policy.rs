@@ -1,3 +1,10 @@
+#[path = "assertion_policy/relation_health.rs"]
+mod relation_health;
+pub use relation_health::{
+    IndependentRelationScenario, RelationHealthScenario, RelationUpgradeScenario,
+    WithdrawalRaceScenario,
+};
+
 use merl_compiler::{
     CompileError, CompilerAdapter, CompilerLimits, RunMode, RunRequest, prepare_eager_compilation,
     prepare_evaluation_compilation, prepare_hindsight_compilation, prepare_replay_compilation,
@@ -298,6 +305,27 @@ impl AssertionScenario {
         prior: Option<&str>,
         author: Option<&str>,
     ) {
+        Self::capture_body(
+            store,
+            source,
+            version,
+            prior,
+            author,
+            Some(if prior.is_some() {
+                b"Correction: use variable gain."
+            } else {
+                b"Use fixed gain. Please add a task. The other item is unclear."
+            }),
+        );
+    }
+    fn capture_body(
+        store: &mut Store,
+        source: &str,
+        version: &str,
+        prior: Option<&str>,
+        author: Option<&str>,
+        body: Option<&[u8]>,
+    ) {
         store
             .capture_source_version(
                 &id("P1"),
@@ -324,14 +352,12 @@ impl AssertionScenario {
                     provider_actor_id: author,
                     source_author: author.map(id),
                     provider_source_author_id: author,
-                    body: Some(if prior.is_some() {
-                        b"Correction: use variable gain."
-                    } else {
-                        b"Use fixed gain. Please add a task. The other item is unclear."
-                    }),
+                    body,
                     edit_diff: None,
                     edit_deleted_at_millis: None,
-                    missing_body_reason: None,
+                    missing_body_reason: body
+                        .is_none()
+                        .then_some(merl_store::MissingSourceBody::DeletedByProvider),
                     compilation_mode: CompilationMode::Eager,
                     coverage_requirement: CoverageRequirement::Required,
                     policy_version: id("capture-v1"),
@@ -340,6 +366,16 @@ impl AssertionScenario {
             .unwrap();
     }
     fn compile(&mut self, run: &str, author: Option<&str>, mode: RunMode, response: Option<Value>) {
+        self.compile_with_window(run, author, mode, response, 1);
+    }
+    fn compile_with_window(
+        &mut self,
+        run: &str,
+        author: Option<&str>,
+        mode: RunMode,
+        response: Option<Value>,
+        window: usize,
+    ) {
         let mut store = self.store();
         let source = format!("source-{run}");
         Self::capture(&mut store, &source, &source, None, author);
@@ -351,7 +387,7 @@ impl AssertionScenario {
             context_requests: 2,
             expansion_rounds: 1,
             payload_bytes: 4096,
-            source_window: 1,
+            source_window: window,
             objects: 4,
         };
         let request = RunRequest {

@@ -4,7 +4,9 @@ mod assertions;
 mod authority;
 mod candidates;
 mod commands;
+mod relation_evidence;
 mod relations;
+pub use relation_evidence::{prepare_relation_withdrawal, withdraw_relation};
 mod revalidation;
 pub use candidates::{
     candidate_dependencies_current, candidate_review_evaluation, prepare_candidate_review,
@@ -138,7 +140,7 @@ impl PolicyRules {
 
     fn from_grants(grants: merl_store::AuthorityGrants) -> Result<Self, StoreError> {
         Ok(Self {
-            version: PolicyVersion::try_from("authority_v7")
+            version: PolicyVersion::try_from("authority_v8")
                 .map_err(|_| StoreError::CorruptHistory)?,
             decision_authors: grants.decision_authors,
             command_actors: grants.command_actors,

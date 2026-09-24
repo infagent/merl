@@ -465,6 +465,33 @@ The first-release relation predicates are `supports`, `disputes`, `answers`, `ad
 
 Relation candidates use the existing accept and reject commands. Correction remains an object-assertion operation. Acceptance requires both endpoints in accepted state: an assertion endpoint must still have its original accepted derivation, and an object endpoint must retain the recorded revision. Review checks source availability and current grants; the commit repeats those checks and guards both endpoint revisions. A successful review writes the existing relation event and projection with an exact command-to-relation-to-run link. Rebuild restores the edge, focused views include its neighbor, and expansion follows each endpoint basis. Purge follows relation lineage even after the response bytes disappear.
 
+An accepted compiler relation has immutable derivation support, separate from its
+semantic event. An edit or deletion of any source selected by that run appends a
+relation evidence impact. Erasing source, context, or response bytes does the same,
+including compiler contexts erased through transitive purge. Affected derivations
+leave current graph selection immediately. `show` reports `revalidation_pending`
+while review is open, or `unsupported` when evidence is erased or review has retired
+the support. Rebuild preserves this distinction. Migration discovers impacts for
+previously accepted relations from their recorded source windows and retained bytes.
+
+For the first release, review restores an edge through a fresh live compiler run
+and explicit candidate acceptance. Accepting the same subject/predicate/object
+triple closes pending work for its stale predecessors in the same transaction.
+Accepting a different triple leaves the earlier work open; the reviewer can close
+it with `project revalidation resolve --action withdraw`. Withdrawal requires
+current `command_actor` authority and appends a control receipt. It preserves the
+relation's semantic revision and original provenance. The receipt fixes the actor
+and impact; exact retries return the original outcome, and competing resolutions
+or grant changes prevent a prepared withdrawal from committing.
+
+Relation IDs remain specific to `(project, run, index)` in this release. Independent
+current derivations of the same triple can coexist, each with its own evidence
+health. Focus selection counts distinct neighbors before applying its limit.
+Retiring one derivation cannot hide a neighbor that another current edge still
+supports. A replacement review links the retired support to the new relation ID;
+Merl does not rewrite the old edge or merge its history into the replacement.
+
+
 The `decision_author` grant has this bounded meaning:
 
 | Assertion from the recorded source author | Automatic disposition |

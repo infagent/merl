@@ -594,7 +594,7 @@ Acceptance adopts the original proposal. Correction creates a new typed proposal
 
 Relation candidates use `accept` or `reject`. Their `show` result contains `relation` with its compiler run/index and the assertion span or accepted-object revision behind each endpoint. Application results distinguish `observed_assertion` and `observed_relation` inputs with the same numeric index. Accept the endpoint assertions first if they are still candidates. A changed endpoint or unavailable compiler evidence prevents relation acceptance. `correct` supports object assertions only.
 
-After acceptance, `merl show <relation-id> --source` returns `merl.relation/v1` with the edge, review command, and compiler provenance. Issue views expose relation IDs; focused project views include the connected objects. Rebuild preserves those edges without running a compiler.
+After acceptance, `merl show <relation-id> --source` returns `merl.relation/v1` with the edge, evidence `support`, review command, and compiler provenance. Issue views expose current relation IDs; focused project views include their connected objects. An edit, deletion, or purge retires the affected derivation from both views. You can still inspect the original relation ID. Its `support_resolution`, when present, names the closing policy evaluation and any replacement relation. Rebuild preserves this history without running a compiler.
 
 Each action runs policy under current command authority. A source author's `decision_author` grant alone cannot authorize review. Acceptance and correction conflict if evidence changed or disappeared, the original target changed, or another action already resolved the candidate. Rejection can close a stale candidate. An accepted rejection advances the revision with a control record but creates no semantic object from the rejected assertion. Review control records stay out of project semantic views.
 
@@ -1621,12 +1621,31 @@ List pending evidence work after an edit, observed deletion, or purge:
 merl project revalidation list --project P1 --database project.sqlite --json
 ```
 
-Each entry names the impact, affected object and support event, earlier run,
-trigger, changed source, replacement, and next action. It also reports unavailable
-evidence and the latest reserved attempt, including pending or failed work. Pages
-contain up to 100 entries. Pass `next_after` as `--after` to continue.
+Each entry names the impact, affected `object` or `relation`, support event, earlier
+run, changed source, replacement, next action, and whether evidence is unavailable.
+Object entries also report the trigger and latest reserved attempt, including
+pending or failed work. Pages contain up to 100 entries across both kinds. Pass
+`next_after` as `--after` to continue.
 
-A command actor can execute one affected derivation:
+Relation work reports `next_action=review_new_relation_or_withdraw`. Compile current
+source in a new live run, apply its output, and review the relation candidate with
+`candidate accept`. Accepting the same triple restores current graph use under a
+new relation ID and closes the stale derivation's pending work. Independent current
+derivations retain separate IDs; focused views count their shared neighbor once.
+If the relationship no longer holds, close the stale support explicitly:
+
+```sh
+merl project revalidation resolve --project P1 --database project.sqlite \
+  --id withdraw_123 --impact relation_impact_123 --actor reviewer --action withdraw
+```
+
+Withdrawal takes no run or assertion index. It requires `command_actor` authority
+and keeps the original edge available in history as `unsupported`. If a fresh run
+proposes a different triple, accept that candidate and withdraw the old edge's
+support as separate reviews. The object hindsight workflow below does not promote
+relation candidates.
+
+A command actor can execute one affected object derivation:
 
 ```sh
 merl project revalidation run --project P1 --database project.sqlite \

@@ -3,7 +3,11 @@
 mod authority;
 mod candidates;
 mod compiler_relations;
+mod relation_evidence;
 pub use compiler_relations::{RelationBasis, StructuralRelation};
+pub use relation_evidence::{
+    RelationEvidenceImpact, RelationEvidenceResolution, RelationWithdrawal,
+};
 mod commands;
 mod expansions;
 mod revalidation;
@@ -28,7 +32,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 26;
+const SCHEMA_VERSION: i64 = 27;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -327,6 +331,8 @@ pub struct IssueState {
 /// Current projection of one accepted structural relation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectedRelation {
+    /// Evidence health of the current semantic version.
+    pub support: SupportStatus,
     /// Its accepted endpoints and predicate.
     pub relation: Relation,
     /// Revision of this relation, independent of the project revision.
@@ -998,6 +1004,11 @@ impl Store {
                 transaction
                     .execute_batch(include_str!("../migrations/0026_compiler_relations.sql"))?;
             }
+            if version < 27 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0027_relation_evidence.sql"))?;
+                relation_evidence::migrate(&transaction)?;
+            }
             let broken: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
                 [],
@@ -1137,6 +1148,7 @@ impl Store {
         if let Some(source) = source {
             record_evidence_impacts(&transaction, project, &source, None, "reevaluate", 0)?;
         }
+        relation_evidence::record_unavailable(&transaction, project)?;
         transaction.commit()?;
         Ok(())
     }
@@ -1323,6 +1335,7 @@ impl Store {
             "reevaluate",
             now_millis,
         )?;
+        relation_evidence::record_unavailable(&transaction, project)?;
         transaction.commit()?;
         // A checkpoint can be blocked by another reader after logical erasure commits.
         // Return the durable receipt so callers do not mistake that state for a rejected purge.
@@ -1884,7 +1897,7 @@ impl Store {
         }
         let mut statement = self.connection.prepare(
             "SELECT id,kind FROM objects WHERE project_id=?1
-             AND kind NOT IN ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review')
+             AND kind NOT IN ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review','relation_revalidation')
              AND lifecycle!='superseded'",
         )?;
         let rows = statement.query_map(params![project.as_str()], |row| {
@@ -1924,7 +1937,9 @@ impl Store {
             return Err(StoreError::InvalidBatch);
         }
         let mut statement = self.connection.prepare(
-            "SELECT subject_id,object_id FROM relations WHERE project_id=?1 AND (subject_id=?2 OR object_id=?2) ORDER BY id LIMIT ?3",
+            "SELECT CASE WHEN subject_id=?2 THEN object_id ELSE subject_id END AS neighbor
+             FROM current_relations WHERE project_id=?1 AND (subject_id=?2 OR object_id=?2)
+             GROUP BY neighbor ORDER BY MIN(id) LIMIT ?3",
         )?;
         let rows = statement.query_map(
             params![
@@ -1932,23 +1947,15 @@ impl Store {
                 focus.as_str(),
                 i64::try_from(limit + 1).map_err(|_| StoreError::InvalidBatch)?
             ],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| row.get::<_, String>(0),
         )?;
         let mut endpoints = rows.collect::<Result<Vec<_>, _>>()?;
         let truncated = endpoints.len() > limit;
         endpoints.truncate(limit);
-        let mut neighbors = Vec::new();
-        for (subject, object) in endpoints {
-            let other = if subject == focus.as_str() {
-                object
-            } else {
-                subject
-            };
-            let id = ObjectId::try_from(other.as_str()).map_err(|_| StoreError::CorruptHistory)?;
-            if !neighbors.contains(&id) {
-                neighbors.push(id);
-            }
-        }
+        let neighbors = endpoints
+            .iter()
+            .map(|other| ObjectId::try_from(other.as_str()).map_err(|_| StoreError::CorruptHistory))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok((neighbors, truncated))
     }
 
@@ -2009,7 +2016,7 @@ impl Store {
                 AND domain_event_batches.id = domain_events.batch_id
                WHERE domain_events.project_id = ?1 AND domain_event_batches.revision <= ?2
                  AND domain_events.object_kind NOT IN
-                   ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review')
+                   ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review','relation_revalidation')
              ) SELECT object_id, payload_id, object_revision FROM history
                WHERE rank = 1 AND (NOT ?5 OR issue_scope_id IS NULL OR issue_scope_id=?4) ORDER BY CASE WHEN ?4 IS NOT NULL AND issue_scope_id=?4 THEN 0 ELSE 1 END, object_id LIMIT ?3",
         )?;
@@ -4184,6 +4191,7 @@ impl Store {
             .optional()?;
         row.map(|(subject, kind, object, revision, project_revision)| {
             Ok(ProjectedRelation {
+                support: self.relation_support_status(project, id)?,
                 relation: Relation {
                     id: id.clone(),
                     project: project.clone(),
@@ -4433,7 +4441,7 @@ impl Store {
         let mut statement = self.connection.prepare(
             "SELECT id FROM objects WHERE project_id=?1 AND issue_scope_id=?2
                AND kind NOT IN
-                 ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review')
+                 ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review','relation_revalidation')
                ORDER BY id",
         )?;
         let ids = statement
@@ -4450,7 +4458,7 @@ impl Store {
             );
         }
         let mut relation_statement = self.connection.prepare(
-            "SELECT id FROM relations WHERE project_id=?1 AND
+            "SELECT id FROM current_relations WHERE project_id=?1 AND
              (subject_id=?2 OR object_id=?2
                OR subject_id IN (SELECT id FROM objects WHERE project_id=?1 AND issue_scope_id=?3)
                OR object_id IN (SELECT id FROM objects WHERE project_id=?1 AND issue_scope_id=?3))
@@ -5255,6 +5263,9 @@ fn validate_policy_dependencies(
     if let Some(conflict) = commands::validate_commands(transaction, evaluation)? {
         return Ok(Some(conflict));
     }
+    if let Some(conflict) = relation_evidence::validate_withdrawals(transaction, evaluation)? {
+        return Ok(Some(conflict));
+    }
     if let Some(conflict) = compiler_relations::validate_reviews(transaction, evaluation)? {
         return Ok(Some(conflict));
     }
@@ -5517,6 +5528,10 @@ fn insert_policy_record(
             }
         }
     }
+    if conflict.is_none() && !duplicate {
+        relation_evidence::record_acceptance(transaction, evaluation)?;
+    }
+
     Ok(())
 }
 
@@ -5620,6 +5635,7 @@ fn record_evidence_impacts(
     next_action: &str,
     recorded_at_millis: i64,
 ) -> Result<(), StoreError> {
+    relation_evidence::record_impacts(transaction, project, previous, replacement)?;
     let mut statement = transaction.prepare(
         "SELECT DISTINCT s.object_id,s.event_id,pa.run_id FROM evidence_supports s
          JOIN policy_evaluation_domain_events pe

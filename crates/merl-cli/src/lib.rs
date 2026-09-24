@@ -1690,14 +1690,18 @@ fn render_relation(
     };
     let origin = store.relation_policy_origin(project, &id)?;
     let provenance = object_origin_json(store, project, origin.as_ref(), expand_source)?;
+    let resolution = store.relation_evidence_resolution(project, &id)?.map(|r| json!({"evaluation":r.evaluation.as_str(),"replacement_relation":r.replacement.as_ref().map(merl_core::RelationId::as_str)}));
     let edge = &relation.relation;
-    let value = json!({"schema":"merl.relation/v1","project":project.as_str(),"id":id.as_str(),"subject":edge.subject.as_str(),"predicate":edge.kind.as_str(),"object":edge.object.as_str(),"revision":relation.revision.get(),"project_revision":relation.project_revision.get(),"policy_origin":provenance});
+    let value = json!({"schema":"merl.relation/v1","project":project.as_str(),"id":id.as_str(),"subject":edge.subject.as_str(),"predicate":edge.kind.as_str(),"object":edge.object.as_str(),"support":support_name(relation.support),"support_resolution":resolution,"revision":relation.revision.get(),"project_revision":relation.project_revision.get(),"policy_origin":provenance});
     if json_output {
         render_json(&value).map(Some)
     } else {
         Ok(Some(format!(
-            "{id}: {} {} {}\nProvenance: {provenance}\n",
-            edge.subject, edge.kind, edge.object
+            "{id}: {} {} {} ({})\nProvenance: {provenance}\n",
+            edge.subject,
+            edge.kind,
+            edge.object,
+            support_name(relation.support)
         )))
     }
 }
