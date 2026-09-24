@@ -419,6 +419,20 @@ pub fn evaluate(
                     });
                     id
                 }
+                DomainEvent::ResolveSupport { id, object, .. } => {
+                    if !targets.insert(format!("support:{object}")) {
+                        return Err(PolicyError::InvalidProposal);
+                    }
+                    let current = store
+                        .object(project, object)?
+                        .ok_or(PolicyError::InvalidProposal)?;
+                    reads.push(PolicyRead::Object {
+                        id: object.clone(),
+                        revision: Some(current.revision),
+                    });
+                    // The impact guard serializes support reviews; there is no semantic write.
+                    id
+                }
                 DomainEvent::PutRelation { id, relation } => {
                     if relation.project != *project
                         || !targets.insert(format!("relation:{}", relation.id))
@@ -591,6 +605,11 @@ fn input_digest(proposal: &Proposal, actor: &ActorId) -> [u8; 32] {
                 part(scope.as_bytes());
             }
             part(lifecycle.as_str().as_bytes());
+        }
+        DomainEvent::ResolveSupport { object, review, .. } => {
+            part(b"resolve_support_v1");
+            part(object.as_str().as_bytes());
+            part(review.as_str().as_bytes());
         }
         DomainEvent::PutRelation { relation, .. } => {
             part(b"put_relation_v1");

@@ -71,6 +71,39 @@ pub struct RevalidationReview {
 }
 
 impl Store {
+    /// Lists accepted support reviews independently of an object's semantic versions.
+    ///
+    /// # Errors
+    /// Returns storage or corrupt-review errors.
+    pub fn object_revalidation_reviews(
+        &self,
+        project: &ProjectId,
+        object: &merl_core::ObjectId,
+    ) -> Result<Vec<RevalidationReview>, StoreError> {
+        let mut statement = self.connection.prepare("SELECT DISTINCT r.id,b.revision FROM revalidation_reviews r
+            JOIN policy_evaluation_inputs i ON i.project_id=r.project_id AND i.input_kind='command' AND i.input_id=r.id
+            JOIN policy_evaluation_domain_events o ON o.project_id=i.project_id AND o.evaluation_id=i.evaluation_id AND o.input_index=i.input_index
+            JOIN domain_events e ON e.project_id=o.project_id AND e.id=o.event_id
+            JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
+            WHERE e.project_id=?1 AND e.object_id=?2 ORDER BY b.revision,r.id")?;
+        let ids = statement
+            .query_map(params![project.as_str(), object.as_str()], |r| {
+                r.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|id| {
+                read_review(
+                    &self.connection,
+                    project,
+                    &PolicyInputId::try_from(id.as_str())
+                        .map_err(|_| StoreError::CorruptHistory)?,
+                )?
+                .ok_or(StoreError::CorruptHistory)
+            })
+            .collect()
+    }
+
     /// Reserves an immutable attempt for an impact before compiler dispatch.
     ///
     /// A new run ID permits retry after a terminal failure or another source edit.
@@ -280,6 +313,24 @@ pub(super) fn validate_reviews(
     connection: &Connection,
     evaluation: &PolicyEvaluation,
 ) -> Result<Option<PolicyConflictDetail>, StoreError> {
+    if let Some(batch) = &evaluation.batch {
+        for event in &batch.events {
+            if let merl_core::DomainEvent::ResolveSupport { id, review, .. } = event {
+                let origin = evaluation
+                    .event_origins
+                    .iter()
+                    .find(|o| &o.event == id)
+                    .ok_or(StoreError::InvalidPolicyEvaluation)?;
+                if evaluation
+                    .inputs
+                    .get(origin.input_index as usize)
+                    .is_none_or(|i| i.input != PolicyInput::Command(review.clone()))
+                {
+                    return Err(StoreError::InvalidPolicyEvaluation);
+                }
+            }
+        }
+    }
     for input in &evaluation.inputs {
         if input.disposition != PolicyDisposition::Accepted {
             continue;
@@ -310,8 +361,12 @@ pub(super) fn validate_reviews(
             }
         }
         let resolved: bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM evidence_revalidations WHERE project_id=?1 AND impact_id=?2)",params![evaluation.project.as_str(),review.impact],|r|r.get(0))?;
+        let value_unavailable = review.action == RevalidationAction::Confirm
+            && connection.query_row("SELECT EXISTS(SELECT 1 FROM observed_assertions a LEFT JOIN payloads p ON p.project_id=a.project_id AND p.id=a.value_id WHERE a.project_id=?1 AND a.run_id=?2 AND a.assertion_index=?3 AND a.value_id!='none' AND p.bytes IS NULL)", params![evaluation.project.as_str(),review.run.as_ref().map(CompilationRunId::as_str),review.assertion_index], |r|r.get::<_,bool>(0))?;
         let reason = if resolved {
             Some("accepted_input_overlap")
+        } else if value_unavailable {
+            Some("command_content_unavailable")
         } else if let Some(run) = &review.run {
             (!compilation_evidence_current(connection, &evaluation.project, run)?)
                 .then_some("assertion_evidence_changed")
@@ -367,5 +422,34 @@ pub(super) fn record_resolutions(
             transaction.execute("INSERT INTO policy_assertion_inputs(project_id,evaluation_id,input_id,run_id,assertion_index) VALUES(?1,?2,?3,?4,?5)",params![evaluation.project.as_str(),evaluation.id.as_str(),id.as_str(),run.as_str(),index])?;
         }
     }
+    Ok(())
+}
+
+/// Inserts an accepted support envelope; semantic projections must not apply it.
+pub(super) fn insert_support_effect(
+    transaction: &Transaction<'_>,
+    batch: &merl_core::DomainEventBatch,
+    index: usize,
+    id: &merl_core::EventId,
+    object: &merl_core::ObjectId,
+    review_id: &PolicyInputId,
+) -> Result<(), StoreError> {
+    let review =
+        read_review(transaction, &batch.project, review_id)?.ok_or(StoreError::InvalidBatch)?;
+    if review.actor != batch.actor
+        || !matches!(
+            review.action,
+            RevalidationAction::Confirm
+                | RevalidationAction::Weaken
+                | RevalidationAction::Unavailable
+        )
+    {
+        return Err(StoreError::InvalidBatch);
+    }
+    let matches: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM evidence_impacts WHERE project_id=?1 AND id=?2 AND object_id=?3)", params![batch.project.as_str(),review.impact,object.as_str()], |r|r.get(0))?;
+    if !matches {
+        return Err(StoreError::InvalidBatch);
+    }
+    transaction.execute("INSERT INTO domain_events(project_id,batch_id,id,event_index,event_kind,object_id,review_id) VALUES(?1,?2,?3,?4,'resolve_support',?5,?6)",params![batch.project.as_str(),batch.id.as_str(),id.as_str(),i64::try_from(index).map_err(|_|StoreError::InvalidBatch)?,object.as_str(),review_id.as_str()])?;
     Ok(())
 }

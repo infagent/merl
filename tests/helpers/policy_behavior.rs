@@ -138,6 +138,8 @@ pub struct PolicyScenario {
     expected_provider: Option<merl_store::AcceptedProviderObservation>,
     expected_issue: Option<merl_store::IssueState>,
     pending_purge: Option<merl_store::PurgeAudit>,
+    revalidation_before: serde_json::Value,
+    revalidation_basis: Option<merl_core::ProjectRevision>,
     revalidation_output: serde_json::Value,
     revalidation_details: serde_json::Value,
 }
@@ -1283,6 +1285,8 @@ impl PolicyScenario {
             expected_provider: None,
             expected_issue: None,
             pending_purge: None,
+            revalidation_before: serde_json::Value::Null,
+            revalidation_basis: None,
             revalidation_output: serde_json::Value::Null,
             revalidation_details: serde_json::Value::Null,
         }

@@ -1722,8 +1722,7 @@ fn render_object(
         }
         if expand_source {
             result["evidence_history"] = json!(evidence_history);
-            result["revalidation_history"] =
-                json!(revalidation::history(store, project, &history_entries)?);
+            result["revalidation_history"] = json!(revalidation::history(store, project, object)?);
             result["command_history"] = json!(commands::history(store, project, &history_entries)?);
         }
         render_json(&result)

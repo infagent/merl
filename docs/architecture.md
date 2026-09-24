@@ -405,6 +405,15 @@ in one batch. Invalidation changes the old lifecycle. Unavailable evidence close
 the work as unsupported without requiring or pretending to have a compiler result.
 Purged payloads remain erased.
 
+Confirmation, weakening, and unavailability append a `ResolveSupport` accepted
+effect. Its envelope names the object and immutable review, which records the
+affected support, impact, outcome, and optional run/assertion. It carries no
+semantic payload or lifecycle. The effect advances the project revision and inbox
+and updates support accounting without creating another semantic object version.
+The current object retains its payload reference even when purge has erased those
+bytes. Semantic history and compiler object selection skip support effects;
+supersession and invalidation still emit semantic object events.
+
 The immutable review receipt fixes the request's actor, impact, action, run, and
 assertion index. Exact retries return the recorded policy outcome. The accepted
 transaction checks current grants, object revisions, retained values, revised

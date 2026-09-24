@@ -217,17 +217,13 @@ pub(super) fn lineage(
 pub(super) fn history(
     store: &Store,
     project: &merl_core::ProjectId,
-    entries: &[merl_store::ObjectHistoryEntry],
+    object: &merl_core::ObjectId,
 ) -> Result<Vec<serde_json::Value>, CliError> {
-    let mut reviews = Vec::new();
-    for entry in entries {
-        if let Some(merl_core::PolicyInput::Command(id)) = &entry.input
-            && let Some(review) = store.revalidation_review(project, id)?
-        {
-            reviews.push(lineage(store, project, &review, false)?);
-        }
-    }
-    Ok(reviews)
+    store
+        .object_revalidation_reviews(project, object)?
+        .iter()
+        .map(|review| lineage(store, project, review, false))
+        .collect()
 }
 
 pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String, CliError> {

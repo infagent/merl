@@ -213,7 +213,7 @@ impl Store {
         project: &ProjectId,
         object: &ObjectId,
     ) -> Result<Option<SemanticCommandRecord>, StoreError> {
-        let row=self.connection.query_row("SELECT i.input_kind,i.input_id FROM domain_events e
+        let row=self.connection.query_row("SELECT i.input_kind,i.input_id FROM semantic_object_events e
             JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
             LEFT JOIN policy_evaluation_domain_events o ON o.project_id=e.project_id AND o.event_id=e.id
             LEFT JOIN policy_evaluation_inputs i ON i.project_id=o.project_id AND i.evaluation_id=o.evaluation_id AND i.input_index=o.input_index

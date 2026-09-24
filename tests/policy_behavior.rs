@@ -273,3 +273,18 @@ fn a_fresh_revalidation_attempt_preserves_the_interrupted_interpretation() {
         .when_changed_evidence_is_revalidated_again()
         .then_both_interpretations_remain_inspectable();
 }
+
+#[test]
+fn unavailable_support_preserves_the_erased_semantic_content_reference() {
+    PolicyScenario::given_a_payload_bearing_decision_with_purged_support()
+        .when_revalidation_is_run_and_resolved_after_restart("unavailable")
+        .then_support_is_resolved_without_a_semantic_revision();
+}
+
+#[test]
+fn purging_confirmed_support_erases_its_derived_content_without_removing_the_reference() {
+    PolicyScenario::given_a_payload_bearing_decision_with_changed_support()
+        .when_revalidation_is_run_and_resolved_after_restart("confirm")
+        .when_the_confirming_source_is_purged()
+        .then_confirmed_content_is_unavailable();
+}

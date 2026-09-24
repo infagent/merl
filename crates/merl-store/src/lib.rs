@@ -26,7 +26,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 24;
+const SCHEMA_VERSION: i64 = 25;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -890,6 +890,9 @@ impl Store {
             return Err(StoreError::UnsupportedSchema(version));
         }
         if version < SCHEMA_VERSION {
+            // Rebuilding an accepted-event table must leave dependent foreign keys
+            // pointing at its original name. Check them before committing the migration.
+            connection.pragma_update(None, "foreign_keys", "OFF")?;
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if version < 1 {
@@ -985,8 +988,21 @@ impl Store {
                 transaction
                     .execute_batch(include_str!("../migrations/0024_revalidation_reviews.sql"))?;
             }
+            if version < 25 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0025_support_effects.sql"))?;
+            }
+            let broken: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+                [],
+                |r| r.get(0),
+            )?;
+            if broken {
+                return Err(StoreError::CorruptHistory);
+            }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
+            connection.pragma_update(None, "foreign_keys", "ON")?;
         }
         let mut store = Self { connection };
         store.finish_pending_purges()?;
@@ -1982,7 +1998,7 @@ impl Store {
                       COUNT(*) OVER (PARTITION BY domain_events.object_id) AS object_revision,
                       ROW_NUMBER() OVER (PARTITION BY domain_events.object_id
                         ORDER BY domain_event_batches.revision DESC, domain_events.event_index DESC) AS rank
-               FROM domain_events JOIN domain_event_batches
+               FROM semantic_object_events AS domain_events JOIN domain_event_batches
                  ON domain_event_batches.project_id = domain_events.project_id
                 AND domain_event_batches.id = domain_events.batch_id
                WHERE domain_events.project_id = ?1 AND domain_event_batches.revision <= ?2
@@ -2042,7 +2058,7 @@ impl Store {
         let row: Option<(i64, Option<String>)> = self
             .connection
             .query_row(
-                "SELECT COUNT(*) OVER (), e.payload_id FROM domain_events e
+                "SELECT COUNT(*) OVER (), e.payload_id FROM semantic_object_events e
              JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
              WHERE e.project_id=?1 AND e.object_id=?2 AND b.revision<=?3
              ORDER BY b.revision DESC, e.event_index DESC LIMIT 1",
@@ -3851,7 +3867,7 @@ impl Store {
         let value: Option<Option<String>> = self
             .connection
             .query_row(
-                "SELECT p.evaluation_id FROM domain_events e
+                "SELECT p.evaluation_id FROM semantic_object_events e
              JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
              LEFT JOIN policy_evaluation_domain_events p ON p.project_id=e.project_id AND p.event_id=e.id
              WHERE e.project_id=?1 AND e.object_id=?2 ORDER BY b.revision DESC, e.event_index DESC LIMIT 1",
@@ -3881,7 +3897,7 @@ impl Store {
         let row: Option<(String, Option<String>, Option<i64>)> = self
             .connection
             .query_row(
-                "SELECT e.id,p.evaluation_id,p.input_index FROM domain_events e
+                "SELECT e.id,p.evaluation_id,p.input_index FROM semantic_object_events e
                  JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
                  LEFT JOIN policy_evaluation_domain_events p
                     ON p.project_id=e.project_id AND p.event_id=e.id
@@ -3922,7 +3938,7 @@ impl Store {
         object: &ObjectId,
     ) -> Result<Vec<ObjectHistoryEntry>, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT e.id,e.batch_id,b.revision,e.lifecycle,e.payload_id,p.evaluation_id,p.input_index FROM domain_events e
+            "SELECT e.id,e.batch_id,b.revision,e.lifecycle,e.payload_id,p.evaluation_id,p.input_index FROM semantic_object_events e
              JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
              LEFT JOIN policy_evaluation_domain_events p ON p.project_id=e.project_id AND p.event_id=e.id
              WHERE e.project_id=?1 AND e.object_id=?2 ORDER BY b.revision,e.event_index",
@@ -4594,7 +4610,7 @@ impl Store {
             [project.as_str()],
         )?;
         let mut statement = transaction.prepare(
-            "SELECT b.revision, e.event_index, 'object', e.object_id, e.object_kind,
+            "SELECT b.revision, e.event_index, CASE WHEN e.event_kind='put_object' THEN 'object' ELSE 'support' END, e.object_id, e.object_kind,
                     e.payload_id, e.issue_scope_id, NULL, NULL, e.lifecycle
              FROM domain_events e JOIN domain_event_batches b
                ON e.project_id=b.project_id AND e.batch_id=b.id
@@ -4612,7 +4628,7 @@ impl Store {
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(4)?.unwrap_or_default(),
                 row.get::<_, Option<String>>(5)?,
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, Option<String>>(7)?,
@@ -4634,6 +4650,9 @@ impl Store {
                 lifecycle,
             ) = row?;
             latest_revision = revision;
+            if event_kind == "support" {
+                continue;
+            }
             if event_kind == "relation" {
                 apply_relation(
                     &transaction,
@@ -4741,9 +4760,13 @@ fn collect_purge_consequences(
         .query_map(params![project.as_str(), run], |row| row.get::<_, i64>(0))?
         .map(|row| u32::try_from(row?).map_err(|_| StoreError::CorruptHistory))
         .collect::<Result<Vec<_>, _>>()?;
+    // Confirmation adopts support for the existing represented value. Purge must
+    // follow that value through the assertion even though the effect has no payload.
     let mut object_statement = connection.prepare(
-        "SELECT DISTINCT e.id,e.object_id,e.payload_id
+        "SELECT DISTINCT e.id,e.object_id,
+           CASE WHEN e.event_kind='resolve_support' THEN NULLIF(assertion.value_id,'none') ELSE e.payload_id END
          FROM policy_assertion_inputs a
+         JOIN observed_assertions assertion ON assertion.project_id=a.project_id AND assertion.run_id=a.run_id AND assertion.assertion_index=a.assertion_index
          JOIN policy_evaluation_inputs i
            ON i.project_id=a.project_id AND i.evaluation_id=a.evaluation_id AND i.input_id=a.input_id
          JOIN policy_evaluation_domain_events o
@@ -4798,7 +4821,7 @@ fn dependent_runs_for_object_payload(
          JOIN (
            SELECT e.object_id,e.payload_id,
              ROW_NUMBER() OVER (PARTITION BY e.object_id ORDER BY b.revision,e.event_index) AS object_revision
-           FROM domain_events e JOIN domain_event_batches b
+           FROM semantic_object_events e JOIN domain_event_batches b
              ON b.project_id=e.project_id AND b.id=e.batch_id
            WHERE e.project_id=?1
          ) version ON version.object_id=c.object_id AND version.object_revision=c.object_revision
@@ -4996,9 +5019,12 @@ fn validate_policy_shape(
             let event_targets: HashSet<(&str, &str)> = batch
                 .events
                 .iter()
-                .map(|event| match event {
-                    DomainEvent::PutObject { object, .. } => ("object", object.as_str()),
-                    DomainEvent::PutRelation { relation, .. } => ("relation", relation.id.as_str()),
+                .filter_map(|event| match event {
+                    DomainEvent::PutObject { object, .. } => Some(("object", object.as_str())),
+                    DomainEvent::PutRelation { relation, .. } => {
+                        Some(("relation", relation.id.as_str()))
+                    }
+                    DomainEvent::ResolveSupport { .. } => None,
                 })
                 .collect();
             let writes: HashSet<(&str, &str)> = evaluation
@@ -5011,7 +5037,12 @@ fn validate_policy_shape(
                     }
                 })
                 .collect();
-            if event_targets.len() != batch.events.len()
+            if event_targets.len()
+                != batch
+                    .events
+                    .iter()
+                    .filter(|e| !matches!(e, DomainEvent::ResolveSupport { .. }))
+                    .count()
                 || writes.len() != evaluation.writes.len()
                 || event_targets != writes
             {
@@ -5044,9 +5075,9 @@ fn validate_policy_shape(
                 .count()
                 != origin_inputs.len()
                 || !batch.events.iter().all(|event| match event {
-                    DomainEvent::PutObject { id, .. } | DomainEvent::PutRelation { id, .. } => {
-                        origin_events.contains(id.as_str())
-                    }
+                    DomainEvent::PutObject { id, .. }
+                    | DomainEvent::ResolveSupport { id, .. }
+                    | DomainEvent::PutRelation { id, .. } => origin_events.contains(id.as_str()),
                 })
             {
                 return Err(StoreError::InvalidPolicyEvaluation);
@@ -5417,14 +5448,16 @@ fn insert_policy_record(
                 .as_ref()
                 .and_then(|batch| {
                     batch.events.iter().find(|event| match event {
-                        DomainEvent::PutObject { id, .. } | DomainEvent::PutRelation { id, .. } => {
-                            id == &origin.event
-                        }
+                        DomainEvent::PutObject { id, .. }
+                        | DomainEvent::ResolveSupport { id, .. }
+                        | DomainEvent::PutRelation { id, .. } => id == &origin.event,
                     })
                 })
                 .ok_or(StoreError::InvalidPolicyEvaluation)?;
             let link_table = match event {
-                DomainEvent::PutObject { .. } => "policy_evaluation_domain_events",
+                DomainEvent::PutObject { .. } | DomainEvent::ResolveSupport { .. } => {
+                    "policy_evaluation_domain_events"
+                }
                 DomainEvent::PutRelation { .. } => "policy_evaluation_relation_events",
             };
             transaction.execute(
@@ -5435,7 +5468,10 @@ fn insert_policy_record(
                 },
                 params![evaluation.project.as_str(), evaluation.id.as_str(), origin.event.as_str(), i64::from(origin.input_index)],
             )?;
-            if matches!(event, DomainEvent::PutObject { .. }) {
+            if matches!(
+                event,
+                DomainEvent::PutObject { .. } | DomainEvent::ResolveSupport { .. }
+            ) {
                 record_accepted_support(transaction, evaluation, origin)?;
             }
         }
@@ -5468,7 +5504,7 @@ fn record_accepted_support(
     if let merl_core::PolicyInput::Command(id) = input
         && revalidation::assertion_lineage(transaction, &evaluation.project, id)?.is_some()
     {
-        let matches: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM domain_events e JOIN observed_assertions a ON a.project_id=e.project_id AND a.subject_id=e.object_id WHERE e.project_id=?1 AND e.id=?2 AND a.run_id=?3 AND a.assertion_index=?4 AND e.lifecycle='active')",params![evaluation.project.as_str(),origin.event.as_str(),run.as_str(),index],|r|r.get(0))?;
+        let matches: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM domain_events e JOIN observed_assertions a ON a.project_id=e.project_id AND a.subject_id=e.object_id WHERE e.project_id=?1 AND e.id=?2 AND a.run_id=?3 AND a.assertion_index=?4 AND (e.lifecycle='active' OR e.event_kind='resolve_support'))",params![evaluation.project.as_str(),origin.event.as_str(),run.as_str(),index],|r|r.get(0))?;
         if !matches {
             return Ok(());
         }
@@ -5718,6 +5754,12 @@ fn policy_evaluation_digest(
                     }
                     part(lifecycle.as_str().as_bytes());
                 }
+                DomainEvent::ResolveSupport { id, object, review } => {
+                    part(b"resolve_support_v1");
+                    part(id.as_str().as_bytes());
+                    part(object.as_str().as_bytes());
+                    part(review.as_str().as_bytes());
+                }
                 DomainEvent::PutRelation { id, relation } => {
                     part(b"put_relation_v1");
                     part(id.as_str().as_bytes());
@@ -5777,7 +5819,9 @@ fn insert_accepted_batch(
     )?;
     for (index, event) in batch.events.iter().enumerate() {
         let event_id = match event {
-            DomainEvent::PutObject { id, .. } | DomainEvent::PutRelation { id, .. } => id,
+            DomainEvent::PutObject { id, .. }
+            | DomainEvent::ResolveSupport { id, .. }
+            | DomainEvent::PutRelation { id, .. } => id,
         };
         ensure_event_id_unused(transaction, &batch.project, event_id)?;
         match event {
@@ -5843,6 +5887,9 @@ fn insert_accepted_batch(
                     *lifecycle,
                     revision,
                 )?;
+            }
+            DomainEvent::ResolveSupport { id, object, review } => {
+                revalidation::insert_support_effect(transaction, batch, index, id, object, review)?;
             }
             DomainEvent::PutRelation { id, relation } => {
                 if relation.project != batch.project {

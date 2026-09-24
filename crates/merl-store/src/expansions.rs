@@ -173,7 +173,7 @@ pub(super) fn validate_retained_context(
     }
     for (object, _) in record.objects {
         let erased: bool = transaction.query_row(
-            "SELECT COALESCE(p.erased,0) FROM domain_events e JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
+            "SELECT COALESCE(p.erased,0) FROM semantic_object_events e JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id
              LEFT JOIN payloads p ON p.project_id=e.project_id AND p.id=e.payload_id
              WHERE e.project_id=?1 AND e.object_id=?2 AND b.revision<=?3
              ORDER BY b.revision DESC,e.event_index DESC LIMIT 1",
@@ -209,7 +209,7 @@ impl Store {
         basis: merl_core::ProjectRevision,
     ) -> Result<Option<(merl_core::ObjectRevision, Option<merl_core::PayloadId>)>, StoreError> {
         let kind: Option<String> = self.connection.query_row(
-            "SELECT e.object_kind FROM domain_events e JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id WHERE e.project_id=?1 AND e.object_id=?2 AND b.revision<=?3 ORDER BY b.revision DESC,e.event_index DESC LIMIT 1",
+            "SELECT e.object_kind FROM semantic_object_events e JOIN domain_event_batches b ON b.project_id=e.project_id AND b.id=e.batch_id WHERE e.project_id=?1 AND e.object_id=?2 AND b.revision<=?3 ORDER BY b.revision DESC,e.event_index DESC LIMIT 1",
             params![project.as_str(),object.as_str(),i64::try_from(basis.get()).map_err(|_|StoreError::InvalidCompilation)?], |r|r.get(0)).optional()?;
         if kind.as_deref().is_none_or(|kind| {
             matches!(

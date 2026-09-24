@@ -1660,6 +1660,12 @@ Confirmation and supersession require `--assertion-index`; the other actions omi
 it. Weakening can leave an object partially supported if it has independent evidence.
 An unavailable result does not restore erased content or claim successful compilation.
 
+Confirmation, weakening, and unavailability appear in delta/inbox as
+`resolve_support` changes referencing the affected object. They leave its semantic
+revision, lifecycle, and payload reference unchanged, including references to
+erased content. `show --source` exposes their reviews in `revalidation_history`;
+`policy_origin` and `history` continue to describe semantic object versions.
+
 Resolution records use `merl.revalidation-resolution/v1`. They include the review
 request, impact, action, policy evaluation, disposition, reason, and accepted
 revision when present. The list and run schemas are `merl.revalidation-work/v1`

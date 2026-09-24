@@ -10,6 +10,145 @@ use merl_policy::Proposal;
 use merl_store::{StoreError, SupportStatus};
 
 impl PolicyScenario {
+    pub fn given_a_payload_bearing_decision_with_changed_support() -> Self {
+        let mut scenario = Self::given_a_later_compiler_context_containing_an_accepted_decision();
+        scenario
+            .store
+            .grant_administrator_unchecked_bootstrap(&scenario.project, &id("admin"))
+            .unwrap();
+        scenario.cli(&[
+            "project",
+            "authority",
+            "grant",
+            "--actor",
+            "admin",
+            "--subject",
+            "reviewer",
+            "--permission",
+            "command_actor",
+            "--id",
+            "grant-reviewer",
+            "--reason",
+            "Review changed support",
+        ]);
+        scenario.capture_edit("direct-v1", "direct-v2", "Use fixed gain.", "issue-204");
+        scenario
+    }
+
+    pub fn when_the_confirming_source_is_purged(&mut self) -> &mut Self {
+        let preview = self
+            .store
+            .preview_source_purge(&self.project, &id("direct-v2"))
+            .unwrap();
+        self.store
+            .purge_source(
+                &self.project,
+                &id("direct-v2"),
+                &id("admin"),
+                b"Erase revised evidence",
+                NOW + 30,
+                preview.confirm_digest,
+            )
+            .unwrap();
+        self.revalidation_details = self.cli(&["show", "D1", "--source", "--history"]);
+        self
+    }
+
+    pub fn then_confirmed_content_is_unavailable(&self) {
+        assert_eq!(self.revalidation_details["payload_ref"], "decision-body");
+        assert_eq!(
+            self.revalidation_details["content"]["status"],
+            "unavailable"
+        );
+        assert_eq!(self.revalidation_details["support"], "unsupported");
+    }
+
+    pub fn given_a_payload_bearing_decision_with_purged_support() -> Self {
+        let mut scenario = Self::given_a_later_compiler_context_containing_an_accepted_decision();
+        scenario
+            .store
+            .grant_administrator_unchecked_bootstrap(&scenario.project, &id("admin"))
+            .unwrap();
+        scenario.cli(&[
+            "project",
+            "authority",
+            "grant",
+            "--actor",
+            "admin",
+            "--subject",
+            "reviewer",
+            "--permission",
+            "command_actor",
+            "--id",
+            "grant-reviewer",
+            "--reason",
+            "Review erased support",
+        ]);
+        let preview = scenario
+            .store
+            .preview_source_purge(&scenario.project, &id("direct-v1"))
+            .unwrap();
+        scenario
+            .store
+            .purge_source(
+                &scenario.project,
+                &id("direct-v1"),
+                &id("admin"),
+                b"Erase supporting evidence",
+                NOW + 8,
+                preview.confirm_digest,
+            )
+            .unwrap();
+        let before = scenario.cli(&["show", "D1", "--source", "--history"]);
+        assert_eq!(before["payload_ref"], "decision-body");
+        assert_eq!(before["content"]["status"], "unavailable");
+        scenario
+            .store
+            .subscribe_all(&scenario.project, &id("observer"))
+            .unwrap();
+        scenario.revalidation_before = before;
+        scenario.revalidation_basis =
+            Some(scenario.store.project_revision(&scenario.project).unwrap());
+        scenario
+    }
+
+    pub fn then_support_is_resolved_without_a_semantic_revision(&mut self) {
+        let after = &self.revalidation_details;
+        assert_eq!(after["payload_ref"], "decision-body");
+        assert_eq!(after["content"]["status"], "unavailable");
+        assert_eq!(after["lifecycle"], "active");
+        assert_eq!(after["support"], "unsupported");
+        for field in ["revision", "project_revision", "history", "policy_origin"] {
+            assert_eq!(
+                after[field], self.revalidation_before[field],
+                "semantic {field} must be unchanged"
+            );
+        }
+        assert_eq!(
+            self.store.project_revision(&self.project).unwrap().get(),
+            self.revalidation_basis.unwrap().get() + 1
+        );
+        assert_eq!(after["revalidation_history"][0]["action"], "unavailable");
+        let delta = self
+            .store
+            .project_delta_since(&self.project, self.revalidation_basis.unwrap(), 100)
+            .unwrap();
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta[0].changes.len(), 1);
+        assert_eq!(delta[0].changes[0].kind, "resolve_support");
+        assert_eq!(delta[0].changes[0].reference, "D1");
+        let inbox = self
+            .store
+            .inbox_after(
+                &self.project,
+                &id("observer"),
+                self.revalidation_basis.unwrap(),
+            )
+            .unwrap();
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].batch, delta[0].batch);
+    }
+
     pub fn given_a_resolved_question_with_source_support() -> Self {
         let mut scenario = Self::file_backed();
         scenario
@@ -118,7 +257,7 @@ impl PolicyScenario {
         assert_eq!(self.revalidation_output["status"], "resolved");
         assert_eq!(self.revalidation_output["support"], "unsupported");
         assert_eq!(
-            self.revalidation_output["policy_origin"]["input"]["revalidation"]["action"],
+            self.revalidation_output["revalidation_history"][0]["action"],
             "weaken"
         );
     }
@@ -497,15 +636,26 @@ impl PolicyScenario {
 
     fn revalidate_after_restart(&mut self, action: &str, attempt: Option<&str>) -> &mut Self {
         self.when_the_authority_restarts();
+        if self.revalidation_before.is_null() {
+            self.revalidation_before = self.cli(&["show", "D1", "--source", "--history"]);
+        }
         let work = self.cli(&["project", "revalidation", "list"]);
         let impact = work["work"][0]["impact"].as_str().unwrap().to_owned();
         let run = attempt.unwrap_or(&impact);
         if action != "unavailable" {
             let subject = if action == "supersede" { "D2" } else { "D1" };
+            let object = self
+                .store
+                .object(&self.project, &id("D1"))
+                .unwrap()
+                .unwrap();
             let value = if action == "supersede" {
                 "sweep-body"
             } else {
-                "none"
+                object
+                    .payload
+                    .as_ref()
+                    .map_or("none", merl_core::PayloadId::as_str)
             };
             let trigger = self
                 .store
@@ -580,11 +730,29 @@ impl PolicyScenario {
         self
     }
 
+    fn assert_support_only_preserves_semantics(&self, action: &str) {
+        if matches!(action, "confirm" | "weaken" | "unavailable") {
+            for field in [
+                "revision",
+                "project_revision",
+                "payload_ref",
+                "history",
+                "policy_origin",
+            ] {
+                assert_eq!(
+                    self.revalidation_details[field], self.revalidation_before[field],
+                    "{action} changed semantic {field}"
+                );
+            }
+        }
+    }
+
     pub fn then_the_reviewed_support_outcome_is_durable(&mut self, action: &str) {
         assert_eq!(
-            self.revalidation_details["policy_origin"]["input"]["revalidation"]["action"],
+            self.revalidation_details["revalidation_history"][0]["action"],
             action
         );
+        self.assert_support_only_preserves_semantics(action);
         if action != "unavailable" {
             assert!(
                 self.store

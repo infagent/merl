@@ -130,29 +130,23 @@ pub fn prepare_revalidation_review(
     }
     let mut events = Vec::new();
     let parts = [project.as_str(), review.id.as_str()];
-    let old_payload = if review.action == Unavailable
-        && matches!(
-            object
-                .payload
-                .as_ref()
-                .map(|p| store.read_payload(project, p))
-                .transpose()?,
-            Some(merl_store::PayloadRead::Unavailable)
-        ) {
-        None
-    } else {
-        object.payload.clone()
-    };
-    events.push(DomainEvent::PutObject {
-        id: identity("revalidation_event", &parts)?,
-        object: impact.object.clone(),
-        kind: object.kind.clone(),
-        payload: old_payload,
-        issue_scope: object.issue_scope.clone(),
-        lifecycle: match review.action {
-            Supersede => ObjectLifecycle::Superseded,
-            Invalidate => ObjectLifecycle::Invalidated,
-            Confirm | Weaken | Unavailable => ObjectLifecycle::Active,
+    events.push(match review.action {
+        Confirm | Weaken | Unavailable => DomainEvent::ResolveSupport {
+            id: identity("revalidation_event", &parts)?,
+            object: impact.object.clone(),
+            review: review.id.clone(),
+        },
+        Supersede | Invalidate => DomainEvent::PutObject {
+            id: identity("revalidation_event", &parts)?,
+            object: impact.object.clone(),
+            kind: object.kind.clone(),
+            payload: object.payload.clone(),
+            issue_scope: object.issue_scope.clone(),
+            lifecycle: if review.action == Supersede {
+                ObjectLifecycle::Superseded
+            } else {
+                ObjectLifecycle::Invalidated
+            },
         },
     });
     if review.action == Supersede {
@@ -221,6 +215,7 @@ pub fn prepare_revalidation_review(
                                 input_index: 0,
                             });
                     }
+                    DomainEvent::ResolveSupport { .. } => return Err(PolicyError::InvalidProposal),
                     DomainEvent::PutRelation { id, relation } => {
                         prepared
                             .evaluation
