@@ -121,13 +121,17 @@ pub(super) fn execute(
     } else {
         "captured"
     };
+    let sources = report.sources.iter().map(|source| {
+        let captured = store.source_version(project, &source.version)?.ok_or(merl_store::StoreError::CorruptHistory)?;
+        Ok::<_, merl_store::StoreError>(json!({"entity":source.entity,"version":source.version.as_str(),"run":source.run,"deleted":source.deleted,"upstream_deleted_at":Value::Null,"policy":{"mode":captured.compilation_mode.as_str(),"coverage":captured.coverage_requirement.as_str(),"version":captured.policy_version.as_str()},"policy_selection":store.source_policy_selection(project, &source.version)?}))
+    }).collect::<Result<Vec<_>, _>>()?;
     if json_output {
         render_json(&json!({
             "schema":"merl.issue-capture/v1", "action":"issue.capture", "project":project.as_str(), "outcome":outcome,
             "binding":report.binding.as_str(), "policy":{"mode":report.policy.mode.as_str(), "coverage":report.policy.coverage.as_str(), "version":report.policy.version.as_str()},
             "captured":report.sources.len(), "unchanged":report.unchanged, "deleted":report.deleted, "compiled":report.compiled,
             "failed":report.failures.len(), "warnings":report.failures, "observation_head":report.observation_head, "revision":report.revision, "provider_changed":report.provider_changed,
-            "sources":report.sources.iter().map(|source| json!({"entity":source.entity, "version":source.version.as_str(), "run":source.run, "deleted":source.deleted, "upstream_deleted_at":Value::Null})).collect::<Vec<_>>()
+            "sources":sources
         }))
     } else {
         let mut output = format!(

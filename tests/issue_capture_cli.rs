@@ -206,3 +206,31 @@ fn binding_policy_commands_explain_their_contract_and_reject_changed_retries() {
         .when_help_human_results_and_retries_are_read()
         .then_help_and_results_preserve_policy_and_retry_identity();
 }
+
+#[test]
+fn compilation_selectors_use_trusted_authors_and_preserve_capture_policy() {
+    issue_capture_cli::SelectorCases::given_a_binding_with_mixed_authors()
+        .when_rules_change_and_new_versions_arrive()
+        .then_only_selected_sources_compile_and_history_keeps_its_policy();
+}
+
+#[test]
+fn compilation_selectors_resolve_precedence_and_keep_mode_independent() {
+    issue_capture_cli::SelectorCases::given_a_binding_with_mixed_authors()
+        .when_overlapping_rules_and_an_override_are_applied()
+        .then_precedence_fallback_and_coverage_are_explicit();
+}
+
+#[test]
+fn compilation_selector_administration_preserves_authority_and_binding_isolation() {
+    issue_capture_cli::SelectorCases::given_a_binding_with_mixed_authors()
+        .when_selector_changes_are_denied_retried_and_removed()
+        .then_only_authorized_changes_affect_the_selected_binding();
+}
+
+#[test]
+fn compilation_policy_inspection_explains_selection_and_rejects_ambiguous_requests() {
+    issue_capture_cli::SelectorCases::given_a_binding_with_mixed_authors()
+        .when_capture_policy_is_inspected_and_ambiguous_changes_are_attempted()
+        .then_inspection_names_the_rule_and_invalid_changes_leave_policy_untouched();
+}

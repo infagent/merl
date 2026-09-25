@@ -3,6 +3,9 @@
 /// Source-grounded calendar values and unevaluated event conditions.
 pub mod temporal;
 
+/// Structural compilation selectors and capture-time explanations.
+pub mod compilation_policy;
+
 use std::{error::Error, fmt};
 
 /// A structural identifier rejected before it reaches persistent history.
@@ -106,7 +109,8 @@ identifier!(
 );
 
 /// Whether capture schedules semantic extraction from prose.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CompilationMode {
     /// Keep the source cold until an authorized later action selects it.
     CaptureOnly,
@@ -142,7 +146,8 @@ impl TryFrom<&str> for CompilationMode {
 }
 
 /// Whether an unprocessed source leaves a semantic-coverage gap.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CoverageRequirement {
     /// Processing is needed before claiming semantic completeness.
     Required,

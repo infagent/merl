@@ -12,6 +12,7 @@ use merl_compiler::{
     prepare_eager_compilation, record_compilation_result,
 };
 use merl_core::CompilationMode;
+use merl_core::compilation_policy::{ActorClass, IssueSourceKind, PolicyValues};
 use merl_corpus::{
     fixture::{Fixture, Observation},
     github::{ISSUE_QUERY, fixture_from_graphql_pages},
@@ -214,13 +215,14 @@ pub fn capture_issue(
 ) -> Result<CaptureReport, ImportError> {
     validate(fixture)?;
     let binding = fixture_binding(fixture)?;
-    let policy = store
-        .capture_policy(project, &binding.id)?
-        .unwrap_or_else(|| default.clone());
-    if policy.mode == CompilationMode::Eager && adapter.is_none() {
-        return Err(ImportError::CompilerRequired);
-    }
-    let policy = store.resolve_capture_policy(project, &binding, &policy)?;
+    let policy = capture_policy(
+        store,
+        project,
+        &binding,
+        fixture,
+        default,
+        adapter.is_some(),
+    )?;
     let now = utc_millis(&fixture.capture.captured_at)?;
     let previous =
         store.latest_sources_in_scope(project, &binding.id, &fixture.source.issue_provider_id)?;
@@ -252,7 +254,7 @@ pub fn capture_issue(
             project,
             fixture,
             &binding,
-            &report.policy,
+            adapter.is_some(),
             observation,
             prior,
         )?;
@@ -429,7 +431,7 @@ fn capture_current(
     project: &ProjectId,
     fixture: &Fixture,
     binding: &SourceBinding,
-    policy: &BindingCapturePolicy,
+    compiler_available: bool,
     observation: &Observation,
     prior: Option<&StoredSourceVersion>,
 ) -> Result<(SourceVersionId, bool), ImportError> {
@@ -503,11 +505,21 @@ fn capture_current(
             .map(utc_millis)
             .transpose()?,
         missing_body_reason: observation.missing_body_reason.map(missing_body_reason),
-        compilation_mode: policy.mode,
-        coverage_requirement: policy.coverage,
-        policy_version: policy.version.clone(),
+        compilation_mode: CompilationMode::CaptureOnly,
+        coverage_requirement: merl_core::CoverageRequirement::Optional,
+        policy_version: merl_core::CapturePolicyVersion::try_from("pending_selection")
+            .map_err(|_| ImportError::InvalidIdentity)?,
     };
-    Ok((version, store.capture_source_version(project, &capture)?))
+    let provider_class = ActorClass::from_github_type(
+        observation
+            .author
+            .as_ref()
+            .and_then(|a| a.provider_type.as_deref()),
+    );
+    Ok((
+        version,
+        store.capture_selected_source(project, capture, provider_class, compiler_available)?,
+    ))
 }
 
 fn capture_deletion(
@@ -520,9 +532,9 @@ fn capture_deletion(
 ) -> Result<SourceVersionId, ImportError> {
     let provider_version = format!("missing:{}", prior.id);
     let version = fixture_version_id(&provider_version)?;
-    store.capture_source_version(
+    store.capture_selected_source(
         project,
-        &SourceCapture {
+        SourceCapture {
             binding: binding.clone(),
             source: prior.source.clone(),
             provider_entity_id: &prior.provider_entity_id,
@@ -550,6 +562,49 @@ fn capture_deletion(
             coverage_requirement: policy.coverage,
             policy_version: policy.version.clone(),
         },
+        ActorClass::Unknown,
+        false,
     )?;
     Ok(version)
+}
+
+fn capture_policy(
+    store: &mut Store,
+    project: &ProjectId,
+    binding: &SourceBinding,
+    fixture: &Fixture,
+    default: &BindingCapturePolicy,
+    compiler_available: bool,
+) -> Result<BindingCapturePolicy, ImportError> {
+    let policy = store
+        .capture_policy(project, &binding.id)?
+        .unwrap_or_else(|| default.clone());
+    let selectors = if store.capture_policy(project, &binding.id)?.is_some() {
+        store.binding_policy(project, &binding.id)?.selectors
+    } else {
+        merl_core::compilation_policy::Selectors::default()
+    };
+    let needs_compiler = fixture.observations.iter().any(|observation| {
+        let author = observation.author.as_ref();
+        let (selected, _) = selectors.resolve(
+            PolicyValues {
+                mode: policy.mode,
+                coverage: policy.coverage,
+            },
+            Some(if matches!(observation.kind, ObservationKind::Issue) {
+                IssueSourceKind::Issue
+            } else {
+                IssueSourceKind::IssueComment
+            }),
+            author.and_then(|a| a.provider_id.as_deref()),
+            ActorClass::from_github_type(author.and_then(|a| a.provider_type.as_deref())),
+        );
+        selected.mode == CompilationMode::Eager
+    });
+    if needs_compiler && !compiler_available {
+        return Err(ImportError::CompilerRequired);
+    }
+    store
+        .resolve_capture_policy(project, binding, &policy)
+        .map_err(ImportError::from)
 }

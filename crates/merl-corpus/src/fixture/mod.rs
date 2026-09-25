@@ -188,6 +188,9 @@ pub struct ProviderLabelRef {
 /// Rename-stable provider actor identity and its display login at capture.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ActorRef {
+    /// Provider actor type; absent in older captures and never inferred from a login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_type: Option<String>,
     /// Provider node ID, when the actor also implements GitHub's Node interface.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_id: Option<String>,

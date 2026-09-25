@@ -254,8 +254,77 @@ those actions. `capture_only` plus `required` leaves new evidence cold and repor
 coverage gaps. Eager optional evidence receives compiler work, and its failures
 do not create required gaps.
 
-This command manages binding defaults. Source-kind and actor-class selectors
-remain separate policy-selection work; `--kind` is not accepted here.
+To select human comments while keeping other traffic cold, first set the binding
+defaults to `capture_only` and `optional`. Then add a rule with the version from
+inspection:
+
+```bash
+merl source compilation-policy set <binding-id> --project P1 --database project.sqlite \
+  --id human-comments --actor owner --expected-version <version> \
+  --kind issue_comment --actor-class human --mode eager --coverage required \
+  --reason 'Keep human Issue discussion current'
+```
+
+Kinds are `issue` and `issue_comment`. Classes are `human`, `bot`, `routine_agent`,
+and `unknown`. GitHub's author type selects `human` for `User` and `bot` for `Bot`;
+missing or unrecognized types select `unknown`. Merl uses the source author,
+including on edits. It does not infer a class from the editor, login, body, or
+sender-supplied policy hints.
+
+An administrator can classify a routine agent by its stable provider author ID:
+
+```bash
+merl source compilation-policy set <binding-id> --project P1 --database project.sqlite \
+  --id routine-account --actor owner --expected-version <version> \
+  --provider-actor <github-node-id> --actor-class routine_agent \
+  --reason 'This account posts routine agent updates'
+```
+
+This mapping takes precedence over GitHub's author type and applies only inside
+this project's binding. It grants no command or decision authority. Classification
+requests omit `--mode` and `--coverage`; a binding permits at most 128 mappings.
+
+The first matching level selects the complete mode/coverage pair:
+
+| Priority | Configuration |
+| --- | --- |
+| 1 | `--override`: this project's override for the binding |
+| 2 | `--kind` and `--actor-class` together |
+| 3 | `--kind` alone |
+| 4 | `--actor-class` alone |
+| 5 | Binding defaults, set without selector flags |
+
+Use `--override --mode … --coverage …` for an explicit binding-wide override.
+Setting an existing selector replaces that rule. Append `--remove` to a selector,
+`--override`, or `--provider-actor` to restore fallback; omit mode and coverage on
+removal, and omit actor class when removing an account mapping. Merl rejects
+combinations of override, selector, and classification flags that describe more
+than one target. A kind rule cannot affect another source kind. Unknown authors
+can match an explicit `unknown` rule, a kind rule, or the binding defaults.
+
+Inspection adds `selectors` to `merl.binding-policy/v1`: rules, account mappings,
+and the project override. To explain an immutable capture, pass its version:
+
+```bash
+merl source compilation-policy <binding-id> --project P1 --database project.sqlite \
+  --version <source-version> --json
+```
+
+`merl.binding-policy-selection/v1` reports the source kind, effective policy,
+recorded actor class and its origin, and the winning rule and selector. Human
+output reports the same choice. This inspection does not open the source body.
+`issue capture` includes each new source's `policy` and `policy_selection`;
+`source show --version …` includes them too. The capture's top-level `policy`
+continues to describe binding defaults. Older captures and offline imports report
+a null selection, while retaining their recorded policy values.
+
+Selector, override, and classification changes use the same administrator check,
+expected version, immutable request outcome, and audit stream as default changes.
+They survive restart and rebuild. They affect new observations and edited
+successors; they do not dispatch historical cold sources or rewrite existing
+intents. Capture flags cannot override an established binding's configuration.
+An observed deletion has no prose to compile and records the deterministic
+`observed_deletion` rule with binding-default coverage.
 
 `source compile` records its authorization before starting the compiler. The authority rejects a missing request or a mismatch in source version, run, compiler and version, executable configuration, model, prompt digest, or work limits without creating compiler work. Repeating an existing `source require` with the same content returns the accepted requirement unchanged, even when another actor asks for it.
 

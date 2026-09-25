@@ -282,6 +282,7 @@ version = "0.1.0"
 dependencies = [
  "merl-core",
  "merl-store",
+ "serde_json",
  "sha2",
  "time",
 ]
