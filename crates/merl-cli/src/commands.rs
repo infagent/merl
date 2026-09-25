@@ -275,12 +275,13 @@ pub(super) fn help(
         "merl {group} {} {example} --project P1 --database merl.db --actor alice --id request1",
         operation.unwrap_or(operations[0])
     );
-    let value = json!({"schema":"merl.help/v1","command":name,"summary":"Submit semantic state through durable command authority.","commands":if operation.is_none(){operations}else{&[]},"arguments":arguments,"outcomes":["accepted","rejected","conflict"],"errors":["INVALID_INPUT","POLICY_ERROR","POLICY_INPUT_CONFLICT"],"examples":[example],"related":["project authority","show","source show"]});
+    let trust = crate::security::ACTOR_CLAIM;
+    let value = json!({"trust_boundary":trust,"schema":"merl.help/v1","command":name,"summary":"Submit semantic state through durable command authority.","commands":if operation.is_none(){operations}else{&[]},"arguments":arguments,"outcomes":["accepted","rejected","conflict"],"errors":["INVALID_INPUT","POLICY_ERROR","POLICY_INPUT_CONFLICT"],"examples":[example],"related":["project authority","show","source show"]});
     if json_output {
         Ok(format!("{value}\n"))
     } else {
         Ok(format!(
-            "{name}: submit semantic state through command authority\nOperations: {}\n{}\nOutcomes: accepted, rejected, conflict. Errors: INVALID_INPUT, POLICY_INPUT_CONFLICT.\nExample: {example}\nRelated: project authority, show, source show\n",
+            "{name}: submit semantic state through command authority\n{trust}\nOperations: {}\n{}\nOutcomes: accepted, rejected, conflict. Errors: INVALID_INPUT, POLICY_INPUT_CONFLICT.\nExample: {example}\nRelated: project authority, show, source show\n",
             operations.join(", "),
             value["arguments"]
                 .as_array()

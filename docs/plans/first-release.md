@@ -191,7 +191,7 @@ The release is ready when:
 - a source-content purge follows derivations through later object-backed compiler contexts, removes their protected bytes from the active store, preserves audit tombstones and digests, and marks dependent evidence unavailable; no Merl-managed replica is configured in this release;
 - purge output states that unmanaged backups, provider systems, and previously exported archives lie outside that guarantee;
 - purge never claims that affected state remains fully replayable;
-- the local CLI states that same-user filesystem access lies outside Merl's enforcement boundary;
+- `security explain` states in human and JSON output that same-user filesystem access and actor impersonation lie outside Merl's enforcement boundary; command help describes `--actor` as a trusted local audit claim, and `tests/cli_behavior.rs` covers the boundary through CLI subprocesses;
 - top-level help lists command groups, while one subcommand's human or JSON help can be loaded without rendering the full command catalog;
 - every included command documents its arguments, outcomes, stable errors, examples, and related commands;
 - non-interactive JSON output never prompts and preserves the same accepted, queued, candidate, rejected, and conflicted meanings as human output;

@@ -352,7 +352,32 @@ Local security: trusted same-user processes
 Merl policy protects cooperating clients; unrestricted local processes can read node files.
 ```
 
-`merl security explain` prints the files and credentials at risk, the host controls in effect, and the isolation options available to the operator. Merl never describes same-user local policy as a sandbox.
+Run `merl security explain` to read the first-release local trust boundary. It
+needs no project or database. Use `--format json` or `--json` for the same
+explanation in a `merl.security/v1` result with action `security.explain`, outcome
+`explained`, and deployment `local`.
+
+Both formats state that unrestricted same-user processes are trusted. Those
+processes can read the SQLite database, captured payloads, provider credentials
+available to that user, and other local files, including configuration, caches,
+pending commands, artifacts, logs, and workspaces. Merl provides policy
+governance, validation, provenance, and audit for cooperating clients. Local
+policy cannot prevent file access, changes outside the API, or actor
+impersonation by those processes.
+
+The command explains the deployment contract; it does not inspect host controls
+or verify isolation. Operators who need to constrain local agents must configure
+a separate daemon identity with restricted IPC and filesystem permissions, a
+host sandbox or container that restricts file and credential access, or a
+credential broker. A shared authority can authenticate remote clients and enforce
+its API boundary, but it cannot protect an unrestricted client host. Shared
+authorities remain outside the first release.
+
+JSON names these explanations `trust_boundary`, `actor_claim`, `exposed_files`,
+`provided_checks`, `limitations`, `host_controls`, and `isolation_options`.
+Top-level help lists `security`; `merl help security` points to `explain`, and
+`merl help security explain` documents its arguments and outcome. Invalid input
+uses the existing `INVALID_INPUT` error contract.
 
 ## Project authority grants
 
@@ -376,6 +401,10 @@ Grant and revoke require an administrator. Results name the disposition, acting 
 Each change needs a request `--id` and a reason. The reason stays in an erasable payload linked from the accepted event. Repeating the same request returns its recorded result, even if the permission has since been revoked. Reusing an ID with different content fails with `POLICY_INPUT_CONFLICT`; a new request needs a new ID. Work prepared before a grant change may return `POLICY_CONFLICT` and require reevaluation.
 
 In local mode, `--actor` is a cooperating client's audit claim. Merl trusts processes with unrestricted access as the same OS user; these commands do not authenticate that user or sandbox the database.
+
+Help for commands that accept `--actor` calls it a trusted local audit claim,
+states that it is not proof of identity, and points to `merl security explain`.
+JSON help includes the same statement in `trust_boundary`.
 
 ## Moving setup between computers
 
@@ -1429,12 +1458,17 @@ Feature: Select project context
 Feature: Explain the local trust boundary
 
   Scenario: Local mode does not claim to sandbox same-user processes
-    Given project "project-a" uses a local authority
-    When I inspect its security model
+    Given I use Merl's local CLI
+    When I run "merl security explain" in human and JSON formats
     Then Merl reports that unrestricted same-user processes are trusted
     And it identifies local policy as governance and audit
     And it does not claim that local files are protected from those processes
+    And both formats expose the same boundary and isolation options
+    And Merl reports that it has not inspected host controls
 ```
+
+`tests/cli_behavior.rs` covers this scenario through CLI subprocesses. It also
+checks security help discovery and the actor claim in first-release command help.
 
 ### Offline work reports queued state
 
