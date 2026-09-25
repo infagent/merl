@@ -218,6 +218,7 @@ impl Store {
                     | "source_coverage_requirement"
                     | "source_compilation_request"
                     | "authority_grant"
+                    | "binding_compilation_policy"
                     | "candidate_review"
                     | "relation_revalidation"
             )

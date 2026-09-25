@@ -1,3 +1,6 @@
+#[path = "issue_capture_cli/binding_policy.rs"]
+mod binding_policy;
+pub use binding_policy::PolicyCases;
 use serde_json::{Value, json};
 use std::{fs, path::PathBuf, process::Command};
 
@@ -18,8 +21,11 @@ pub struct Capture {
 
 impl Capture {
     pub fn given_a_new_project() -> Self {
+        Self::given_a_named_project("default")
+    }
+    fn given_a_named_project(name: &str) -> Self {
         let directory = std::env::temp_dir().join(format!(
-            "merl-live-{}-{}",
+            "merl-live-{}-{}-{name}",
             std::process::id(),
             std::thread::current().name().unwrap()
         ));

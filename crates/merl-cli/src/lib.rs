@@ -2,6 +2,7 @@
 
 mod assertions;
 mod authority;
+mod binding_policy;
 mod candidates;
 mod capture;
 mod commands;
@@ -59,6 +60,7 @@ impl From<StoreError> for CliError {
     fn from(error: StoreError) -> Self {
         let code = match error {
             StoreError::UnsupportedSchema(_) => "UNSUPPORTED_SCHEMA",
+            StoreError::BindingMissing => "BINDING_NOT_FOUND",
             StoreError::ProjectMissing => "PROJECT_NOT_FOUND",
             StoreError::InvalidBatch => "INVALID_INPUT",
             StoreError::PayloadMissing => "PAYLOAD_NOT_FOUND",
@@ -238,6 +240,7 @@ fn execute(
     let mut subject = None;
     let mut permission = None;
     let mut confirm_digest = None;
+    let mut expected_policy_version = None;
     let mut dry_run = false;
     let mut run_id = None;
     let mut new_run = None;
@@ -272,6 +275,11 @@ fn execute(
                     "--note-file" => command_options.note_file = Some(value),
                     _ => command_options.review_at = Some(value),
                 }
+            }
+            "--expected-version" => {
+                index += 1;
+                expected_policy_version =
+                    Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
             }
             "--format" => {
                 index += 1;
@@ -569,6 +577,45 @@ fn execute(
         ["help", "inbox", "subscribe"] => help("inbox subscribe", *json_output),
         ["help", "inbox", "ack"] => help("inbox ack", *json_output),
         ["help", "show"] => help("show", *json_output),
+        ["help", "source", "compilation-policy"] | ["source", "compilation-policy", "help"] => {
+            binding_policy::help(false, *json_output)
+        }
+        ["help", "source", "compilation-policy", "set"]
+        | ["source", "compilation-policy", "set", "help"] => {
+            binding_policy::help(true, *json_output)
+        }
+        ["source", "compilation-policy", tail @ ..] => {
+            let (set, binding) = match tail {
+                ["set", binding] => (true, *binding),
+                [binding] => (false, *binding),
+                _ => {
+                    return Err(invalid_input(
+                        "expected a binding ID; run merl help source compilation-policy",
+                    ));
+                }
+            };
+            if candidate_kind.is_some() {
+                return Err(invalid_input(
+                    "source-kind selectors are not supported by this binding-default command",
+                ));
+            }
+            binding_policy::execute(
+                binding,
+                set,
+                binding_policy::Options {
+                    database,
+                    project,
+                    id,
+                    actor,
+                    reason,
+                    expected: expected_policy_version,
+                    mode: capture_options.mode,
+                    coverage: capture_options.coverage,
+                },
+                *json_output,
+                clock()?,
+            )
+        }
         ["help", "source"] => help("source", *json_output),
         ["help", "source", "show"] => help("source show", *json_output),
         ["help", "source", "assertions"] => help("source assertions", *json_output),
@@ -2271,9 +2318,10 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         "source" => (
             "merl source <command>",
-            "Commands: show, compile, assertions, apply, require, replay, purge, purge-audit.",
+            "Commands: show, compilation-policy, compile, assertions, apply, require, replay, purge, purge-audit.",
             vec![
                 "source show",
+                "source compilation-policy",
                 "source compile",
                 "source assertions",
                 "source apply",

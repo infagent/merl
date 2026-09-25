@@ -13,8 +13,8 @@ use std::{fmt::Write as _, path::Path};
 pub(super) struct Options<'a> {
     repository: Option<&'a str>,
     github_program: Option<&'a str>,
-    mode: Option<&'a str>,
-    coverage: Option<&'a str>,
+    pub(super) mode: Option<&'a str>,
+    pub(super) coverage: Option<&'a str>,
 }
 
 impl<'a> Options<'a> {

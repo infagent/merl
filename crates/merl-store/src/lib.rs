@@ -1,6 +1,8 @@
 //! SQLite authority for accepted events and independently erasable payloads.
 
 mod authority;
+mod binding_policy;
+pub use binding_policy::{BindingPolicyState, binding_policy_object};
 mod candidates;
 mod compiler_relations;
 mod relation_evidence;
@@ -33,7 +35,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 28;
+const SCHEMA_VERSION: i64 = 29;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -44,6 +46,8 @@ pub enum StoreError {
     UnsupportedSchema(i64),
     /// The requested project does not exist.
     ProjectMissing,
+    /// No live capture policy exists for this project-source binding.
+    BindingMissing,
     /// A batch has no events or refers to an unavailable payload.
     InvalidBatch,
     /// The requested payload reference does not exist in this project.
@@ -79,6 +83,7 @@ impl fmt::Display for StoreError {
             Self::UnsupportedSchema(version) => {
                 write!(formatter, "unsupported SQLite schema version {version}")
             }
+            Self::BindingMissing => formatter.write_str("binding capture policy does not exist"),
             Self::ProjectMissing => formatter.write_str("project does not exist"),
             Self::InvalidBatch => formatter.write_str("batch has no events or invalid references"),
             Self::PayloadMissing => formatter.write_str("payload does not exist"),
@@ -473,7 +478,7 @@ pub struct SourceBinding {
     pub namespace_digest: [u8; 32],
 }
 
-/// Compilation timing and coverage chosen when a live binding is established.
+/// Compilation timing and coverage for new observations of a live binding.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BindingCapturePolicy {
     /// Timing for newly observed prose.
@@ -1020,6 +1025,11 @@ impl Store {
             }
             if version < 28 {
                 transaction.execute_batch(include_str!("../migrations/0028_temporal.sql"))?;
+            }
+            if version < 29 {
+                transaction.execute_batch(include_str!(
+                    "../migrations/0029_binding_policy_changes.sql"
+                ))?;
             }
             let broken: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
@@ -1915,7 +1925,7 @@ impl Store {
         }
         let mut statement = self.connection.prepare(
             "SELECT id,kind FROM objects WHERE project_id=?1
-             AND kind NOT IN ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review','relation_revalidation')
+             AND kind NOT IN ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','binding_compilation_policy','candidate_review','relation_revalidation')
              AND lifecycle!='superseded'",
         )?;
         let rows = statement.query_map(params![project.as_str()], |row| {
@@ -2034,7 +2044,7 @@ impl Store {
                 AND domain_event_batches.id = domain_events.batch_id
                WHERE domain_events.project_id = ?1 AND domain_event_batches.revision <= ?2
                  AND domain_events.object_kind NOT IN
-                   ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review','relation_revalidation')
+                   ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','binding_compilation_policy','candidate_review','relation_revalidation')
              ) SELECT object_id, payload_id, object_revision FROM history
                WHERE rank = 1 AND (NOT ?5 OR issue_scope_id IS NULL OR issue_scope_id=?4) ORDER BY CASE WHEN ?4 IS NOT NULL AND issue_scope_id=?4 THEN 0 ELSE 1 END, object_id LIMIT ?3",
         )?;
@@ -4470,7 +4480,7 @@ impl Store {
         let mut statement = self.connection.prepare(
             "SELECT id FROM objects WHERE project_id=?1 AND issue_scope_id=?2
                AND kind NOT IN
-                 ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','candidate_review','relation_revalidation')
+                 ('provider_issue','source_coverage_requirement','source_compilation_request','authority_grant','binding_compilation_policy','candidate_review','relation_revalidation')
                ORDER BY id",
         )?;
         let ids = statement
@@ -6015,6 +6025,17 @@ fn accept_administrative_object(
     scope: Option<&str>,
 ) -> Result<(), StoreError> {
     match kind.as_str() {
+        "binding_compilation_policy" => {
+            if scope.is_some() {
+                return Err(StoreError::InvalidBatch);
+            }
+            binding_policy::validate_target(
+                transaction,
+                project,
+                object,
+                payload.ok_or(StoreError::InvalidBatch)?,
+            )
+        }
         "authority_grant" => {
             let exists: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM authority_grant_targets WHERE project_id=?1 AND object_id=?2)",
@@ -6399,6 +6420,7 @@ fn read_capture_policy(
             params![project.as_str(), binding.as_str()],
             |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
         ).optional()?;
+    let row = binding_policy::accepted_policy(connection, project, binding)?.or(row);
     let Some((mode, coverage, version)) = row else {
         return Ok(None);
     };

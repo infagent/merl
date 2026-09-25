@@ -193,7 +193,29 @@ and records its initial compilation mode, coverage requirement, and
 `github_capture_v1` policy version. Refresh reuses that policy. The command supports
 all combinations of compilation mode and coverage requirement. Eager optional
 sources receive compiler work; a failed interpretation does not create a required
-coverage gap. Changing a binding policy requires a separate authorized action.
+coverage gap. An administrator changes the binding defaults through
+`source compilation-policy set`, supplying the version they inspected. Merl
+records the proposal as an administrative policy input and accepts a
+`binding_compilation_policy` control object through the revision, delta, and
+inbox stream. The object selects an immutable policy proposal; retaining a
+rejected proposal grants it no effect. Policy inspection exposes the selected
+version, actor, evaluation, accepted revision, and protected reason reference.
+
+A change applies to subsequent captures, including edited successors. Earlier
+source versions and compiler intents keep their recorded policy. Refresh uses
+each source version's mode when deciding whether to resume eager work; changing
+a cold binding to eager does not dispatch its unchanged historical sources.
+Coverage promotion and historical compilation still require explicit authorized
+`source require` and `source compile` actions.
+
+Each request ID fixes the binding, actor, expected version, replacement defaults,
+and reason. An identical retry returns the recorded outcome, even after another
+change or reason erasure. Reusing the ID with different content conflicts. Policy
+checks the caller's expected version and guards the binding object and grant
+collection again at commit. Concurrent changes to another binding do not share
+the binding guard. Binding policy objects and reasons stay out of semantic views
+and compiler contexts. Source-kind and actor-class selectors belong to the
+separate policy-selection work; this command currently manages binding defaults.
 
 A live capture records the latest exposed body of each entity at the current
 Merl observation position. The authority supplies observation time from its clock;
@@ -548,7 +570,7 @@ An identical request retry returns its recorded outcome after restart, erasure, 
 
 ### Durable semantic authority
 
-The local authority stores project-scoped `decision_author` and `command_actor` grants alongside its bootstrap administrators. Public application paths load the same grant snapshot when evaluating provider observations, source requirements, compiler-spend requests, and authority changes. `authority_v6` identifies the rules; a canonical digest records the effective actor sets used by each evaluation. The explicit-rule evaluator remains a controlled kernel seam for policy tests, while application entry points use durable grants.
+The local authority stores project-scoped `decision_author` and `command_actor` grants alongside its bootstrap administrators. Public application paths load the same grant snapshot when evaluating provider observations, source requirements, compiler-spend requests, and authority changes. `authority_v9` identifies the rules; a canonical digest records the effective actor sets used by each evaluation. The explicit-rule evaluator remains a controlled kernel seam for policy tests, while application entry points use durable grants.
 
 An administrator grants or revokes a semantic permission through an administrative policy input. The accepted batch records the actor, reason payload, policy evaluation, and project revision, then reaches the normal delta and inbox stream. Each actor/permission pair has an immutable structural target and a rebuildable `authority_grant` object. An active object grants the permission; an invalidated object records revocation. A target created for a rejected request grants nothing. Grant objects stay out of semantic views and compiler context.
 
