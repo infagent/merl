@@ -238,60 +238,68 @@ pub(super) fn help(
         "question" | "finding" => &["create", "resolve"],
         _ => &["create"],
     };
-    if let Some(op) = operation
-        && !operations.contains(&op)
-    {
+    if operation.is_some_and(|op| !operations.contains(&op)) {
         return Err(invalid_input("unknown semantic command"));
     }
-    let name = format!(
-        "{group}{}",
-        operation.map_or(String::new(), |o| format!(" {o}"))
-    );
-    let mut arguments = vec!["--project ID --database PATH --actor ID --id REQUEST"];
-    let example = match operation {
-        Some("create" | "request") => {
-            arguments.push("--subject OBJECT --summary TEXT [--issue SCOPE]");
-            "--subject X1 --summary 'Recorded project state'"
-        }
-        Some("resolve") => {
-            arguments.push("OBJECT --summary ANSWER");
-            "Q1 --summary 'Use fixed gain'"
-        }
-        Some("defer") => {
-            arguments.push("OBJECT --reason TEXT --review-at YYYY-MM-DD");
-            "T1 --reason 'Migration has priority' --review-at 2026-10-01"
-        }
-        Some(_) => {
-            arguments.push("OBJECT");
-            "T1"
-        }
-        None => "--subject X1 --summary 'Recorded project state'",
+    let name = operation.map_or_else(|| group.to_owned(), |op| format!("{group} {op}"));
+    let Some(operation) = operation else {
+        return crate::help::render(
+            &name,
+            &format!("merl {group} <{}>", operations.join("|")),
+            "Submit semantic state through durable command authority.",
+            None,
+            &["project authority", "show", "source show"],
+            json_output,
+        );
     };
-    arguments.extend([
-        "--note TEXT or --note-file PATH (optional, at most 8192 UTF-8 bytes)",
-        "--dry-run --json",
-    ]);
-    let example = format!(
-        "merl {group} {} {example} --project P1 --database merl.db --actor alice --id request1",
-        operation.unwrap_or(operations[0])
+    let (arguments, example) = match operation {
+        "create" | "request" => (
+            "--subject <object> --summary <text> [--issue <scope>]",
+            "--subject X1 --summary 'Recorded project state'",
+        ),
+        "resolve" => (
+            "<object> --summary <answer>",
+            "Q1 --summary 'Use fixed gain'",
+        ),
+        "defer" => (
+            "<object> --reason <text> --review-at <YYYY-MM-DD>",
+            "T1 --reason 'Migration has priority' --review-at 2026-10-01",
+        ),
+        _ => ("<object>", "T1"),
+    };
+    let summary = match (group, operation) {
+        ("decision", _) => "Record a decision under command_actor authority.",
+        ("question", "create") => "Record an open question under command_actor authority.",
+        ("question", _) => "Resolve an existing question with its answer.",
+        ("finding", "create") => "Record an open finding under command_actor authority.",
+        ("finding", _) => "Resolve an existing finding with its resolution.",
+        ("hypothesis", _) => "Record a hypothesis under command_actor authority.",
+        ("claim", _) => "Record a claim under command_actor authority.",
+        ("task", "request") => "Request a task without accepting or starting it.",
+        ("task", "accept") => "Accept responsibility for an existing task without starting it.",
+        ("task", "defer") => {
+            "Defer a task that has not started, with a reason and review date; preserve its commitment and execution state."
+        }
+        ("task", "start") => "Start execution of an accepted, eligible task.",
+        _ => "Complete execution of a started task.",
+    };
+    let summary = format!(
+        "{summary} Reuse --id for identical retries. --dry-run previews policy without committing. Optional --note or --note-file adds at most 8192 UTF-8 bytes of supplemental evidence."
     );
-    let trust = crate::security::ACTOR_CLAIM;
-    let value = json!({"trust_boundary":trust,"schema":"merl.help/v1","command":name,"summary":"Submit semantic state through durable command authority.","commands":if operation.is_none(){operations}else{&[]},"arguments":arguments,"outcomes":["accepted","rejected","conflict"],"errors":["INVALID_INPUT","POLICY_ERROR","POLICY_INPUT_CONFLICT"],"examples":[example],"related":["project authority","show","source show"]});
-    if json_output {
-        Ok(format!("{value}\n"))
-    } else {
-        Ok(format!(
-            "{name}: submit semantic state through command authority\n{trust}\nOperations: {}\n{}\nOutcomes: accepted, rejected, conflict. Errors: INVALID_INPUT, POLICY_INPUT_CONFLICT.\nExample: {example}\nRelated: project authority, show, source show\n",
-            operations.join(", "),
-            value["arguments"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join("\n")
-        ))
-    }
+    let usage = format!(
+        "merl {name} {arguments} --project <id> --database <path> --actor <id> --id <request> [--note <text> | --note-file <path>] [--dry-run] [--format human|json] [--json]"
+    );
+    let example = format!(
+        "merl {name} {example} --project P1 --database project.sqlite --actor alice --id request1"
+    );
+    crate::help::render(
+        &name,
+        &usage,
+        &summary,
+        Some(&example),
+        &["project authority", "show", "source show", "project view"],
+        json_output,
+    )
 }
 
 // At most eight notes expand here: 8 × 8 KiB caps new historical prose at

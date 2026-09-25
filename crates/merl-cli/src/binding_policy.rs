@@ -180,27 +180,34 @@ pub(super) fn help(set: bool, json_output: bool) -> Result<String, CliError> {
     let (command, usage, summary) = if set {
         (
             "source compilation-policy set",
-            "merl source compilation-policy set <binding> --project <id> --database <path> --id <request> --actor <administrator> --expected-version <version> [--mode <capture_only|on_demand|eager> --coverage <optional|required>] --reason <text> [--kind <issue|issue_comment>] [--actor-class <human|bot|routine_agent|unknown>] [--override] [--remove] [--provider-actor <provider-id>] [--json]",
+            "merl source compilation-policy set <binding> --project <id> --database <path> --id <request> --actor <administrator> --expected-version <version> [--mode <capture_only|on_demand|eager> --coverage <optional|required>] --reason <text> [--kind <issue|issue_comment>] [--actor-class <human|bot|routine_agent|unknown>] [--override] [--remove] [--provider-actor <provider-id>] [--format human|json] [--json]",
             "Set defaults or an exact selector with --mode and --coverage; --override takes precedence over selectors. --provider-actor with --actor-class classifies a stable provider account without mode or coverage. --remove restores fallback for a selector, override, or account mapping. Earlier captures keep their policy; use source require or source compile for historical work.",
         )
     } else {
         (
             "source compilation-policy",
-            "merl source compilation-policy <binding> --project <id> --database <path> [--version <source-version>] [--json]",
+            "merl source compilation-policy <binding> --project <id> --database <path> [--version <source-version>] [--format human|json] [--json]",
             "Inspect defaults, selectors, account mappings, and accepted provenance. --version explains an immutable capture. Precedence: project override, kind and class, kind, class, defaults. Unknown authors use the unknown class.",
         )
     };
-    let trust = set.then_some(crate::security::ACTOR_CLAIM);
-    if json_output {
-        render_json(
-            &json!({"trust_boundary":trust,"schema":"merl.help/v1","command":command,"usage":usage,"summary":summary,"related":["source compilation-policy set","issue capture","source require","source compile"],"outcomes":["accepted","rejected","conflict"],"errors":["INVALID_INPUT","BINDING_NOT_FOUND","POLICY_INPUT_CONFLICT","POLICY_CONFLICT","STORAGE_ERROR"]}),
-        )
+    let example = if set {
+        "merl source compilation-policy set B1 --project P1 --database project.sqlite --id policy-1 --actor owner --expected-version github_capture_v1 --mode on_demand --coverage required --reason 'Compile after review' --json"
     } else {
-        Ok(format!(
-            "{usage}\n\n{summary}\n{}\n",
-            trust.unwrap_or_default()
-        ))
-    }
+        "merl source compilation-policy B1 --project P1 --database project.sqlite --json"
+    };
+    crate::help::render(
+        command,
+        usage,
+        summary,
+        Some(example),
+        &[
+            "source compilation-policy set",
+            "issue capture",
+            "source require",
+            "source compile",
+        ],
+        json_output,
+    )
 }
 
 fn inspect(

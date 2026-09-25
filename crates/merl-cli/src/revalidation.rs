@@ -279,33 +279,47 @@ pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String,
         ),
         Some("list") => (
             "project revalidation list",
-            "merl project revalidation list --project <id> --database <path> [--after <impact>] [--json]",
+            "merl project revalidation list --project <id> --database <path> [--after <impact>] [--format human|json] [--json]",
             "List up to 100 pending impacts, with the affected object or relation, support event, and compiler run.",
         ),
         Some("run") => (
             "project revalidation run",
-            "merl project revalidation run --project <id> --database <path> --id <impact> --actor <id> [--run <new-attempt>] --program <path> --compiler-version <version> --model <id> --prompt-digest sha256:<hex> [--compiler-arg <arg>] [--json]",
+            "merl project revalidation run --project <id> --database <path> --id <impact> --actor <id> [--run <new-attempt>] --program <path> --compiler-version <version> --model <id> --prompt-digest sha256:<hex> [--compiler-arg <arg>] [--format human|json] [--json]",
             "Record hindsight work with the affected run's limits and latest versions of its recorded sources. Retry resumes saved input; a new run ID starts another attempt. Requires command_actor.",
         ),
         Some("resolve") => (
             "project revalidation resolve",
-            "merl project revalidation resolve --project <id> --database <path> --id <request> --impact <id> --actor <id> --action <confirm|weaken|supersede|invalidate|unavailable|withdraw> [--run <id>] [--assertion-index <n>] [--json]",
+            "merl project revalidation resolve --project <id> --database <path> --id <request> --impact <id> --actor <id> --action <confirm|weaken|supersede|invalidate|unavailable|withdraw> [--run <id>] [--assertion-index <n>] [--format human|json] [--json]",
             "Review under current command authority. Confirm and supersede require a completed run and assertion index; weaken and invalidate require a completed run. Unavailable requires erased or bodyless evidence and takes no run. Withdraw closes stale relation support and takes no run. A fresh accepted relation with the same triple also closes its stale work. Exact retries return the recorded result.",
         ),
         _ => return Err(invalid_input("unknown revalidation help topic")),
     };
-    let trust = usage
-        .contains("--actor ")
-        .then_some(crate::security::ACTOR_CLAIM);
-    if json_output {
-        Ok(format!(
-            "{}\n",
-            json!({"trust_boundary":trust,"schema":"merl.help/v1","command":command,"usage":usage,"summary":summary,"related":["compilation show","compilation expand","source assertions","show"],"errors":["INVALID_INPUT","COMPILER_UNAUTHORIZED","REVALIDATION_RUN_INELIGIBLE","POLICY_INPUT_CONFLICT","MISSING_EVIDENCE"]})
-        ))
-    } else {
-        Ok(format!(
-            "{usage}\n{summary}\n{}\n",
-            trust.unwrap_or_default()
-        ))
-    }
+    let example = match operation {
+        Some("list") => {
+            Some("merl project revalidation list --project P1 --database project.sqlite --json")
+        }
+        Some("run") => Some(
+            "merl project revalidation run --project P1 --database project.sqlite --id impact-1 --actor reviewer --program ./compiler --compiler-version v1 --model local --prompt-digest sha256:0000000000000000000000000000000000000000000000000000000000000000 --json",
+        ),
+        Some("resolve") => Some(
+            "merl project revalidation resolve --project P1 --database project.sqlite --id review-1 --impact impact-1 --actor reviewer --action confirm --run CR42 --assertion-index 0 --json",
+        ),
+        _ => None,
+    };
+    crate::help::render(
+        command,
+        usage,
+        summary,
+        example,
+        &[
+            "project revalidation list",
+            "project revalidation run",
+            "project revalidation resolve",
+            "compilation show",
+            "compilation expand",
+            "source assertions",
+            "show",
+        ],
+        json_output,
+    )
 }
