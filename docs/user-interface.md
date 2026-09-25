@@ -558,6 +558,11 @@ basis. Merl retains the reason behind a source payload reference. These fields
 survive restart and rebuild; they do not schedule execution or claim that the
 provider event has occurred.
 
+Human task views show a requester's `needed_by` constraint as `Needed by`, beside
+the owner's review date and start condition. The value states the requester's
+need, not a delivery commitment. Task JSON includes `needed_by` when present;
+the generic `temporal` array retains its source span and normalization basis.
+
 Missing author time or local-offset evidence produces an unresolved temporal
 value in `source assertions`. `source apply` keeps that assertion as a candidate
 with reason `temporal_unresolved`; `candidate accept` rejects it unchanged.

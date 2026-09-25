@@ -51,6 +51,51 @@ impl TemporalScenario {
         }
     }
 
+    pub fn given_a_deferred_task_with_a_requester_deadline() -> Self {
+        let mut case = Self::given_a_deferred_task_waiting_for_a_pull_request();
+        case.replacement_temporal = Some(json!([
+            {"role":"needed_by","span_start":11,"span_end":19,"expression":{"kind":"relative_date","days":1}},
+            {"role":"review_at","span_start":11,"span_end":19,"expression":{"kind":"relative_date","days":1}},
+            {"role":"start_after","span_start":20,"span_end":39,"expression":{"kind":"after_event","predicate":{"kind":"provider_merged","subject":"github:example/parser/pull/229"}}}
+        ]));
+        case
+    }
+
+    pub fn when_human_task_views_are_read(mut self) -> Self {
+        for command in [vec!["show", "D1"], vec!["project", "view"]] {
+            let mut args: Vec<String> = command.into_iter().map(str::to_owned).collect();
+            args.extend([
+                "--project".into(),
+                "P1".into(),
+                "--database".into(),
+                self.scenario.database.0.to_str().unwrap().into(),
+            ]);
+            let merl_cli::CliResponse::Success(output) =
+                merl_cli::run_with_clock(&args, &|| Ok(NOW))
+            else {
+                panic!("human task view succeeds");
+            };
+            self.scenario.outputs.push(json!(output));
+        }
+        self
+    }
+
+    pub fn then_the_requester_deadline_appears_beside_owner_planning(self) {
+        assert!(self.result.unwrap().is_ok());
+        assert_eq!(self.scenario.outputs[0]["outcome"], "accepted");
+        for output in &self.scenario.outputs[1..] {
+            let text = output.as_str().unwrap();
+            assert!(text.contains("Needed by: 2023-11-16"), "{text}");
+            assert_eq!(text.matches("Needed by:").count(), 1);
+            assert_eq!(text.matches("Review: 2023-11-16").count(), 1);
+            assert_eq!(
+                text.matches("Start after: github:example/parser/pull/229 merges")
+                    .count(),
+                1
+            );
+        }
+    }
+
     pub fn when_the_source_is_compiled(mut self) -> Self {
         let mut store = self.scenario.store();
         let prepared = prepare_eager_compilation(

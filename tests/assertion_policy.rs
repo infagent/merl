@@ -243,3 +243,12 @@ fn relation_health_upgrade_respects_the_compilers_recorded_source_window() {
     .when_relation_health_is_migrated_from_accepted_history()
     .then_only_the_derivation_before_the_edit_needs_review();
 }
+
+#[test]
+fn task_views_show_requester_needed_by_constraints() {
+    assertion_policy::TemporalScenario::given_a_deferred_task_with_a_requester_deadline()
+        .when_the_source_is_compiled()
+        .when_the_task_is_reviewed_rebuilt_and_replayed()
+        .when_human_task_views_are_read()
+        .then_the_requester_deadline_appears_beside_owner_planning();
+}
