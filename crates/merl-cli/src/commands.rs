@@ -96,9 +96,15 @@ pub(super) fn task_value(
                 .ok_or(merl_store::StoreError::CorruptHistory)?
         );
     }
-    Ok(
-        json!({"commitment":task.commitment.as_str(),"scheduling":task.scheduling.as_str(),"execution":task.execution.as_str(),"reason_ref":task.reason.as_ref().map(merl_core::PayloadId::as_str),"reason":reason,"review_at":task.review_at,"review_when":task.review_when,"start_after":task.start_after}),
-    )
+    let mut value = json!({"commitment":task.commitment.as_str(),"scheduling":task.scheduling.as_str(),"execution":task.execution.as_str(),"reason_ref":task.reason.as_ref().map(merl_core::PayloadId::as_str),"reason":reason,"review_at":task.review_at,"review_when":task.review_when,"start_after":task.start_after});
+    if let Some(needed_by) = task
+        .temporal
+        .iter()
+        .find(|temporal| temporal.original.role == merl_core::temporal::TemporalRole::NeededBy)
+    {
+        value["needed_by"] = json!(needed_by.value);
+    }
+    Ok(value)
 }
 pub(super) fn task_lines(task: &Value) -> String {
     if task.is_null() {
@@ -116,6 +122,14 @@ pub(super) fn task_lines(task: &Value) -> String {
             .as_str()
             .map_or(String::new(), |text| format!("Reason: {text}\n"))
     );
+    if !task["needed_by"].is_null() {
+        writeln!(
+            output,
+            "Needed by: {}",
+            temporal_value_text(&task["needed_by"])
+        )
+        .expect("String write");
+    }
     for (field, label) in [
         ("review_when", "Review after"),
         ("start_after", "Start after"),
@@ -136,19 +150,24 @@ fn predicate_text(value: &Value) -> String {
     format!("{} {state}", value["subject"].as_str().unwrap_or("unknown"))
 }
 
+// Task constraints and generic temporal evidence use the same wording for dates
+// and unevaluated predicates; neither renderer turns a need into a commitment.
+fn temporal_value_text(value: &Value) -> String {
+    match value["kind"].as_str() {
+        Some("date") => value["date"].as_str().unwrap_or("unknown").to_owned(),
+        Some("predicate") => format!("after {}", predicate_text(&value["predicate"])),
+        _ => format!(
+            "unresolved ({})",
+            value["reason"].as_str().unwrap_or("unknown")
+        ),
+    }
+}
+
 pub(super) fn temporal_lines(values: &Value) -> String {
     let mut output = String::new();
     if let Some(values) = values.as_array() {
         for temporal in values {
-            let value = &temporal["value"];
-            let text = match value["kind"].as_str() {
-                Some("date") => value["date"].as_str().unwrap_or("unknown").to_owned(),
-                Some("predicate") => format!("after {}", predicate_text(&value["predicate"])),
-                _ => format!(
-                    "unresolved ({})",
-                    value["reason"].as_str().unwrap_or("unknown")
-                ),
-            };
+            let text = temporal_value_text(&temporal["value"]);
             writeln!(
                 output,
                 "{}: {text}",
