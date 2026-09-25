@@ -609,3 +609,7 @@ impl Drop for Capture {
         fs::remove_dir_all(&self.directory).unwrap();
     }
 }
+
+#[path = "issue_capture_cli/selectors.rs"]
+mod selectors;
+pub use selectors::SelectorCases;

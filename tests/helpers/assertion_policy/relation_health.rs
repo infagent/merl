@@ -280,6 +280,7 @@ fn remove_relation_health_schema(database: &super::Database) {
         .execute_batch(
             "DROP VIEW current_relations;
         DROP VIEW relation_support_availability;
+        DROP TABLE source_policy_selections;
         DROP TABLE binding_policy_changes;
         DROP TABLE relation_evidence_resolutions;
         DROP TABLE relation_withdrawals;

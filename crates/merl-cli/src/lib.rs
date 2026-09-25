@@ -241,6 +241,7 @@ fn execute(
     let mut permission = None;
     let mut confirm_digest = None;
     let mut expected_policy_version = None;
+    let mut policy_options = binding_policy::Options::default();
     let mut dry_run = false;
     let mut run_id = None;
     let mut new_run = None;
@@ -276,6 +277,18 @@ fn execute(
                     _ => command_options.review_at = Some(value),
                 }
             }
+            "--actor-class" | "--provider-actor" => {
+                let option = arguments[index].as_str();
+                index += 1;
+                let value = Some(arguments.get(index).ok_or_else(missing_value)?.as_str());
+                if option == "--actor-class" {
+                    policy_options.actor_class = value;
+                } else {
+                    policy_options.provider_actor = value;
+                }
+            }
+            "--override" => policy_options.project_override = true,
+            "--remove" => policy_options.remove = true,
             "--expected-version" => {
                 index += 1;
                 expected_policy_version =
@@ -594,11 +607,6 @@ fn execute(
                     ));
                 }
             };
-            if candidate_kind.is_some() {
-                return Err(invalid_input(
-                    "source-kind selectors are not supported by this binding-default command",
-                ));
-            }
             binding_policy::execute(
                 binding,
                 set,
@@ -611,6 +619,9 @@ fn execute(
                     expected: expected_policy_version,
                     mode: capture_options.mode,
                     coverage: capture_options.coverage,
+                    kind: candidate_kind,
+                    source_version: version,
+                    ..policy_options
                 },
                 *json_output,
                 clock()?,
@@ -1587,6 +1598,8 @@ fn render_source(
             "schema": "merl.source/v1", "project": project.as_str(), "version": version.as_str(),
             "source": source.source.as_str(), "kind": source.kind.as_str(),
             "observation": source.sequence,
+            "policy": {"mode":source.compilation_mode.as_str(),"coverage":source.coverage_requirement.as_str(),"version":source.policy_version.as_str()},
+            "policy_selection":store.source_policy_selection(project, version)?,
             "source_author": source.source_author.as_ref().map(merl_core::ActorId::as_str),
             "version_actor": source.version_actor.as_ref().map(merl_core::ActorId::as_str),
             "supersedes": source.supersedes.as_ref().map(SourceVersionId::as_str), "body": body

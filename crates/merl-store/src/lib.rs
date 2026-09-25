@@ -35,7 +35,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 29;
+const SCHEMA_VERSION: i64 = 30;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -1030,6 +1030,10 @@ impl Store {
                 transaction.execute_batch(include_str!(
                     "../migrations/0029_binding_policy_changes.sql"
                 ))?;
+            }
+            if version < 30 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0030_compilation_selectors.sql"))?;
             }
             let broken: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",

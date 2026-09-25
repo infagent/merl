@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+serde_json.workspace = true
 merl-core = { path = "../merl-core" }
 merl-store = { path = "../merl-store" }
 sha2.workspace = true

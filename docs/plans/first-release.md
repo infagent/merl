@@ -116,6 +116,7 @@ The release is ready when:
 - conventional commits update a Release Please pull request, while tags and GitHub releases are created only after that pull request merges with required checks passing;
 - repeated ingestion creates no duplicate source records or accepted effects;
 - source capture records the effective compilation mode, coverage requirement, and policy version without placing payload text in an agent view;
+- administrators can select Issue policy by source kind and trusted author class, inspect the winning selector, and manage binding-scoped overrides and account classifications; the [policy evidence record](compilation-policy-evidence.md) maps these obligations to public scenarios for #52;
 - administrators can inspect and change binding defaults through the public CLI; version guards reject competing changes, retries preserve their outcomes, and accepted changes reach delta and inbox without rewriting earlier captures or dispatching historical work;
 - structured commands and deterministic provider observations reach policy without a prose compiler;
 - one compilation run is reused across role views and repeated visits while its source and context remain applicable;

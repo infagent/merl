@@ -22,7 +22,7 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
       labels(first: 100) { nodes { id name } pageInfo { hasNextPage } }
       assignees(first: 100) { nodes { id login } pageInfo { hasNextPage } }
       milestone { title }
-      author { login ... on Node { id } }
+      author { __typename login ... on Node { id } }
       userContentEdits(first: 100) {
         nodes { id editedAt editor { login ... on Node { id } } diff deletedAt }
         pageInfo { hasNextPage }
@@ -30,7 +30,7 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
       comments(first: 100, after: $endCursor) {
         nodes {
           id body createdAt updatedAt lastEditedAt includesCreatedEdit
-          author { login ... on Node { id } }
+          author { __typename login ... on Node { id } }
           userContentEdits(first: 100) {
             nodes { id editedAt editor { login ... on Node { id } } diff deletedAt }
             pageInfo { hasNextPage }
@@ -484,6 +484,8 @@ struct GraphqlComment {
 }
 #[derive(Debug, Deserialize)]
 struct GraphqlActor {
+    #[serde(rename = "__typename")]
+    provider_type: Option<String>,
     id: Option<String>,
     login: String,
 }
@@ -491,6 +493,7 @@ impl From<&GraphqlActor> for ActorRef {
     fn from(actor: &GraphqlActor) -> Self {
         Self {
             provider_id: actor.id.clone(),
+            provider_type: actor.provider_type.clone(),
             login: actor.login.clone(),
         }
     }

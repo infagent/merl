@@ -214,8 +214,9 @@ change or reason erasure. Reusing the ID with different content conflicts. Polic
 checks the caller's expected version and guards the binding object and grant
 collection again at commit. Concurrent changes to another binding do not share
 the binding guard. Binding policy objects and reasons stay out of semantic views
-and compiler contexts. Source-kind and actor-class selectors belong to the
-separate policy-selection work; this command currently manages binding defaults.
+and compiler contexts. Each accepted version also retains its selector rules,
+provider-account classifications, and binding-scoped project override. Rebuild
+selects that snapshot through the accepted control object.
 
 A live capture records the latest exposed body of each entity at the current
 Merl observation position. The authority supplies observation time from its clock;
@@ -288,6 +289,41 @@ Structured commands bypass compilation because they already carry typed semantic
 The compiler API keeps these purposes separate. On-demand preparation checks the accepted request against the project, source version, run, compiler and version, executable configuration, model, prompt digest, and every work limit before it records work. Eager preparation accepts only sources captured as `eager`. Replay, evaluation, and hindsight use separate entry points. Fixture setup must use one of those real policies; the production API has no bootstrap bypass.
 
 Coverage requirements and compile requests advance accepted revision and appear in deltas, but they are control state. Role views and compiler context selectors exclude these administrative objects and their protected reasons from ordinary semantic context.
+
+For the Issue workflow, administrators select `issue` or `issue_comment` and an
+author class of `human`, `bot`, `routine_agent`, or `unknown`. GitHub's author
+`__typename` supplies `human` for `User` and `bot` for `Bot`. Missing authors,
+missing types, and other types resolve to `unknown`. An administrator may map a
+stable provider author ID to a class within one project-source binding; that
+mapping takes precedence over the provider type. The version's editor, display
+login, prose, and sender hints do not classify its author. Classification grants
+no semantic authority.
+
+Resolution chooses both policy fields from the first matching level:
+
+1. The project's explicit override for this binding.
+2. A rule matching both source kind and actor class.
+3. A source-kind rule.
+4. An actor-class rule.
+5. Binding defaults.
+
+Administrators replace an exact selector or remove it to restore fallback.
+Insertion order cannot break a tie, and the CLI rejects requests that combine an
+override or account classification with selector dimensions. Two kinds and four
+classes bound the rule space to fourteen selectors. A binding admits at most 128
+account mappings to bound configuration size and capture work in this release.
+Rules apply to Issue prose; observed deletions retain `capture_only` and use
+binding-default coverage under the deterministic deletion path.
+
+The source transaction resolves the accepted snapshot under the writer lock and
+records the effective mode, coverage, policy version, author class, classification
+origin, and winning selector. Inspection can explain that choice without reading
+the body. Existing captures, including retries after a policy or account-class
+change, retain their first selection. Captures from older stores and offline
+imports have no selector explanation; Merl reports that absence instead of
+reconstructing one from current rules. Initial capture flags can establish a
+binding's defaults, but flags on later captures cannot change them or override
+accepted selectors.
 
 Sensible defaults keep human project surfaces current without compiling routine agent traffic. Human-authored Issue comments are normally `eager` and `required`. Direct agent notes, long reports, research notes, and legacy mailbox imports normally use `capture_only` or `on_demand` with `optional` coverage. Structured provider observations are processed deterministically and remain required. Projects can change those defaults at the binding level.
 

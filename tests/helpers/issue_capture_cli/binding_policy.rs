@@ -257,6 +257,7 @@ impl PolicyCases {
                 mode: CompilationMode::Eager,
                 coverage: CoverageRequirement::Optional,
                 reason: "Prepared change".into(),
+                edit: merl_core::compilation_policy::PolicyEdit::Defaults,
             };
             let prepared = prepare_binding_policy_change(&mut store, &project, &change, 1).unwrap();
             if competitor == "authority" {

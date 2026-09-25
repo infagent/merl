@@ -1,5 +1,6 @@
-//! Administrator changes to future capture defaults, with version and grant guards.
+//! Administrator changes to capture policy, guarded by binding version and grants.
 
+use merl_core::compilation_policy::{PolicyEdit, PolicyValues};
 use merl_core::{
     ActorId, BatchId, CapturePolicyVersion, CompilationMode, CoverageRequirement, DomainEvent,
     EventId, ObjectKind, ObjectLifecycle, PayloadId, PolicyDisposition, PolicyEvaluationId,
@@ -10,7 +11,7 @@ use merl_store::{BindingCapturePolicy, RecordedPolicyEvaluation, Store, StoreErr
 use crate::authority::digest_parts;
 use crate::{PolicyError, PreparedPolicy, Proposal, evaluate_current, recorded_outcome};
 
-/// One administrative request to replace a binding's default policy.
+/// One administrative edit to a binding's defaults, selectors, or author mappings.
 #[derive(Clone, Debug)]
 pub struct BindingPolicyChange {
     /// Retry identity; changing any request field under this ID conflicts.
@@ -27,9 +28,11 @@ pub struct BindingPolicyChange {
     pub coverage: CoverageRequirement,
     /// Audit explanation retained behind an erasable payload reference.
     pub reason: String,
+    /// Exact selector, classification, override, or default edit.
+    pub edit: PolicyEdit,
 }
 
-/// Applies a binding default change or returns its original recorded result.
+/// Applies a binding policy edit or returns its original recorded result.
 ///
 /// This action creates no compiler work and changes no earlier source versions.
 /// An identical retry keeps its outcome after later policy changes or reason erasure.
@@ -59,7 +62,7 @@ pub fn change_binding_policy(
         .ok_or(StoreError::CorruptHistory.into())
 }
 
-/// Prepares a policy change while leaving accepted defaults untouched.
+/// Prepares a policy change while leaving accepted configuration untouched.
 ///
 /// Commit checks the binding object and grant collection again. A change to another
 /// binding does not invalidate this request. Call [`change_binding_policy`] for retries.
@@ -74,7 +77,21 @@ pub fn prepare_binding_policy_change(
 ) -> Result<PreparedPolicy, PolicyError> {
     let current = store.binding_policy(project, &change.binding)?;
     let expected_revision = current.change.map(|object| object.revision);
-    let (evaluation, batch, proposal, policy) = proposal(project, change)?;
+    let (evaluation, batch, proposal, mut policy) = proposal(project, change)?;
+    let mut selectors = current.selectors;
+    selectors
+        .apply(
+            &change.edit,
+            PolicyValues {
+                mode: change.mode,
+                coverage: change.coverage,
+            },
+        )
+        .map_err(|_| PolicyError::InvalidProposal)?;
+    if change.edit != PolicyEdit::Defaults {
+        policy.mode = current.policy.mode;
+        policy.coverage = current.policy.coverage;
+    }
     let DomainEvent::PutObject {
         payload: Some(reason),
         ..
@@ -89,6 +106,7 @@ pub fn prepare_binding_policy_change(
         &policy,
         &change.expected_version,
         reason,
+        &selectors,
     )?;
     let mut prepared = evaluate_current(
         store,
@@ -137,14 +155,20 @@ fn proposal(
         return Err(PolicyError::InvalidProposal);
     }
     let identity = digest_parts(&[project.as_str(), change.id.as_str()]);
-    let content = digest_parts(&[
+    let edit = serde_json::to_string(&change.edit).map_err(|_| PolicyError::InvalidProposal)?;
+    let mut content_parts = vec![
         &identity,
         change.binding.as_str(),
         change.expected_version.as_str(),
         change.mode.as_str(),
         change.coverage.as_str(),
         &change.reason,
-    ]);
+    ];
+    // Keep pre-selector default requests byte-compatible with their recorded receipts.
+    if change.edit != PolicyEdit::Defaults {
+        content_parts.push(&edit);
+    }
+    let content = digest_parts(&content_parts);
     let policy = BindingCapturePolicy {
         mode: change.mode,
         coverage: change.coverage,

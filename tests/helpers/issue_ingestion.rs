@@ -115,6 +115,7 @@ impl IssueHistory {
         let mut fixture = report_format_issue();
         let edit = fixture.observations[1].edit.as_mut().expect("staged edit");
         edit.editor = Some(merl_corpus::fixture::ActorRef {
+            provider_type: None,
             provider_id: Some("controlled:editor".to_owned()),
             login: "editor".to_owned(),
         });
