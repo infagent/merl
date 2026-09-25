@@ -8,6 +8,7 @@ mod capture;
 mod commands;
 mod compilations;
 mod revalidation;
+mod security;
 
 use std::{
     collections::BTreeSet, error::Error, fmt, fmt::Write as _, fs::File, io::Read, path::Path,
@@ -446,6 +447,11 @@ fn execute(
     }
 
     match positional.as_slice() {
+        ["security", "explain"] => security::explain(*json_output),
+        ["help", "security"] | ["security", "help"] => help("security", *json_output),
+        ["help", "security", "explain"] | ["security", "explain", "help"] => {
+            help("security explain", *json_output)
+        }
         ["help", group] | [group, "help"] if commands::is_group(group) => {
             commands::help(group, None, *json_output)
         }
@@ -2228,7 +2234,7 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
     let (usage, summary, related) = match command {
         "" => (
             "merl <group> <command>",
-            "Groups: project, issue, source, compilation, candidate, decision, question, finding, hypothesis, claim, task, inbox, show. Run `merl help <group>` for commands.",
+            "Groups: project, issue, source, compilation, candidate, decision, question, finding, hypothesis, claim, task, inbox, show, security. Run `merl help <group>` for commands.",
             vec![
                 "project",
                 "issue",
@@ -2243,7 +2249,18 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
                 "task",
                 "inbox",
                 "show",
+                "security",
             ],
+        ),
+        "security" => (
+            "merl security <command>",
+            "Commands: explain. Read the local trust boundary with `merl help security explain`.",
+            vec!["security explain"],
+        ),
+        "security explain" => (
+            "merl security explain [--format human|json] [--json]",
+            "Explain the local trust boundary, exposed files, Merl checks, and operator isolation options. Requires no project or database. Reports host controls as uninspected. Outcome: explained. Invalid arguments return INVALID_INPUT.",
+            vec!["security", "project authority"],
         ),
         "project" => (
             "merl project <command>",
@@ -2396,7 +2413,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         ),
         _ => return Err(invalid_input("unknown help topic")),
     };
+    let trust = usage.contains("--actor ").then_some(security::ACTOR_CLAIM);
     let example = match command {
+        "security explain" => Some("merl security explain --json"),
         "project init" => Some("merl project init --id P1 --database project.sqlite"),
         "project revision" => {
             Some("merl project revision --project P1 --database project.sqlite --json")
@@ -2461,7 +2480,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         _ => None,
     };
     if json_output {
-        let errors = if command == "issue capture" {
+        let errors = if command.starts_with("security") {
+            vec!["INVALID_INPUT"]
+        } else if command == "issue capture" {
             vec![
                 "INVALID_INPUT",
                 "PROJECT_NOT_FOUND",
@@ -2554,7 +2575,7 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
                 "STORAGE_ERROR",
             ]
         };
-        render_json(&json!({
+        let mut result = json!({
             "schema": "merl.help/v1",
             "command": command,
             "usage": usage,
@@ -2562,9 +2583,19 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             "related": related,
             "errors": errors,
             "example": example
-        }))
+        });
+        if command == "security explain" {
+            result["outcomes"] = json!(["explained"]);
+        }
+        if let Some(trust) = trust {
+            result["trust_boundary"] = json!(trust);
+        }
+        render_json(&result)
     } else {
         let mut output = format!("{usage}\n{summary}\n");
+        if let Some(trust) = trust {
+            writeln!(output, "{trust}").expect("String write");
+        }
         if let Some(example) = example {
             writeln!(output, "Example: {example}").expect("String write");
         }

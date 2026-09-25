@@ -134,7 +134,7 @@ pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String,
         ),
         _ => return Err(invalid_input("unknown authority command")),
     };
-    let trust = "In local mode --actor is a trusted client claim. Same-user filesystem access bypasses Merl policy.";
+    let trust = crate::security::ACTOR_CLAIM;
     if json_output {
         render_json(
             &json!({"schema": "merl.help/v1", "command": command, "usage": usage,

@@ -294,12 +294,18 @@ pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String,
         ),
         _ => return Err(invalid_input("unknown revalidation help topic")),
     };
+    let trust = usage
+        .contains("--actor ")
+        .then_some(crate::security::ACTOR_CLAIM);
     if json_output {
         Ok(format!(
             "{}\n",
-            json!({"schema":"merl.help/v1","command":command,"usage":usage,"summary":summary,"related":["compilation show","compilation expand","source assertions","show"],"errors":["INVALID_INPUT","COMPILER_UNAUTHORIZED","REVALIDATION_RUN_INELIGIBLE","POLICY_INPUT_CONFLICT","MISSING_EVIDENCE"]})
+            json!({"trust_boundary":trust,"schema":"merl.help/v1","command":command,"usage":usage,"summary":summary,"related":["compilation show","compilation expand","source assertions","show"],"errors":["INVALID_INPUT","COMPILER_UNAUTHORIZED","REVALIDATION_RUN_INELIGIBLE","POLICY_INPUT_CONFLICT","MISSING_EVIDENCE"]})
         ))
     } else {
-        Ok(format!("{usage}\n{summary}\n"))
+        Ok(format!(
+            "{usage}\n{summary}\n{}\n",
+            trust.unwrap_or_default()
+        ))
     }
 }

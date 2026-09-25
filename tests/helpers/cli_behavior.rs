@@ -11,6 +11,167 @@ impl CliScenario {
         }
     }
 
+    pub fn when_the_local_security_model_is_inspected(mut self) -> Self {
+        self.outputs = vec![
+            run(&["security", "explain"]),
+            run(&["security", "explain", "--format", "json"]),
+            run(&["security", "explain", "--json"]),
+        ];
+        self
+    }
+
+    pub fn then_both_formats_explain_the_same_trust_boundary(self) {
+        for output in &self.outputs {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stderr.is_empty());
+        }
+        let human = String::from_utf8_lossy(&self.outputs[0].stdout);
+        let result: serde_json::Value = serde_json::from_slice(&self.outputs[1].stdout).unwrap();
+        assert_eq!(result["schema"], "merl.security/v1");
+        assert_eq!(result["action"], "security.explain");
+        assert_eq!(result["deployment"], "local");
+        assert_eq!(
+            result,
+            serde_json::from_slice::<serde_json::Value>(&self.outputs[2].stdout).unwrap()
+        );
+        for (field, expected) in [
+            (
+                "trust_boundary",
+                "Unrestricted same-user processes are trusted",
+            ),
+            ("actor_claim", "--actor is a trusted local audit claim"),
+            ("exposed_files", "SQLite"),
+            (
+                "provided_checks",
+                "policy governance, validation, provenance, and audit",
+            ),
+            ("limitations", "actor impersonation"),
+            ("host_controls", "does not inspect"),
+            ("isolation_options", "separate daemon identity"),
+        ] {
+            let explanation = result[field].as_str().expect(field);
+            assert!(explanation.contains(expected), "{field}: {explanation}");
+            assert!(human.contains(explanation), "human output omits {field}");
+        }
+        let files = result["exposed_files"].as_str().unwrap();
+        for file in [
+            "payloads",
+            "provider credentials",
+            "configuration",
+            "caches",
+            "logs",
+            "workspaces",
+        ] {
+            assert!(files.contains(file), "missing {file}");
+        }
+        let limits = result["limitations"].as_str().unwrap();
+        for risk in [
+            "file access",
+            "state changes outside the API",
+            "does not authenticate",
+            "not a sandbox",
+        ] {
+            assert!(limits.contains(risk), "missing {risk}");
+        }
+        let isolation = result["isolation_options"].as_str().unwrap();
+        for option in [
+            "restricted IPC",
+            "sandbox",
+            "container",
+            "shared authority",
+            "client host",
+        ] {
+            assert!(isolation.contains(option), "missing {option}");
+        }
+    }
+
+    pub fn when_security_and_actor_help_are_requested(mut self) -> Self {
+        self.outputs = [
+            "",
+            "security",
+            "security explain",
+            "project authority grant",
+            "project authority revoke",
+            "source compilation-policy set",
+            "source apply",
+            "source compile",
+            "source require",
+            "source purge",
+            "decision create",
+            "question create",
+            "question resolve",
+            "finding create",
+            "finding resolve",
+            "hypothesis create",
+            "claim create",
+            "task request",
+            "task accept",
+            "task defer",
+            "task start",
+            "task complete",
+            "candidate accept",
+            "candidate reject",
+            "candidate correct",
+            "project revalidation run",
+            "project revalidation resolve",
+        ]
+        .into_iter()
+        .flat_map(|topic| {
+            let mut args = vec!["help"];
+            args.extend(topic.split_whitespace());
+            let human = run(&args);
+            args.push("--json");
+            [human, run(&args)]
+        })
+        .collect();
+        self
+    }
+
+    pub fn then_security_is_discoverable_and_actors_are_trusted_claims(self) {
+        for pair in self.outputs.as_chunks::<2>().0 {
+            assert!(pair[0].status.success());
+            assert!(pair[1].status.success());
+            let human = String::from_utf8_lossy(&pair[0].stdout);
+            let help: serde_json::Value = serde_json::from_slice(&pair[1].stdout).unwrap();
+            assert_eq!(help["schema"], "merl.help/v1");
+            match help["command"].as_str().unwrap() {
+                "" => {
+                    assert!(human.contains("security"));
+                    assert!(
+                        help["related"]
+                            .as_array()
+                            .unwrap()
+                            .contains(&serde_json::json!("security"))
+                    );
+                    assert!(!human.contains("--database"));
+                    assert!(!human.contains("--actor"));
+                }
+                "security" => {
+                    assert!(human.contains("explain"));
+                    assert_eq!(help["related"], serde_json::json!(["security explain"]));
+                }
+                "security explain" => {
+                    assert!(human.contains("merl security explain --json"));
+                    assert_eq!(help["outcomes"], serde_json::json!(["explained"]));
+                    assert_eq!(help["errors"], serde_json::json!(["INVALID_INPUT"]));
+                }
+                _ => {
+                    let trust = help["trust_boundary"]
+                        .as_str()
+                        .expect("actor help explains trust");
+                    assert!(trust.contains("--actor is a trusted local audit claim"));
+                    assert!(trust.contains("not proof of identity"));
+                    assert!(trust.contains("merl security explain"));
+                    assert!(human.contains(trust));
+                }
+            }
+        }
+    }
+
     pub fn when_help_is_requested_at_each_depth(mut self) -> Self {
         self.outputs = vec![
             run(&["--help"]),

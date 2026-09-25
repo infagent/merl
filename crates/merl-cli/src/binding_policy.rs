@@ -190,12 +190,16 @@ pub(super) fn help(set: bool, json_output: bool) -> Result<String, CliError> {
             "Inspect defaults, selectors, account mappings, and accepted provenance. --version explains an immutable capture. Precedence: project override, kind and class, kind, class, defaults. Unknown authors use the unknown class.",
         )
     };
+    let trust = set.then_some(crate::security::ACTOR_CLAIM);
     if json_output {
         render_json(
-            &json!({"schema":"merl.help/v1","command":command,"usage":usage,"summary":summary,"related":["source compilation-policy set","issue capture","source require","source compile"],"outcomes":["accepted","rejected","conflict"],"errors":["INVALID_INPUT","BINDING_NOT_FOUND","POLICY_INPUT_CONFLICT","POLICY_CONFLICT","STORAGE_ERROR"]}),
+            &json!({"trust_boundary":trust,"schema":"merl.help/v1","command":command,"usage":usage,"summary":summary,"related":["source compilation-policy set","issue capture","source require","source compile"],"outcomes":["accepted","rejected","conflict"],"errors":["INVALID_INPUT","BINDING_NOT_FOUND","POLICY_INPUT_CONFLICT","POLICY_CONFLICT","STORAGE_ERROR"]}),
         )
     } else {
-        Ok(format!("{usage}\n\n{summary}\n"))
+        Ok(format!(
+            "{usage}\n\n{summary}\n{}\n",
+            trust.unwrap_or_default()
+        ))
     }
 }
 

@@ -4,6 +4,20 @@ mod cli_behavior;
 use cli_behavior::CliScenario;
 
 #[test]
+fn local_mode_does_not_claim_to_sandbox_same_user_processes() {
+    CliScenario::given_the_merl_cli()
+        .when_the_local_security_model_is_inspected()
+        .then_both_formats_explain_the_same_trust_boundary();
+}
+
+#[test]
+fn security_help_is_discoverable_and_actor_claims_are_explicit() {
+    CliScenario::given_the_merl_cli()
+        .when_security_and_actor_help_are_requested()
+        .then_security_is_discoverable_and_actors_are_trusted_claims();
+}
+
+#[test]
 fn cli_help_is_incremental_and_machine_readable() {
     CliScenario::given_the_merl_cli()
         .when_help_is_requested_at_each_depth()

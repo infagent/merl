@@ -320,7 +320,7 @@ impl AuthorityScenario {
                 help["trust_boundary"]
                     .as_str()
                     .expect("trust boundary")
-                    .contains("trusted client claim")
+                    .contains("trusted local audit claim")
             );
         }
         assert!(self.human[0].contains("accepted: grant command_actor for alice by admin"));

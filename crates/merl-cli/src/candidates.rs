@@ -433,14 +433,18 @@ pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String,
             "merl candidate correct C81 --project P1 --database project.sqlite --actor reviewer --id review-1 --subject Q1 --kind question --value none --reason 'Still an open question' --json"
         }
     };
-    let result = json!({"schema":"merl.help/v1","command":operation.map_or("candidate".into(),|op|format!("candidate {op}")),"usage":usage,"description":description,
+    let trust = usage
+        .contains("--actor ")
+        .then_some(crate::security::ACTOR_CLAIM);
+    let result = json!({"trust_boundary":trust,"schema":"merl.help/v1","command":operation.map_or("candidate".into(),|op|format!("candidate {op}")),"usage":usage,"description":description,
         "related":related,"outcomes":["accepted","rejected","conflict"],"errors":["CANDIDATE_NOT_FOUND","POLICY_INPUT_CONFLICT","INVALID_INPUT","POLICY_ERROR"],
         "examples":[example]});
     if json_output {
         Ok(format!("{result}\n"))
     } else {
         Ok(format!(
-            "{usage}\n\n{description}\n\nRelated: {}\n",
+            "{usage}\n\n{description}\n{}\nRelated: {}\n",
+            trust.unwrap_or_default(),
             related.join(", ")
         ))
     }
