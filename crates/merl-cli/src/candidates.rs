@@ -394,27 +394,27 @@ pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String,
             ],
         ),
         Some("list") => (
-            "merl candidate list --project <id> --database <path> [--after <candidate>] [--json]",
+            "merl candidate list --project <id> --database <path> [--after <candidate>] [--format human|json] [--json]",
             "List up to 100 pending and resolved candidates. Continue with next_after.",
             vec!["candidate show"],
         ),
         Some("show") => (
-            "merl candidate show <candidate> --project <id> --database <path> [--offset <n>] [--json]",
+            "merl candidate show <candidate> --project <id> --database <path> [--offset <n>] [--format human|json] [--json]",
             "Inspect the original assertion or relation, dependency state, and up to 100 review attempts.",
             vec!["candidate accept", "candidate reject", "candidate correct"],
         ),
         Some("accept") => (
-            "merl candidate accept <candidate> --project <id> --database <path> --actor <id> --id <request> [--reason <text>] [--dry-run] [--json]",
+            "merl candidate accept <candidate> --project <id> --database <path> --actor <id> --id <request> [--reason <text>] [--dry-run] [--format human|json] [--json]",
             "Accept the recorded proposal under current command_actor authority. Changed dependencies conflict.",
             vec!["candidate show"],
         ),
         Some("reject") => (
-            "merl candidate reject <candidate> --project <id> --database <path> --actor <id> --id <request> --reason <text> [--dry-run] [--json]",
+            "merl candidate reject <candidate> --project <id> --database <path> --actor <id> --id <request> --reason <text> [--dry-run] [--format human|json] [--json]",
             "Close the candidate with an erasable reason while preserving its compiler input.",
             vec!["candidate show"],
         ),
         Some("correct") => (
-            "merl candidate correct <candidate> --project <id> --database <path> --actor <id> --id <request> --subject <object> --kind <kind> --value <payload|none> --reason <text> [--dry-run] [--json]",
+            "merl candidate correct <candidate> --project <id> --database <path> --actor <id> --id <request> --subject <object> --kind <kind> --value <payload|none> --reason <text> [--dry-run] [--format human|json] [--json]",
             "Submit a replacement object interpretation linked to the original assertion. Relation candidates support accept or reject.",
             vec!["candidate show", "show"],
         ),
@@ -433,21 +433,15 @@ pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String,
             "merl candidate correct C81 --project P1 --database project.sqlite --actor reviewer --id review-1 --subject Q1 --kind question --value none --reason 'Still an open question' --json"
         }
     };
-    let trust = usage
-        .contains("--actor ")
-        .then_some(crate::security::ACTOR_CLAIM);
-    let result = json!({"trust_boundary":trust,"schema":"merl.help/v1","command":operation.map_or("candidate".into(),|op|format!("candidate {op}")),"usage":usage,"description":description,
-        "related":related,"outcomes":["accepted","rejected","conflict"],"errors":["CANDIDATE_NOT_FOUND","POLICY_INPUT_CONFLICT","INVALID_INPUT","POLICY_ERROR"],
-        "examples":[example]});
-    if json_output {
-        Ok(format!("{result}\n"))
-    } else {
-        Ok(format!(
-            "{usage}\n\n{description}\n{}\nRelated: {}\n",
-            trust.unwrap_or_default(),
-            related.join(", ")
-        ))
-    }
+    let command = operation.map_or_else(|| "candidate".to_owned(), |op| format!("candidate {op}"));
+    crate::help::render(
+        &command,
+        usage,
+        description,
+        operation.map(|_| example),
+        &related,
+        json_output,
+    )
 }
 
 pub(super) fn evidence_history(

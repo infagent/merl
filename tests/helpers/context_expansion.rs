@@ -556,14 +556,15 @@ impl Expansion {
         self
     }
     pub fn when_the_cli_resumes_and_retries_process_work(&mut self) -> &mut Self {
+        // Drain stdin before exiting so the adapter can finish writing its context.
         for (run, response) in [
             (
                 "process-more",
-                r#"printf '%s' '{"schema":"merl.compiler-response/v1","assertions":[],"context_required":[{"reference":"other"}]}'"#,
+                r#"cat >/dev/null; printf '%s' '{"schema":"merl.compiler-response/v1","assertions":[],"context_required":[{"reference":"other"}]}'"#,
             ),
             (
                 "process-root",
-                r#"printf '%s' '{"schema":"merl.compiler-response/v1","assertions":[]}'"#,
+                r#"cat >/dev/null; printf '%s' '{"schema":"merl.compiler-response/v1","assertions":[]}'"#,
             ),
         ] {
             let adapter = ProcessCompiler::new(
