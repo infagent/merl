@@ -9,6 +9,83 @@ pub struct HelpScenario {
 }
 
 impl HelpScenario {
+    pub fn then_errors_stay_with_the_commands_that_expose_them(self) {
+        for (topic, record, _) in &self.records {
+            let errors = record["errors"].as_array().unwrap();
+            let has = |code: &str| errors.contains(&Value::from(code));
+            // These operations return conflict receipts after policy commit races.
+            if matches!(
+                topic.as_str(),
+                "decision create"
+                    | "question create"
+                    | "question resolve"
+                    | "finding create"
+                    | "finding resolve"
+                    | "hypothesis create"
+                    | "claim create"
+                    | "task request"
+                    | "task accept"
+                    | "task defer"
+                    | "task start"
+                    | "task complete"
+                    | "source apply"
+                    | "candidate accept"
+                    | "candidate reject"
+                    | "candidate correct"
+                    | "project revalidation resolve"
+            ) {
+                assert!(
+                    !has("POLICY_CONFLICT"),
+                    "{topic}: conflict is a receipt outcome"
+                );
+                assert!(
+                    has("POLICY_INPUT_CONFLICT"),
+                    "{topic}: changed retries are errors"
+                );
+            }
+            if matches!(
+                topic.as_str(),
+                "source compilation-policy"
+                    | "compilation list"
+                    | "compilation show"
+                    | "project authority list"
+                    | "project revalidation list"
+                    | "candidate list"
+                    | "project batch"
+                    | "project delta"
+                    | "inbox poll"
+                    | "inbox show"
+                    | "decision create"
+                    | "question create"
+                    | "question resolve"
+                    | "finding create"
+                    | "finding resolve"
+                    | "hypothesis create"
+                    | "claim create"
+                    | "task request"
+                    | "source purge"
+            ) {
+                assert!(
+                    !has("PAYLOAD_NOT_FOUND"),
+                    "{topic}: no payload lookup error escapes"
+                );
+            }
+            if matches!(
+                topic.as_str(),
+                "project view"
+                    | "issue view"
+                    | "compilation context"
+                    | "task defer"
+                    | "project revalidation resolve"
+            ) {
+                assert!(
+                    has("PAYLOAD_NOT_FOUND"),
+                    "{topic}: retained bytes are resolved"
+                );
+            }
+        }
+    }
+
     pub fn given_the_merl_cli() -> Self {
         Self {
             records: Vec::new(),
@@ -137,6 +214,7 @@ impl HelpScenario {
             ),
             ("source compile", "--project bad/id"),
             ("candidate show", "C1 --project P1 --database :memory:"),
+            ("candidate list", "--project missing --database :memory:"),
             (
                 "task request",
                 "--project P1 --database :memory: --actor A1 --id R1 --subject T1 --summary work",
