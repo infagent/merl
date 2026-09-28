@@ -58,3 +58,9 @@ The existing Ubuntu CI job includes it through
 services are required. This evidence supports the
 [#52 audit](https://github.com/infagent/merl/issues/52); it does not close the wider
 audit, establish model quality, or replace a smoke test against a real repository.
+
+The [live #127 smoke test](../evaluation/live-smoke-127.md) found that GitHub
+advances the Issue timestamp when a comment arrives, producing an extra accepted
+provider revision and inbox entry. This fixture keeps the enclosing timestamp
+unchanged. [#128](https://github.com/infagent/merl/issues/128) tracks the resulting
+gap in the one-comment delivery contract before freeze.
