@@ -160,8 +160,6 @@ pub(super) fn for_command(command: &str) -> Result<Vec<&'static str>, CliError> 
             "INVALID_ID",
             "PROJECT_NOT_FOUND",
             "INVALID_COVERAGE_PROMOTION",
-            // Unescaped slashes in scope and reason can collide in the derived identity.
-            "POLICY_INPUT_CONFLICT",
             "POLICY_CONFLICT",
             "INVALID_POLICY_EVALUATION",
             "POLICY_ERROR",

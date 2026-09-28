@@ -341,7 +341,9 @@ intents. Capture flags cannot override an established binding's configuration.
 An observed deletion has no prose to compile and records the deterministic
 `observed_deletion` rule with binding-default coverage.
 
-`source compile` records its authorization before starting the compiler. The authority rejects a missing request or a mismatch in source version, run, compiler and version, executable configuration, model, prompt digest, or work limits without creating compiler work. Repeating an existing `source require` with the same content returns the accepted requirement unchanged, even when another actor asks for it.
+`source compile` records its authorization before starting the compiler. The authority rejects a missing request or a mismatch in source version, run, compiler and version, executable configuration, model, prompt digest, or work limits without creating compiler work.
+
+Repeating an existing `source require` with the same content returns the accepted requirement unchanged, even when another actor asks for it. Distinct scopes remain independent when scopes or reasons contain `/`. Exact retries also preserve rejected outcomes after an upgrade or an authority grant.
 
 `merl project status` makes authority and freshness visible:
 

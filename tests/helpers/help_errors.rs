@@ -8,7 +8,7 @@ use merl_core::{
 use merl_store::{BindingCapturePolicy, SourceBinding, SourceCapture, Store};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{io::ErrorKind, path::PathBuf};
+use std::{fmt::Write, io::ErrorKind, path::PathBuf};
 
 const PROMPT: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -27,14 +27,92 @@ impl ErrorScenario {
         scenario
     }
 
-    pub fn when_another_scope_and_reason_reuse_its_derived_identity(mut self) -> Self {
-        let result = self.require("issue-1", "alice/Review evidence");
-        self.failures
-            .push((help("source require"), result, "POLICY_INPUT_CONFLICT"));
+    pub fn when_another_scope_is_required_and_both_requests_are_retried(mut self) -> Self {
+        self.reads = vec![
+            self.require("issue-1", "alice/Review evidence"),
+            self.call(&["project", "revision"]),
+            self.require("issue-1/alice", "Review evidence"),
+            self.require("issue-1", "alice/Review evidence"),
+            self.call(&["project", "revision"]),
+            help("source require"),
+        ];
         self
     }
 
+    pub fn then_both_requirements_survive_without_an_identity_conflict(self) {
+        assert_eq!(self.reads[0]["outcome"], "promoted", "{}", self.reads[0]);
+        assert_eq!(self.reads[1]["revision"], 2);
+        assert_eq!(self.reads[2]["outcome"], "unchanged");
+        assert_eq!(self.reads[2]["scope"], "issue-1/alice");
+        assert_eq!(self.reads[3]["outcome"], "unchanged");
+        assert_eq!(
+            self.reads[3]["reason_payload"],
+            self.reads[0]["reason_payload"]
+        );
+        assert_eq!(self.reads[4]["revision"], self.reads[1]["revision"]);
+        assert!(
+            !self.reads[5]["errors"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::from("POLICY_INPUT_CONFLICT"))
+        );
+    }
+
+    pub fn given_legacy_requirement_receipts_and_changed_authority() -> Self {
+        let scenario = Self::given_a_retained_source();
+        let mut store = Store::open(&scenario.directory.join("project.sqlite")).unwrap();
+        let project = ProjectId::try_from("P1").unwrap();
+        // Public policy APIs reproduce receipts written by the old CLI. Bob gains
+        // authority afterward, so reevaluating his old rejection would be visible.
+        legacy_requirement(
+            &mut store,
+            &project,
+            "bob",
+            "issue-1/bob",
+            "Review evidence",
+        );
+        legacy_requirement(
+            &mut store,
+            &project,
+            "alice",
+            "accepted",
+            "Keep this evidence",
+        );
+        store
+            .grant_administrator_unchecked_bootstrap(&project, &ActorId::try_from("bob").unwrap())
+            .unwrap();
+        scenario
+    }
+
+    pub fn when_legacy_requests_and_a_colliding_request_are_retried(mut self) -> Self {
+        self.reads = vec![
+            self.require_as("bob", "issue-1/bob", "Review evidence"),
+            self.require("accepted", "Keep this evidence"),
+            self.call(&["project", "revision"]),
+            self.require_as("bob", "issue-1", "bob/Review evidence"),
+            self.require_as("bob", "issue-1/bob", "Review evidence"),
+            self.require_as("bob", "issue-1", "bob/Review evidence"),
+            self.call(&["project", "revision"]),
+        ];
+        self
+    }
+
+    pub fn then_legacy_outcomes_survive_and_the_distinct_request_succeeds(self) {
+        assert_eq!(self.reads[0]["outcome"], "rejected", "{}", self.reads[0]);
+        assert_eq!(self.reads[1]["outcome"], "unchanged");
+        assert_eq!(self.reads[1]["promoted_at_millis"], 1);
+        assert_eq!(self.reads[2]["revision"], 1);
+        assert_eq!(self.reads[3]["outcome"], "promoted", "{}", self.reads[3]);
+        assert_eq!(self.reads[4]["outcome"], "rejected");
+        assert_eq!(self.reads[5]["outcome"], "unchanged");
+        assert_eq!(self.reads[6]["revision"], 2);
+    }
+
     fn require(&self, scope: &str, reason: &str) -> Value {
+        self.require_as("alice", scope, reason)
+    }
+
+    fn require_as(&self, actor: &str, scope: &str, reason: &str) -> Value {
         self.call(&[
             "source",
             "require",
@@ -43,7 +121,7 @@ impl ErrorScenario {
             "--scope",
             scope,
             "--actor",
-            "alice",
+            actor,
             "--reason",
             reason,
         ])
@@ -342,6 +420,60 @@ fn compile_arguments(run: &str) -> Vec<&str> {
         "--prompt-digest",
         PROMPT,
     ]
+}
+
+/// Records the pre-#124 identity format through the public policy boundary.
+fn legacy_requirement(
+    store: &mut Store,
+    project: &ProjectId,
+    actor: &str,
+    scope: &str,
+    reason: &str,
+) {
+    let actor = ActorId::try_from(actor).unwrap();
+    let intent = store
+        .prepare_source_requirement(
+            project,
+            &SourceVersionId::try_from("SV1").unwrap(),
+            scope,
+            reason.as_bytes(),
+        )
+        .unwrap();
+    let meaning = format!("{project}/{}/{scope}/{actor}/{reason}", intent.source);
+    let digest = Sha256::digest(meaning.as_bytes());
+    let suffix = digest.iter().fold(String::new(), |mut text, byte| {
+        write!(text, "{byte:02x}").unwrap();
+        text
+    });
+    let id = |prefix| format!("source_requirement_{prefix}_{suffix}");
+    let result = merl_policy::apply_current(
+        store,
+        project,
+        &actor,
+        merl_core::PolicyEvaluationId::try_from(id("evaluation").as_str()).unwrap(),
+        merl_core::BatchId::try_from(id("batch").as_str()).unwrap(),
+        1,
+        &[merl_policy::Proposal::AdministrativeAction {
+            id: merl_core::PolicyInputId::try_from(id("input").as_str()).unwrap(),
+            event: merl_core::DomainEvent::PutObject {
+                id: merl_core::EventId::try_from(id("event").as_str()).unwrap(),
+                object: intent.object,
+                kind: merl_core::ObjectKind::try_from("source_coverage_requirement").unwrap(),
+                payload: Some(intent.reason),
+                issue_scope: Some(scope.to_owned()),
+                lifecycle: merl_core::ObjectLifecycle::Active,
+            },
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        result.inputs[0].disposition.as_str(),
+        if actor.as_str() == "alice" {
+            "accepted"
+        } else {
+            "rejected"
+        }
+    );
 }
 
 fn help(topic: &str) -> Value {

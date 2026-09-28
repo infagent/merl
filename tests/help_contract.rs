@@ -48,10 +48,18 @@ fn changed_compiler_retry_configuration_has_a_documented_identity_conflict() {
 
 #[cfg(unix)]
 #[test]
-fn source_requirement_help_documents_colliding_scope_and_reason_inputs() {
+fn distinct_source_requirements_and_exact_retries_have_accurate_help() {
     ErrorScenario::given_a_required_source_in_a_scope_containing_a_slash()
-        .when_another_scope_and_reason_reuse_its_derived_identity()
-        .then_help_names_each_failure_at_its_public_boundary();
+        .when_another_scope_is_required_and_both_requests_are_retried()
+        .then_both_requirements_survive_without_an_identity_conflict();
+}
+
+#[cfg(unix)]
+#[test]
+fn legacy_requirement_receipts_preserve_outcomes_without_blocking_other_scopes() {
+    ErrorScenario::given_legacy_requirement_receipts_and_changed_authority()
+        .when_legacy_requests_and_a_colliding_request_are_retried()
+        .then_legacy_outcomes_survive_and_the_distinct_request_succeeds();
 }
 
 #[cfg(unix)]
