@@ -183,34 +183,52 @@ pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String,
         ),
         Some("list") => (
             "compilation list",
-            "merl compilation list --project <id> --database <path> [--offset <n>] [--json]",
+            "merl compilation list --project <id> --database <path> [--offset <n>] [--format human|json] [--json]",
             "List 100 durable expansion requests per page, including completed and exhausted work.",
         ),
         Some("show") => (
             "compilation show",
-            "merl compilation show --project <id> --database <path> --run <id> [--json]",
+            "merl compilation show --project <id> --database <path> --run <id> [--format human|json] [--json]",
             "Inspect a run, its causal context lineage, and its next expansion request.",
         ),
         Some("context") => (
             "compilation context",
-            "merl compilation context --project <id> --database <path> --run <id> [--json]",
+            "merl compilation context --project <id> --database <path> --run <id> [--format human|json] [--json]",
             "Read the exact retained compiler input. Erased input remains unavailable.",
         ),
         Some("expand") => (
             "compilation expand",
-            "merl compilation expand --project <id> --database <path> --run <parent-id> --program <path> --compiler-version <version> --model <id> --prompt-digest sha256:<hex> [--compiler-arg <arg>] [--json]",
+            "merl compilation expand --project <id> --database <path> --run <parent-id> --program <path> --compiler-version <version> --model <id> --prompt-digest sha256:<hex> [--compiler-arg <arg>] [--format human|json] [--json]",
             "Resume one round with the original compiler configuration and limits. Retrying the parent resumes its reserved successor; acceptance still requires source apply.",
         ),
         _ => return Err(invalid_input("unknown compilation help topic")),
     };
-    if json_output {
-        Ok(format!(
-            "{}\n",
-            json!({"schema":"merl.help/v1","command":name,"usage":usage,"summary":description,"examples":["merl compilation list --project P1 --database project.sqlite --json","merl compilation show --project P1 --database project.sqlite --run CR42 --json"],
-        "errors":["COMPILER_EXPANSION_REFERENCE","COMPILER_EXPANSION_LOOP","COMPILER_EXPANSION_ROUND_BUDGET","COMPILER_INPUT_BUDGET","COMPILER_UNAUTHORIZED","MISSING_EVIDENCE"],
-        "related":["compilation list","compilation show","compilation context","compilation expand","source assertions","source apply"]})
-        ))
-    } else {
-        Ok(format!("{usage}\n{description}\n"))
-    }
+    let example = match operation {
+        Some("list") => Some("merl compilation list --project P1 --database project.sqlite --json"),
+        Some("show") => {
+            Some("merl compilation show --project P1 --database project.sqlite --run CR42 --json")
+        }
+        Some("context") => Some(
+            "merl compilation context --project P1 --database project.sqlite --run CR42 --json",
+        ),
+        Some("expand") => Some(
+            "merl compilation expand --project P1 --database project.sqlite --run CR42 --program ./compiler --compiler-version v1 --model local --prompt-digest sha256:0000000000000000000000000000000000000000000000000000000000000000 --json",
+        ),
+        _ => None,
+    };
+    crate::help::render(
+        name,
+        usage,
+        description,
+        example,
+        &[
+            "compilation list",
+            "compilation show",
+            "compilation context",
+            "compilation expand",
+            "source assertions",
+            "source apply",
+        ],
+        json_output,
+    )
 }

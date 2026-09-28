@@ -116,36 +116,35 @@ pub(super) fn help(operation: Option<&str>, json_output: bool) -> Result<String,
         ),
         Some("list") => (
             "project authority list",
-            "merl project authority list --project <id> --database <path> [--json]",
+            "merl project authority list --project <id> --database <path> [--format human|json] [--json]",
             "Read effective grants and their policy configuration digest.",
             "merl project authority list --project P1 --database project.sqlite --json",
         ),
         Some("grant") => (
             "project authority grant",
-            "merl project authority grant --project <id> --database <path> --id <request> --actor <administrator> --subject <actor> --permission <decision_author|command_actor> --reason <text> [--json]",
+            "merl project authority grant --project <id> --database <path> --id <request> --actor <administrator> --subject <actor> --permission <decision_author|command_actor> --reason <text> [--format human|json] [--json]",
             "Grant one semantic permission through administrative policy.",
             "merl project authority grant --project P1 --database project.sqlite --id grant_alice --actor owner --subject alice --permission decision_author --reason 'Project decision owner' --json",
         ),
         Some("revoke") => (
             "project authority revoke",
-            "merl project authority revoke --project <id> --database <path> --id <request> --actor <administrator> --subject <actor> --permission <decision_author|command_actor> --reason <text> [--json]",
+            "merl project authority revoke --project <id> --database <path> --id <request> --actor <administrator> --subject <actor> --permission <decision_author|command_actor> --reason <text> [--format human|json] [--json]",
             "Revoke one semantic permission while preserving accepted history.",
             "merl project authority revoke --project P1 --database project.sqlite --id revoke_alice --actor owner --subject alice --permission decision_author --reason 'Role ended' --json",
         ),
         _ => return Err(invalid_input("unknown authority command")),
     };
-    let trust = crate::security::ACTOR_CLAIM;
-    if json_output {
-        render_json(
-            &json!({"schema": "merl.help/v1", "command": command, "usage": usage,
-            "summary": summary, "example": example, "trust_boundary": trust,
-            "outcomes": ["accepted", "rejected", "conflict"],
-            "errors": ["INVALID_INPUT", "PROJECT_NOT_FOUND", "POLICY_INPUT_CONFLICT", "POLICY_CONFLICT", "POLICY_ERROR", "STORAGE_ERROR"],
-            "related": ["project authority list", "project authority grant", "project authority revoke"]}),
-        )
-    } else {
-        Ok(format!(
-            "{usage}\n\n{summary}\n{trust}\n\nExample: {example}\n"
-        ))
-    }
+    crate::help::render(
+        command,
+        usage,
+        summary,
+        operation.map(|_| example),
+        &[
+            "project authority list",
+            "project authority grant",
+            "project authority revoke",
+            "source apply",
+        ],
+        json_output,
+    )
 }

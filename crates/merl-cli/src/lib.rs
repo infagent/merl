@@ -7,6 +7,7 @@ mod candidates;
 mod capture;
 mod commands;
 mod compilations;
+mod help;
 mod revalidation;
 mod security;
 
@@ -2277,32 +2278,36 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             ],
         ),
         "project init" => (
-            "merl project init --id <id> --database <path> [--administrator <actor>] [--format json]",
+            "merl project init --id <id> --database <path> [--administrator <actor>] [--format human|json] [--json]",
             "Create a local project at revision zero and optionally establish its first administrator.",
-            vec!["project revision"],
+            vec![
+                "project revision",
+                "project authority grant",
+                "issue capture",
+            ],
         ),
         "project revision" => (
-            "merl project revision --project <id> --database <path> [--format json]",
+            "merl project revision --project <id> --database <path> [--format human|json] [--json]",
             "Read the accepted project revision.",
             vec!["project init"],
         ),
         "project rebuild" => (
-            "merl project rebuild --project <id> --database <path> [--format json]",
+            "merl project rebuild --project <id> --database <path> [--format human|json] [--json]",
             "Rebuild accepted object and relation projections from domain events. The compiler does not run.",
             vec!["project revision", "project view"],
         ),
         "project view" => (
-            "merl project view --project <id> --database <path> [--role researcher|engineer|pm] [--focus <object-id>] [--format json]",
+            "merl project view --project <id> --database <path> [--role researcher|engineer|pm] [--focus <object-id>] [--format human|json] [--json]",
             "Read focused work first, then current accepted work in role order. Pull evidence by reference.",
             vec!["issue view", "show", "project delta"],
         ),
         "project delta" => (
-            "merl project delta --project <id> --database <path> --since <revision> [--format json]",
+            "merl project delta --project <id> --database <path> --since <revision> [--format human|json] [--json]",
             "Read accepted changes after a project revision. Source text is omitted.",
             vec!["project revision", "project batch", "inbox poll"],
         ),
         "project batch" => (
-            "merl project batch --project <id> --database <path> --batch <id> [--offset <n>] [--format json]",
+            "merl project batch --project <id> --database <path> --batch <id> [--offset <n>] [--format human|json] [--json]",
             "Read a bounded page of references in one accepted batch, including after acknowledgement.",
             vec!["project delta", "inbox poll"],
         ),
@@ -2312,9 +2317,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             vec!["issue capture", "issue import-fixture", "issue view"],
         ),
         "issue view" => (
-            "merl issue view --project <id> --database <path> --issue <id> --scope <provider-id> [--role researcher|engineer|pm] [--format json]",
+            "merl issue view --project <id> --database <path> --issue <id> --scope <provider-id> [--role researcher|engineer|pm] [--format human|json] [--json]",
             "Read current Issue facts and accepted semantics. Source text stays cold.",
-            vec!["issue import-fixture"],
+            vec!["issue capture", "show", "source show"],
         ),
         "inbox" => (
             "merl inbox <command>",
@@ -2322,27 +2327,27 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             vec!["inbox subscribe", "inbox poll", "inbox show", "inbox ack"],
         ),
         "inbox subscribe" => (
-            "merl inbox subscribe --project <id> --database <path> --agent <id> [--format json]",
+            "merl inbox subscribe --project <id> --database <path> --agent <id> [--format human|json] [--json]",
             "Subscribe an agent to accepted project changes.",
             vec!["inbox poll"],
         ),
         "inbox poll" => (
-            "merl inbox poll --project <id> --database <path> --agent <id> [--format json]",
+            "merl inbox poll --project <id> --database <path> --agent <id> [--format human|json] [--json]",
             "Read pending accepted changes for a subscribed agent.",
             vec!["inbox show", "inbox ack", "project delta"],
         ),
         "inbox show" => (
-            "merl inbox show --project <id> --database <path> --agent <id> --revision <n> [--offset <n>] [--format json]",
+            "merl inbox show --project <id> --database <path> --agent <id> --revision <n> [--offset <n>] [--format human|json] [--json]",
             "Read another bounded page of one inbox batch; older acknowledged entries remain readable.",
             vec!["inbox poll", "inbox ack"],
         ),
         "inbox ack" => (
-            "merl inbox ack --project <id> --database <path> --agent <id> --revision <n> [--format json]",
+            "merl inbox ack --project <id> --database <path> --agent <id> --revision <n> [--format human|json] [--json]",
             "Acknowledge the oldest unread entry. Repeating an acknowledgement is safe.",
             vec!["inbox poll"],
         ),
         "show" => (
-            "merl show <object-id> --project <id> --database <path> [--history] [--source] [--format json]",
+            "merl show <object-id> --project <id> --database <path> [--history] [--source] [--format human|json] [--json]",
             "Inspect one accepted object, its policy input, and requested evidence.",
             vec!["issue view", "source show"],
         ),
@@ -2362,58 +2367,67 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
             ],
         ),
         "source show" => (
-            "merl source show --project <id> --database <path> --version <id> [--format json]",
+            "merl source show --project <id> --database <path> --version <id> [--format human|json] [--json]",
             "Read one captured source version. Erased bytes report unavailable.",
-            vec!["show"],
+            vec!["show", "source compile", "source require"],
         ),
         "source assertions" => (
-            "merl source assertions --project <id> --database <path> --run <id> [--json]",
+            "merl source assertions --project <id> --database <path> --run <id> [--format human|json] [--json]",
             "Inspect recorded assertions, relations, unresolved spans, and context requests. Reading does not accept state.",
             vec!["source apply", "source show"],
         ),
         "source apply" => (
-            "merl source apply --project <id> --database <path> --run <id> --actor <id> --id <request-id> [--dry-run] [--json]",
+            "merl source apply --project <id> --database <path> --run <id> --actor <id> --id <request-id> [--dry-run] [--format human|json] [--json]",
             "Evaluate a completed live run with current grants. Reuse the request ID for retries; use a new ID to reevaluate candidates. Only direct explicit decisions qualify for decision-author acceptance. Grounded relations require candidate review.",
-            vec!["source assertions", "project authority", "show"],
+            vec![
+                "source assertions",
+                "candidate list",
+                "project authority",
+                "show",
+            ],
         ),
         "source compile" => (
-            "merl source compile --project <id> --database <path> --version <id> --run <id> --actor <id> --reason <text> --program <path> --compiler-version <version> --model <model> --prompt-digest sha256:<hex> [--compiler-arg <arg>] [--format json]",
-            "Authorize and compile one retained source through a configured process adapter.",
-            vec!["source show", "issue view"],
+            "merl source compile --project <id> --database <path> --version <id> --run <id> --actor <id> --reason <text> --program <path> --compiler-version <version> --model <model> --prompt-digest sha256:<hex> [--compiler-arg <arg>] [--format human|json] [--json]",
+            "Authorize and compile one retained source through a configured process adapter. Reuse the run and configuration for retries. COMPILER_CONTEXT_REQUIRED retains the run for compilation expand; use source apply after compilation to evaluate its assertions.",
+            vec![
+                "compilation show",
+                "compilation expand",
+                "source assertions",
+                "source apply",
+            ],
         ),
         "source require" => (
-            "merl source require --project <id> --database <path> --version <id> --scope <id> --actor <id> --reason <text> [--format json]",
+            "merl source require --project <id> --database <path> --version <id> --scope <id> --actor <id> --reason <text> [--format human|json] [--json]",
             "Make retained optional evidence part of the completeness contract for one scope. Identical retries are safe.",
             vec!["source show", "issue view"],
         ),
         "source purge" => (
-            "merl source purge --project <id> --database <path> --version <id> --reason <text> (--dry-run | --actor <id> --confirm-digest sha256:<hex>) [--format json]",
+            "merl source purge --project <id> --database <path> --version <id> --reason <text> (--dry-run | --actor <id> --confirm-digest sha256:<hex>) [--format human|json] [--json]",
             "Preview affected bytes and provenance, then confirm the digest to erase them from active Merl storage.",
-            vec!["source show"],
+            vec!["source purge-audit", "source show"],
         ),
         "source purge-audit" => (
-            "merl source purge-audit --project <id> --database <path> --version <id> [--format json]",
+            "merl source purge-audit --project <id> --database <path> --version <id> [--format human|json] [--json]",
             "Read the completed purge receipt and retained payload digests without restoring erased bytes.",
             vec!["source purge", "source show"],
         ),
         "source replay" => (
-            "merl source replay --project <id> --database <path> --run <id> [--program <path> --new-run <id> --compiler-version <version> --model <id> --prompt-digest sha256:<hex>] [--format json]",
+            "merl source replay --project <id> --database <path> --run <id> [--program <path> --new-run <id> --compiler-version <version> --model <id> --prompt-digest sha256:<hex> [--compiler-arg <arg>]] [--format human|json] [--json]",
             "Rebuild a causal compiler input and check its digest. A configured process compiler creates a new replay run without accepting state.",
             vec!["source show", "project rebuild"],
         ),
         "issue capture" => (
-            "merl issue capture --project <id> --database <path> --repository <owner/name> --issue <number> [--mode eager|capture_only|on_demand] [--coverage required|optional] [--program <path> --compiler-version <version> --model <id> --prompt-digest sha256:<hex>] [--github-program <path>] [--format json]",
+            "merl issue capture --project <id> --database <path> --repository <owner/name> --issue <number> [--mode eager|capture_only|on_demand] [--coverage required|optional] [--program <path> --compiler-version <version> --model <id> --prompt-digest sha256:<hex> [--compiler-arg <arg>]] [--github-program <path>] [--format human|json] [--json]",
             "Capture or refresh a GitHub Issue. Install gh and authenticate with gh auth login. A new binding defaults to eager/required; refresh reuses its durable policy. Eager work needs a configured compiler. Outcomes: captured, unchanged, failed, incomplete. Partial provider responses never imply deletions.",
             vec!["issue view", "source show", "source replay", "inbox poll"],
         ),
         "issue import-fixture" => (
-            "merl issue import-fixture --project <id> --database <path> --fixture <path> [--format json]",
+            "merl issue import-fixture --project <id> --database <path> --fixture <path> [--format human|json] [--json]",
             "Import a versioned Issue fixture without GitHub access. The fixture must pass corpus validation.",
-            vec!["project init", "project revision"],
+            vec!["project init", "issue view", "source compile"],
         ),
         _ => return Err(invalid_input("unknown help topic")),
     };
-    let trust = usage.contains("--actor ").then_some(security::ACTOR_CLAIM);
     let example = match command {
         "security explain" => Some("merl security explain --json"),
         "project init" => Some("merl project init --id P1 --database project.sqlite"),
@@ -2465,6 +2479,9 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         "source apply" => Some(
             "merl source apply --project P1 --database project.sqlite --run CR42 --actor worker --id apply-CR42-1 --json",
         ),
+        "source compile" => Some(
+            "merl source compile --project P1 --database project.sqlite --version SV1 --run CR42 --actor owner --reason 'Review retained evidence' --program ./compiler --compiler-version v1 --model local --prompt-digest sha256:0000000000000000000000000000000000000000000000000000000000000000 --json",
+        ),
         "source require" => Some(
             "merl source require --project P1 --database project.sqlite --version SV1 --scope task:T42 --actor pm --reason 'Required safety evidence' --json",
         ),
@@ -2479,128 +2496,7 @@ fn help(command: &str, json_output: bool) -> Result<String, CliError> {
         }
         _ => None,
     };
-    if json_output {
-        let errors = if command.starts_with("security") {
-            vec!["INVALID_INPUT"]
-        } else if command == "issue capture" {
-            vec![
-                "INVALID_INPUT",
-                "PROJECT_NOT_FOUND",
-                "COMPILER_REQUIRED",
-                "AUTHORITY_BUSY",
-                "IO_ERROR",
-                "COMPILER_ADAPTER_ERROR",
-                "SOURCE_CONFLICT",
-                "STALE_PROVIDER_OBSERVATION",
-                "STORAGE_ERROR",
-            ]
-        } else if command == "issue import-fixture" {
-            vec![
-                "INVALID_INPUT",
-                "INVALID_ID",
-                "INVALID_FIXTURE",
-                "IO_ERROR",
-                "PROJECT_NOT_FOUND",
-                "SOURCE_CONFLICT",
-                "STALE_PROVIDER_OBSERVATION",
-                "STORAGE_ERROR",
-            ]
-        } else if command == "show" {
-            vec![
-                "INVALID_INPUT",
-                "INVALID_ID",
-                "PROJECT_NOT_FOUND",
-                "OBJECT_NOT_FOUND",
-                "CORRUPT_HISTORY",
-                "STORAGE_ERROR",
-            ]
-        } else if command == "source purge" {
-            vec![
-                "INVALID_INPUT",
-                "INVALID_ID",
-                "INVALID_SOURCE",
-                "INVALID_PURGE",
-                "STORAGE_ERROR",
-            ]
-        } else if command == "source purge-audit" {
-            vec![
-                "INVALID_INPUT",
-                "INVALID_ID",
-                "PURGE_AUDIT_NOT_FOUND",
-                "STORAGE_ERROR",
-            ]
-        } else if command == "source replay" {
-            vec![
-                "INVALID_INPUT",
-                "NON_CAUSAL_HISTORY",
-                "MISSING_EVIDENCE",
-                "COMPILER_INPUT_BUDGET",
-                "COMPILER_OUTPUT_BUDGET",
-                "INVALID_COMPILER_RESPONSE",
-                "COMPILER_ADAPTER_ERROR",
-                "STORAGE_ERROR",
-            ]
-        } else if command == "source apply" {
-            vec![
-                "INVALID_INPUT",
-                "ASSERTION_RUN_INELIGIBLE",
-                "POLICY_INPUT_CONFLICT",
-                "POLICY_ERROR",
-                "CORRUPT_HISTORY",
-                "STORAGE_ERROR",
-            ]
-        } else if command == "source assertions" {
-            vec!["INVALID_INPUT", "CORRUPT_HISTORY", "STORAGE_ERROR"]
-        } else if command == "source show" {
-            vec![
-                "INVALID_INPUT",
-                "INVALID_ID",
-                "PROJECT_NOT_FOUND",
-                "SOURCE_NOT_FOUND",
-                "STORAGE_ERROR",
-            ]
-        } else if command == "inbox ack" || command == "inbox poll" {
-            vec![
-                "INVALID_INPUT",
-                "INVALID_ID",
-                "INVALID_INBOX_ACKNOWLEDGEMENT",
-                "STORAGE_ERROR",
-            ]
-        } else {
-            vec![
-                "INVALID_INPUT",
-                "INVALID_ID",
-                "PROJECT_NOT_FOUND",
-                "UNSUPPORTED_SCHEMA",
-                "STORAGE_ERROR",
-            ]
-        };
-        let mut result = json!({
-            "schema": "merl.help/v1",
-            "command": command,
-            "usage": usage,
-            "summary": summary,
-            "related": related,
-            "errors": errors,
-            "example": example
-        });
-        if command == "security explain" {
-            result["outcomes"] = json!(["explained"]);
-        }
-        if let Some(trust) = trust {
-            result["trust_boundary"] = json!(trust);
-        }
-        render_json(&result)
-    } else {
-        let mut output = format!("{usage}\n{summary}\n");
-        if let Some(trust) = trust {
-            writeln!(output, "{trust}").expect("String write");
-        }
-        if let Some(example) = example {
-            writeln!(output, "Example: {example}").expect("String write");
-        }
-        Ok(output)
-    }
+    help::render(command, usage, summary, example, &related, json_output)
 }
 
 fn render_json(value: &Value) -> Result<String, CliError> {

@@ -76,6 +76,21 @@ merl help session checkpoint --format json
 
 Top-level help lists command groups, not every flag and example. Subcommand help describes arguments, outcomes, error codes, examples, and related commands. JSON help uses a versioned schema so an agent can inspect one operation without loading the whole command surface.
 
+First-release help uses `merl.help/v1`. Each executable command has non-empty
+`usage`, `summary`, `outcomes`, `errors`, `example`, and `related` fields. Human
+help renders those same values. `errors` names codes from the command's public
+error boundary; `outcomes` lists mutation dispositions, recorded statuses, or the
+data a read returns. A rejected policy disposition is a command result, not an
+error code.
+
+Use `kind` to distinguish a `group` from a `command`. Follow `children` for direct
+child topic names, then request each child's help as needed. A command can have
+children: `source compilation-policy` inspects a binding and has a `set` child.
+`related` names useful workflow steps without embedding their schemas. Existing
+`description` and `examples` fields remain aliases for `summary` and `example`.
+See the [first-release help inventory](plans/help-contracts.md) for the included
+commands and their consistency checks.
+
 Capture a live Issue after initializing a local project:
 
 ```bash

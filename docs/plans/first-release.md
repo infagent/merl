@@ -194,6 +194,7 @@ The release is ready when:
 - `security explain` states in human and JSON output that same-user filesystem access and actor impersonation lie outside Merl's enforcement boundary; command help describes `--actor` as a trusted local audit claim, and `tests/cli_behavior.rs` covers the boundary through CLI subprocesses;
 - top-level help lists command groups, while one subcommand's human or JSON help can be loaded without rendering the full command catalog;
 - every included command documents its arguments, outcomes, stable errors, examples, and related commands;
+- the [help inventory](help-contracts.md) covers the shipped command tree; public acceptance scenarios follow its child topics and check required fields, matching human output, and representative error paths without prose snapshots;
 - non-interactive JSON output never prompts and preserves the same accepted, queued, candidate, rejected, and conflicted meanings as human output;
 - researcher and engineer views answer held-out questions at least as accurately as raw history and the simpler summary and retrieval baselines; the PM view uses the same accepted state and coverage contract;
 - benchmark results report disagreements and failures rather than scoring ambiguous cases as automatic successes;
