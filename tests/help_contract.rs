@@ -48,6 +48,14 @@ fn changed_compiler_retry_configuration_has_a_documented_identity_conflict() {
 
 #[cfg(unix)]
 #[test]
+fn source_requirement_help_documents_colliding_scope_and_reason_inputs() {
+    ErrorScenario::given_a_required_source_in_a_scope_containing_a_slash()
+        .when_another_scope_and_reason_reuse_its_derived_identity()
+        .then_help_names_each_failure_at_its_public_boundary();
+}
+
+#[cfg(unix)]
+#[test]
 fn metadata_help_does_not_claim_to_open_erased_policy_reasons() {
     ErrorScenario::given_a_binding_with_an_erased_policy_reason()
         .when_binding_metadata_and_help_are_read()

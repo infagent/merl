@@ -20,6 +20,35 @@ pub struct ErrorScenario {
 }
 
 impl ErrorScenario {
+    pub fn given_a_required_source_in_a_scope_containing_a_slash() -> Self {
+        let scenario = Self::given_a_retained_source();
+        let result = scenario.require("issue-1/alice", "Review evidence");
+        assert_eq!(result["outcome"], "promoted", "{result}");
+        scenario
+    }
+
+    pub fn when_another_scope_and_reason_reuse_its_derived_identity(mut self) -> Self {
+        let result = self.require("issue-1", "alice/Review evidence");
+        self.failures
+            .push((help("source require"), result, "POLICY_INPUT_CONFLICT"));
+        self
+    }
+
+    fn require(&self, scope: &str, reason: &str) -> Value {
+        self.call(&[
+            "source",
+            "require",
+            "--version",
+            "SV1",
+            "--scope",
+            scope,
+            "--actor",
+            "alice",
+            "--reason",
+            reason,
+        ])
+    }
+
     pub fn given_a_recorded_compilation() -> Self {
         let scenario = Self::given_a_retained_source();
         let result = scenario.call(&compile_arguments("CR1"));

@@ -40,6 +40,26 @@ configuration unchanged. A different compiler version, model, prompt digest, or
 adapter configuration under the same request identity returns
 `POLICY_INPUT_CONFLICT`.
 
+`source require` also exposes `POLICY_INPUT_CONFLICT`, despite deriving its
+request identity from the command arguments. The current encoding joins project,
+stable source, scope, actor, and reason with unescaped `/` separators. Scope and
+reason accept that character, so distinct inputs can produce the same identity.
+For an optional source version `SV1` and administrator `alice`, these calls
+return `promoted` and then `POLICY_INPUT_CONFLICT`:
+
+```sh
+merl source require --project P1 --database project.sqlite --version SV1 \
+  --scope issue-1/alice --actor alice --reason 'Review evidence' --json
+merl source require --project P1 --database project.sqlite --version SV1 \
+  --scope issue-1 --actor alice --reason 'alice/Review evidence' --json
+```
+
+The second call targets another scope, so the existing-promotion shortcut does
+not apply. Both requests produce the identity suffix
+`/issue-1/alice/alice/Review evidence`, but propose different scope and payload
+references. The help regression preserves this reachable error until the identity
+encoding changes.
+
 Policy commands can return `rejected` or `conflict` as successful command results.
 Read-only commands describe their returned data or the statuses of the records
 they inspect. Help does not add an `outcome` field to a result schema that lacks
