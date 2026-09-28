@@ -77,6 +77,11 @@ The slice performs these actions:
 
 The compiler may ask for more context when a phrase such as "the issue above" remains ambiguous. It must not guess or silently fall back to the whole thread.
 
+The [Issue workflow evidence](issue-workflow-evidence.md) maps #70's complete CLI
+scenario to capture, review, incremental delivery, provenance, replay,
+revalidation, supplemental-note lineage, and purge. It runs in CI with controlled
+provider and compiler processes and starts without a project database.
+
 ## Deliverables
 
 The release includes:
