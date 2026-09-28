@@ -40,12 +40,12 @@ configuration unchanged. A different compiler version, model, prompt digest, or
 adapter configuration under the same request identity returns
 `POLICY_INPUT_CONFLICT`.
 
-`source require` also exposes `POLICY_INPUT_CONFLICT`, despite deriving its
-request identity from the command arguments. The current encoding joins project,
-stable source, scope, actor, and reason with unescaped `/` separators. Scope and
-reason accept that character, so distinct inputs can produce the same identity.
+`source require` derives its request identity from project, stable source, scope,
+actor, and reason. Issue [#124](https://github.com/infagent/merl/issues/124) replaces
+the old slash-joined encoding with length-framed fields before hashing, removing
+the accidental `POLICY_INPUT_CONFLICT` path found during the #69 audit.
 For an optional source version `SV1` and administrator `alice`, these calls
-return `promoted` and then `POLICY_INPUT_CONFLICT`:
+both return `promoted`:
 
 ```sh
 merl source require --project P1 --database project.sqlite --version SV1 \
@@ -54,11 +54,11 @@ merl source require --project P1 --database project.sqlite --version SV1 \
   --scope issue-1 --actor alice --reason 'alice/Review evidence' --json
 ```
 
-The second call targets another scope, so the existing-promotion shortcut does
-not apply. Both requests produce the identity suffix
-`/issue-1/alice/alice/Review evidence`, but propose different scope and payload
-references. The help regression preserves this reachable error until the identity
-encoding changes.
+Each call targets a different scope. Repeating either returns `unchanged`
+without advancing the project revision. Old policy receipts remain valid for
+exact retries, including rejected requests whose actors later gain authority.
+The CLI checks the actor and proposal digest before reusing an old receipt;
+a distinct request that shared its old identity proceeds under the new encoding.
 
 Policy commands can return `rejected` or `conflict` as successful command results.
 Read-only commands describe their returned data or the statuses of the records
@@ -70,9 +70,11 @@ one.
 `tests/help_contract.rs` starts at public root help and follows `children` through
 each group, including the executable binding-policy parent. It checks required
 fields, examples for the requested command, related-topic resolution, and matching
-human output. Focused examples cover changed compiler retries, adapter and response
-failures, and erased compiler input. A binding-policy example erases the reason
-payload before reading its metadata. Other checks exclude payload lookup errors
+human output. Source requirement examples cover delimiter collisions, exact
+retries, and compatibility with old receipts. Other focused examples cover changed
+compiler retries, adapter and response failures, and erased compiler input. A
+binding-policy example erases the reason payload before reading its metadata.
+Other checks exclude payload lookup errors
 from metadata reads and policy commit errors from commands that return conflict
 receipts. The tests compare fields and behavior without snapshotting prose.
 

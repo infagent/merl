@@ -10,6 +10,7 @@ mod compilations;
 mod help;
 mod revalidation;
 mod security;
+mod source_requirement;
 
 use std::{
     collections::BTreeSet, error::Error, fmt, fmt::Write as _, fs::File, io::Read, path::Path,
@@ -1183,32 +1184,9 @@ fn execute(
                     promotion.source, promotion.scope
                 ));
             }
-            let identity = format!(
-                "{}/{}/{}/{}/{}",
-                project, intent.source, scope, actor, reason
-            );
-            let proposal = Proposal::AdministrativeAction {
-                id: stable_id("source_requirement_input", &identity)?,
-                event: merl_core::DomainEvent::PutObject {
-                    id: stable_id("source_requirement_event", &identity)?,
-                    object: intent.object,
-                    kind: merl_core::ObjectKind::try_from("source_coverage_requirement")
-                        .map_err(|error| invalid_input(&error.to_string()))?,
-                    payload: Some(intent.reason.clone()),
-                    issue_scope: Some(scope.to_owned()),
-                    lifecycle: merl_core::ObjectLifecycle::Active,
-                },
-            };
             let now = clock()?;
-            let record = apply_current(
-                &mut store,
-                &project,
-                &actor,
-                stable_id("source_requirement_evaluation", &identity)?,
-                stable_id("source_requirement_batch", &identity)?,
-                now,
-                &[proposal],
-            )?;
+            let record =
+                source_requirement::apply(&mut store, &project, &actor, &intent, reason, now)?;
             let disposition = record.inputs[0].disposition;
             let promotion = store.coverage_promotion(&project, &version, scope)?;
             let outcome = match disposition {
