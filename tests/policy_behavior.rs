@@ -73,6 +73,14 @@ fn projection_rebuild_restores_provider_facts_and_latest_sighting() {
 }
 
 #[test]
+fn a_newer_sighting_rejects_a_prepared_provider_change_without_a_new_revision() {
+    PolicyScenario::given_a_subscriber_and_a_trusted_issue_observation()
+        .when_the_provider_observation_is_accepted_twice()
+        .when_a_provider_change_is_prepared_before_a_newer_sighting()
+        .then_the_stale_provider_change_leaves_the_accepted_input_and_inbox_unchanged();
+}
+
+#[test]
 fn a_rejected_command_cannot_reuse_its_identity_with_new_content() {
     PolicyScenario::given_an_agent_without_decision_authority()
         .when_the_agent_requests_a_decision()

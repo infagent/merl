@@ -534,6 +534,24 @@ Trusted provider facts follow a deterministic policy path. For example, an authe
 
 If a later poll confirms the same provider facts, Merl records an append-only sighting and updates the mirror's last-seen time without advancing the project revision. A rebuild restores the mirror from accepted provider observations and those sightings. A different snapshot observed before that last-seen time cannot replace the current mirror.
 
+GitHub advances an Issue's `updatedAt` when a comment arrives even if its title,
+state, labels, assignees, and milestone remain unchanged. That activity timestamp
+is a freshness watermark. A timestamp-only refresh appends a sighting naming the
+current accepted provider observation, the local seen time, and the upstream
+update time. It creates no accepted revision, delta, or inbox entry. An exact
+reconfirmation follows the same path. Changes to the other mirrored snapshot
+fields still require deterministic provider policy and an accepted revision,
+including when they arrive alongside a comment.
+
+Accepted provider inputs and their snapshot payloads keep their original bytes.
+The current Issue head exposes freshness from the accepted input and later
+sightings. Both live capture and the accepted-write boundary reject snapshots
+older than that upstream watermark; a changed fact must advance it. Sighting
+writes guard the accepted observation they reconfirm. Rebuild restores the same
+freshness from retained sightings, including legacy sightings that have only a
+local seen time. Compilation and semantic acceptance remain independent of this
+freshness path.
+
 Replay and evaluation results do not enter accepted state on their own. Promotion creates a new policy evaluation against current state. The original inputs remain unchanged.
 
 ### Applying recorded assertions

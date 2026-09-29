@@ -130,9 +130,19 @@ provider timestamps before appending source versions.
 Each new eager body gets a causal compiler intent before execution. A successful
 or failed completed run keeps its identity on refresh and does not run again.
 An interrupted pending intent can resume with the same compiler configuration.
-Compilation records assertions; deterministic provider policy accepts open/closed
-state, labels, assignees, and timestamps through the project revision and inbox.
+Compilation records assertions; deterministic provider policy accepts changes to
+open/closed state, labels, assignees, title, and milestone through the project
+revision and inbox. A refresh that changes only the Issue's `updatedAt` records
+a durable freshness sighting without a revision or inbox entry. An identical
+snapshot also records a sighting. Both paths retain the upstream watermark so
+an older response cannot replace the mirror.
 Use `source assertions` to inspect a run and `source apply` to evaluate its assertions through policy.
+
+In `merl.issue-view/v1`, `provider.upstream_updated_at_millis` remains the timestamp
+from the immutable accepted provider input. `provider.freshness` reports the
+latest `upstream_updated_at_millis` and local `last_seen_at_millis`, including
+later sightings. Human Issue views report the same freshness times. Rebuild
+preserves them without inventing another accepted provider change.
 
 Both output modes report `captured`, `unchanged`, `failed`, or `incomplete`.
 JSON uses `merl.issue-capture/v1` and reports the binding policy, new version and
