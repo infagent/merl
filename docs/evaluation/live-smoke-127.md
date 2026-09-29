@@ -107,11 +107,13 @@ caused the extra accepted provider event. The #70 fake adds a comment without
 advancing the enclosing Issue timestamp. #128 requires a realistic regression and
 a resolution that preserves provider facts and freshness semantics.
 
-Local evidence remains at `/tmp/merl-smoke-127-bgxn95ru`: metadata and hashes,
-compiler prompt/configuration/wrapper, three model call records, and each CLI
-command with its JSON result. The live authority is `project.sqlite`; the erased
-copy is `purge.sqlite`. These temporary files are diagnostic artifacts, not a CI
-fixture or a portable evaluation package.
+During the run, I saved diagnostic artifacts under
+`/tmp/merl-smoke-127-bgxn95ru`: metadata and hashes, compiler
+prompt/configuration/wrapper, three model call records, and each CLI command with
+its JSON result. The live authority was `project.sqlite`; the erased copy was
+`purge.sqlite`. Temporary-directory cleanup may remove these files. This
+checked-in report records the findings for future reference; it does not archive
+the raw artifacts or provide a portable evaluation package.
 
 No planned smoke-test stage was skipped. Revalidation, context expansion,
 permission failures, pagination, and a representative model-quality evaluation
