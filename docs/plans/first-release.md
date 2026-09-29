@@ -177,6 +177,7 @@ The release is ready when:
 - hindsight revalidation and its expansion successors remain separate from ordinary live semantic coverage;
 - cosmetic and material edits exercise policy paths that respectively retain current support or supersede, weaken, or invalidate it;
 - GitHub owns mirrored fields such as open or closed state, labels, and provider timestamps;
+- timestamp-only Issue activity advances a durable provider-sighting watermark without a project revision, delta, or inbox entry; views expose it separately from the immutable accepted input, and stale-response guards and rebuild preserve it;
 - live `issue capture` establishes a repository binding and durable capture policy, refreshes without duplicate versions or completed compiler work, and reports incomplete provider responses without inferring deletions;
 - live eager bodies receive a causal compilation intent before execution regardless of coverage requirement; optional eager failures do not create required coverage gaps, while capture-only and on-demand sources stay cold;
 - the offline corpus importer retains its fixed `fixture_import_v1` capture policy (`eager`, `required`) for every source version; live binding policy does not change fixture imports;

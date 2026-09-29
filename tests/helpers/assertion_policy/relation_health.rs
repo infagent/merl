@@ -279,6 +279,9 @@ fn remove_relation_health_schema(database: &super::Database) {
     connection
         .execute_batch(
             "DROP VIEW current_relations;
+        DROP VIEW provider_issue_freshness;
+        DROP INDEX provider_sighting_watermarks;
+        ALTER TABLE provider_issue_sightings DROP COLUMN upstream_updated_at_millis;
         DROP VIEW relation_support_availability;
         DROP TABLE source_policy_selections;
         DROP TABLE binding_policy_changes;
