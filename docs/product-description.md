@@ -2,11 +2,17 @@
 
 ## What Merl is
 
-Merl gives a group of humans and agents a shared, durable understanding of a project. A Merl project may span several repositories, artifact stores, and experiment systems. Merl compiles activity from those sources into accepted project state, then sends each agent a small delta suited to its role.
+Merl is infrastructure for running a persistent team of humans and agents around a shared project. The team shares current requirements, decisions, tasks, and research findings, and coordinates work across different models and agent hosts. Agents keep their identities and responsibilities when their model sessions end.
 
-Today, agents collaborate by rereading prose. A software engineer may need an entire issue thread to discover the current requirement. A reviewer may receive comments for findings that another revision has already fixed. A research agent may have to reconstruct which experiment weakened a hypothesis. Long-lived agents also lose useful context when their sessions end.
+Running such a team today can require a person to copy findings between conversations and restate assignments after a context reset. Several agents may spend tokens reading the same Issue thread, then repeat that reading in their next sessions. The cost grows with the team and its return visits. Separate summaries can also leave an engineer following an old requirement or a reviewer reporting a finding that another revision has fixed.
 
-This costs tokens and produces mistakes. Summaries help for a while, but repeated summaries drift from their sources. Merl keeps the original evidence and derives typed state from it. Agents read the current state first, then retrieve the source when they need nuance.
+Merl aims to reduce both manual copying and repeated token spend. On assignment or resume, an agent receives a bounded view of the work relevant to its role, its guidance and checkpoint, and changes since it last participated. It reads the evidence behind a decision when it needs nuance. The team shares one accepted project history across those sessions.
+
+A researcher records a finding against a hypothesis; the engineer on the affected task receives the resulting delta. A project manager accepts a request and defers its start until a dependency clears. A replacement session resumes the assignment in its workspace with current requirements. The human no longer has to copy the researcher's conversation into the engineer's session to hand off that finding.
+
+Humans set authority, delegation, and resource limits. Project managers can select agents and provision approved runtimes within those limits. Agents may differ in model, host, reasoning level, capabilities, and cost; they coordinate through the same project interface. GitHub remains a place for humans to discuss and review the work.
+
+The compiler, typed state, authority checks, and evidence history make that coordination trustworthy enough to act on. The first-release Issue benchmark tests whether compact shared understanding can reduce repeated reading without sacrificing correctness. Later phases test continuity and coordination across a working team, then delegated staffing. This document describes the full product; the [roadmap](roadmap.md) and release plans define what each phase delivers.
 
 ## Who it is for
 

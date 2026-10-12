@@ -1,20 +1,20 @@
 # Merl
 
-Merl gives teams of coding and research agents a shared, durable understanding of their work.
+Merl is infrastructure for running a persistent team of humans and agents around a shared project.
 
-Agents waste tokens rebuilding the same context from GitHub threads, research notes, and old conversations. Merl captures that material, compiles it into provenance-backed project state, and gives each agent a compact view of the changes relevant to its role. Any decision, finding, claim, or task can expand back to its evidence.
+Running a team of agents can mean copying findings between conversations, repeating instructions after a restart, and paying several models to reread the same history. Merl aims to cut that token spend and manual coordination. Each agent receives the current state relevant to its role and assignment, plus changes since it last participated. It can expand a decision or finding back to its evidence when it needs more detail.
 
-The state model covers software work and research. A separate control plane tracks assignments, inboxes, checkpoints, agent guidance, and runtime state. GitHub stays readable: Merl keeps routine machine activity internal, publishes significant events as ordinary prose, and maintains one bounded status view.
+The team coordinates through shared project objects. A researcher records a finding; the engineer working on the affected task receives the change. A project manager accepts or defers work, and a reviewer sees current requirements and unresolved findings. Humans continue to discuss work through GitHub and decide who may act on the project's behalf.
 
-One project may span several repositories, and one repository may participate in several projects. Projects coordinate through permissioned requests and exports while retaining separate accepted histories.
+An agent keeps its logical identity across disposable model sessions. Its assignment, guidance, checkpoint, and inbox cursor survive a context reset. A fresh session resumes from current project state without loading the previous transcript. Teams can mix Codex, Claude Code, and other hosts, with different models, capabilities, and costs.
 
-Humans approve agent templates and resource limits. Project managers can staff work from those templates, choose between stronger and cheaper runtimes, and reset task-scoped agent context between unrelated assignments. Durable practices and checkpoints survive the reset.
+The full product includes assignments and handoffs, isolated workspaces, agent selection and spawning, and resource limits. Humans approve templates and delegation boundaries; project managers staff and operate the team within them. Projects may span repositories and coordinate with other projects through permissioned requests.
 
-On one computer, concurrent writers use separate Git worktrees and task branches. Merl gives each managed agent bounded, disk-backed scratch space instead of relying on the system `/tmp`. A portable manifest moves non-secret agent and workspace setup to another computer.
+Shared state must be trustworthy enough for agents to act on it. Merl separates model interpretations from accepted decisions, checks authority, and retains links to evidence. These mechanisms support the team's work and make errors inspectable.
 
-Merl ships as a Rust CLI and project authority. Local projects use SQLite; shared projects use the same application services behind a reachable authority. Agents discover commands through concise, hierarchical help and consume versioned JSON output when human-readable output is not appropriate.
+Merl is under development as a Rust CLI with a local SQLite authority. The first release tests one foundation of the team workflow: whether agents can use compact Issue state as accurately as raw history while spending fewer tokens over repeated reads. Phase 4 adds persistent team operations for manually started agents. Phase 5 adds delegated provisioning and control. The [roadmap](docs/roadmap.md) distinguishes those release scopes from the full product described here.
 
-Merl is under active design. Start with the [product description](docs/product-description.md), then read the [roadmap](docs/roadmap.md), [UI behavior contract](docs/user-interface.md), [architecture](docs/architecture.md), and [architecture decisions](docs/adr/).
+Start with the [product description](docs/product-description.md), then read the [UI behavior contract](docs/user-interface.md), [architecture](docs/architecture.md), and [architecture decisions](docs/adr/).
 
 ## Contributing
 

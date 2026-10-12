@@ -6,7 +6,7 @@ This document owns the scope and acceptance criteria for Merl's first release. T
 
 ## Goal
 
-The first release tests Merl's central claim: after repeated reads, agents can use compact state as accurately as the original GitHub thread and spend fewer tokens overall.
+Merl's product goal is a persistent team of humans and agents that coordinates with less manual context copying and repeated token spend. The first release tests a foundation of that workflow: after repeated reads, agents can use compact state as accurately as the original GitHub thread and spend fewer tokens overall.
 
 The proof starts with a historical Issue that contains stale claims, corrections, decisions, open questions, research discussion, and linked artifacts. Merl reconstructs its current state, ingests one new comment, and gives two agent roles only the resulting delta. Every rendered fact remains traceable to its derivation input.
 
@@ -229,4 +229,4 @@ The first release excludes:
 - graphical interfaces;
 - packaged artifacts and curl installation.
 
-These capabilities remain part of the product architecture. They enter release planning only after the Issue benchmark supports Merl's central claim.
+These capabilities belong to the persistent-team product described in the [product description](../product-description.md). The [roadmap](../roadmap.md) places team operations and delegated management after the Issue benchmark establishes evidence for compact shared context.

@@ -2,7 +2,9 @@
 
 Status: draft
 
-Merl's roadmap follows the product risks. The first release tests whether compiled project state saves tokens without losing meaning. It is a proof release, with deliberate Issue-by-Issue capture. Phase 4 is the first operational release: it maintains the active part of a repository and puts that state to work across a team that a human operates. Phase 5 lets an authorized manager staff and control the team.
+Merl's goal is a persistent team of humans and heterogeneous agents that can coordinate without repeated context copying and excessive token spend. The releases test the foundations before putting them together in a working team.
+
+The first release tests whether agents can rely on compact shared state and spend fewer tokens over repeated reads. It uses deliberate Issue-by-Issue capture to measure that proposition. Phase 4 is the first operational release: a human starts the agents, and Merl maintains their assignments, isolated workspaces, and context across sessions while keeping repository state current. Phase 5 lets an authorized manager staff and control the team within human-approved limits.
 
 The [product description](product-description.md) defines the full product. The [architecture](architecture.md) and [UI behavior contract](user-interface.md) define its semantics. The shorter plans below choose what to build and what evidence closes each phase.
 
@@ -21,7 +23,7 @@ Phases 0 through 3 form the first-release track. Phase 4 is the first multi-agen
 
 ## Why Phase 4 comes before spawning
 
-The original problem is repeated context, not process creation. A useful Phase 4 agent should enter a safe worktree, learn its assignment, receive a bounded view, and resume after a restart without rereading the project. Merl must also keep the active repository state current without asking a human to refresh every Issue. A human can still start the process.
+Phase 4 establishes the work an agent must be able to resume after launch. It should enter a safe worktree, learn its assignment, receive a bounded view, and continue after a restart without rereading the project. Merl must also keep the active repository state current without asking a human to refresh every Issue. A human can start the process while we test those coordination and continuity guarantees.
 
 This order tests Merl's multi-agent value before host provisioning complicates the result. It also gives Phase 5 one stable path to call after a host starts an agent.
 
