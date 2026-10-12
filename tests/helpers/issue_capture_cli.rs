@@ -1,6 +1,9 @@
 #[path = "issue_capture_cli/binding_policy.rs"]
 mod binding_policy;
+#[path = "issue_capture_cli/freshness.rs"]
+mod freshness;
 pub use binding_policy::PolicyCases;
+pub use freshness::{Freshness, ProviderChanges};
 use serde_json::{Value, json};
 use std::{fs, path::PathBuf, process::Command};
 

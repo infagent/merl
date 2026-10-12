@@ -1781,6 +1781,79 @@ impl PolicyScenario {
         self
     }
 
+    pub fn when_a_provider_change_is_prepared_before_a_newer_sighting(&mut self) -> &mut Self {
+        let mut observation = self
+            .prepared
+            .as_ref()
+            .unwrap()
+            .provider
+            .as_ref()
+            .unwrap()
+            .clone();
+        observation.id = id("later-provider-input");
+        observation.state = ProviderIssueState::Open;
+        observation.closed_at_millis = None;
+        observation.upstream_updated_at_millis = Some(NOW + 2);
+        observation.observed_at_millis = NOW + 10;
+        let proposed = evaluate(
+            &self.store,
+            &self.project,
+            &id("provider-worker"),
+            id("later-provider-eval"),
+            id("later-provider-batch"),
+            NOW + 10,
+            &self.rules,
+            &[Proposal::ProviderObservation {
+                event: event(
+                    "later-provider-event",
+                    "I1",
+                    "provider_issue",
+                    Some(observation.snapshot_payload.clone()),
+                ),
+                observation,
+            }],
+        )
+        .expect("prepare provider change before freshness advances");
+        self.store
+            .note_provider_sighting(
+                &self.project,
+                &id("I1"),
+                &id("provider-input"),
+                NOW + 5,
+                Some(NOW + 4),
+            )
+            .expect("newer activity without a fact change");
+        self.expected_provider = self
+            .store
+            .provider_issue_head(&self.project, &id("I1"))
+            .unwrap();
+        self.stale_result = Some(proposed.commit(&mut self.store));
+        self
+    }
+
+    pub fn then_the_stale_provider_change_leaves_the_accepted_input_and_inbox_unchanged(&mut self) {
+        assert!(matches!(
+            self.stale_result,
+            Some(Err(StoreError::StaleProviderObservation))
+        ));
+        assert_eq!(self.store.project_revision(&self.project).unwrap().get(), 1);
+        let head = self
+            .store
+            .provider_issue_head(&self.project, &id("I1"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(Some(&head), self.expected_provider.as_ref());
+        assert_eq!(head.input.upstream_updated_at_millis, Some(NOW));
+        assert_eq!(head.latest_upstream_updated_at_millis, Some(NOW + 4));
+        assert_eq!(
+            self.store
+                .inbox_after(&self.project, &id("engineer"), 0.into())
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
     pub fn when_disposable_issue_projections_are_cleared(&mut self) -> &mut Self {
         let file = self.persisted_file.as_ref().expect("file-backed authority");
         let connection = rusqlite::Connection::open(&file.0).expect("open disposable projection");

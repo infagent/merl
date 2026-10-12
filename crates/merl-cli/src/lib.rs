@@ -2099,6 +2099,10 @@ fn render_issue_view(
                 "authority": "provider", "state": provider.input.state.as_str(),
                 "revision": provider.revision.get(),
                 "upstream_updated_at_millis": provider.input.upstream_updated_at_millis,
+                "freshness": {
+                    "upstream_updated_at_millis": provider.latest_upstream_updated_at_millis,
+                    "last_seen_at_millis": provider.last_seen_at_millis
+                },
                 "labels": provider.input.label_provider_ids,
                 "assignees": provider.input.assignee_provider_ids
             })),
@@ -2119,6 +2123,15 @@ fn render_issue_view(
         if let Some(provider) = &state.provider {
             writeln!(output, "Provider state: {}", provider.input.state.as_str())
                 .expect("String write");
+            writeln!(
+                output,
+                "Provider freshness: upstream updated {}; last seen {} (Unix milliseconds)",
+                provider
+                    .latest_upstream_updated_at_millis
+                    .map_or_else(|| "unknown".to_owned(), |time| time.to_string()),
+                provider.last_seen_at_millis
+            )
+            .expect("String write");
         }
         for object in &objects {
             writeln!(

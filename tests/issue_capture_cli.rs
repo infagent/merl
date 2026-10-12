@@ -46,6 +46,24 @@ fn provider_facts_share_the_project_delta_and_inbox() {
 }
 
 #[test]
+fn timestamp_only_refreshes_preserve_freshness_and_stale_response_guards() {
+    issue_capture_cli::Freshness::given_a_captured_issue()
+        .when_only_the_activity_timestamp_advances()
+        .then_freshness_advances_without_accepted_work()
+        .when_rebuilt_and_stale_responses_arrive()
+        .then_rebuild_preserves_the_watermark_and_stale_responses_change_nothing()
+        .when_newer_provider_facts_arrive()
+        .then_the_provider_change_has_its_own_revision();
+}
+
+#[test]
+fn comments_do_not_hide_changes_to_other_provider_facts() {
+    issue_capture_cli::ProviderChanges::given_each_kind_of_provider_change()
+        .when_a_comment_and_the_provider_change_arrive_together()
+        .then_each_provider_change_reaches_policy_delta_and_inbox();
+}
+
+#[test]
 fn refresh_reuses_the_binding_capture_policy() {
     Capture::given_a_new_project()
         .given_optional_capture_policy()

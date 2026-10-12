@@ -384,11 +384,8 @@ fn validate_refresh(
         .map(utc_millis)
         .transpose()?;
     if let Some(head) = store.provider_issue_head(project, &super::fixture_issue_id(fixture)?)?
-        && head
-            .input
-            .upstream_updated_at_millis
-            .zip(updated)
-            .is_some_and(|(prior, incoming)| incoming < prior)
+        && head.latest_upstream_updated_at_millis.is_some()
+        && updated < head.latest_upstream_updated_at_millis
     {
         return Err(StoreError::StaleProviderObservation.into());
     }
