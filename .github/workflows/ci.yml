@@ -62,6 +62,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y bubblewrap
 
+      - name: Verify isolated evaluator runtime
+        run: bwrap --unshare-all --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib64 /lib64 --proc /proc --dev /dev --tmpfs /tmp -- /usr/bin/true
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
