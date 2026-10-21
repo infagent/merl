@@ -1,0 +1,33 @@
+{
+  "schema": "merl.visible-approved-unit-index/v1",
+  "version": "SYNTHETIC",
+  "approved_scope_file": "SYNTHETIC",
+  "approved_scope_sha256": "SYNTHETIC",
+  "question_count": 0,
+  "unit_count": 0,
+  "source_prefix_count": 0,
+  "units": [
+    {
+      "unit_id": "SYNTHETIC",
+      "question_id": "SYNTHETIC",
+      "case": "SYNTHETIC",
+      "cutoff": 0,
+      "reader_allowlist": [
+        {
+          "package_path": "SYNTHETIC",
+          "reader_destination": "SYNTHETIC",
+          "sha256": "SYNTHETIC"
+        }
+      ],
+      "evaluator_oracle": "SYNTHETIC",
+      "evaluator_oracle_sha256": "SYNTHETIC",
+      "grader_static_allowlist": [
+        {
+          "package_path": "SYNTHETIC",
+          "sha256": "SYNTHETIC",
+          "grader_destination": "SYNTHETIC"
+        }
+      ]
+    }
+  ]
+}

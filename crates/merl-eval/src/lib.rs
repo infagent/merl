@@ -9,8 +9,12 @@ use merl_corpus::fixture::{
 use serde::Serialize;
 
 mod adapters;
+pub mod grading;
+pub mod isolation;
+pub mod package;
 mod preparation;
 mod runner;
+pub mod visible;
 
 pub use adapters::{CliMerlSurface, MerlTrialArtifact, ProcessModelAdapter, ProcessScorer};
 pub use preparation::{
@@ -22,8 +26,8 @@ pub use runner::{
     AnswerAction, AnswerCallAction, AnswerCallRecord, AnswerRequest, AnswerResponse,
     BenchmarkConfig, BenchmarkError, BenchmarkMethod, BenchmarkReport, BenchmarkRunner, BreakEven,
     CutoffFidelity, EvaluationQuestion, MerlPrepared, MerlSurface, MethodStats, ModelAdapter,
-    RandomnessControl, Score, Scorer, SummaryCallRecord, SummaryRequest, SummaryResponse,
-    SummarySource, TokenUsage, TrialIdentity, TrialReport,
+    PreparationRecord, RandomnessControl, Score, Scorer, SummaryCallRecord, SummaryRequest,
+    SummaryResponse, SummarySource, TokenUsage, TrialFailure, TrialIdentity, TrialReport,
 };
 
 /// One of the reading methods in the first-release comparison.
@@ -153,10 +157,7 @@ pub fn prepare_reader_input_at(
     }
 
     let unordered_groups = visible_unordered_groups(fixture, cutoff);
-    let cutoff_splits_unordered_group = usize::try_from(cutoff)
-        .ok()
-        .and_then(|index| fixture.observations.get(index))
-        .is_some_and(|next| next.ambiguous_order_with_previous);
+    let cutoff_splits_unordered_group = cutoff_splits_unordered_group(fixture, cutoff);
     let candidates = fixture
         .observations
         .iter()
@@ -331,6 +332,15 @@ pub fn prepare_exact_reader_input(
         return Err(InputError::NonCausalHistory);
     }
     prepare_reader_input(fixture, cutoff, method, recent_window)
+}
+
+// The trusted controller may preserve this fidelity fact across truncation.
+// It carries no later source content or state into an eligible prefix.
+pub(crate) fn cutoff_splits_unordered_group(fixture: &Fixture, cutoff: u64) -> bool {
+    usize::try_from(cutoff)
+        .ok()
+        .and_then(|index| fixture.observations.get(index))
+        .is_some_and(|next| next.ambiguous_order_with_previous)
 }
 
 fn visible_unordered_groups(fixture: &Fixture, cutoff: u64) -> Vec<Vec<u64>> {

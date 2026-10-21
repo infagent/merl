@@ -16,6 +16,8 @@ use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+mod visible_cli;
+
 const PLAN_SCHEMA: &str = "merl.eval-plan/v1";
 
 #[derive(Deserialize)]
@@ -90,9 +92,27 @@ struct VerifiedTrials {
 
 fn main() {
     let arguments = env::args().collect::<Vec<_>>();
+    if arguments.get(1).is_some_and(|arg| arg == "package") {
+        match visible_cli::command(&arguments[2..]) {
+            Ok((report, success)) => {
+                println!("{report}");
+                if !success {
+                    process::exit(1);
+                }
+            }
+            Err(code) => {
+                eprintln!(
+                    "{}",
+                    json!({"schema":"merl.eval-visible-error/v1","error":code})
+                );
+                process::exit(1);
+            }
+        }
+        return;
+    }
     if arguments.len() == 2 && arguments[1] == "--help" {
         println!(
-            "merl-eval <inspect|run> --plan <path>\nInspect freeze digests or run five paired Issue readers. Held-out runs require a freeze record."
+            "merl-eval <inspect|run> --plan <path>\nmerl-eval package <verify|inspect|run> ...\nInspect freeze digests or run five paired Issue readers. Held-out runs require a freeze record."
         );
         return;
     }

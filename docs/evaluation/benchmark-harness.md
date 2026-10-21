@@ -1,5 +1,7 @@
 # Benchmark harness
 
+For the human-approved visible v2 inventory, use the [visible package integration](visible-package-integration.md). It preserves `question_id@cutoff`, exact per-cutoff prompts, semantic answers and categorical verdicts, and supplies an isolated process boundary. The numeric scorer and `merl.eval-plan/v1` examples below retain their legacy contract; they do not interpret the approved categorical inventory. The new package route rejects held-out fixtures.
+
 `merl-eval` runs the five Issue-reading methods in [the first-release plan](../plans/first-release.md#evaluation-corpus). It is evaluator-side tooling. Keep natural captures that await redistribution review, scoring keys, and held-out files outside implementation-agent workspaces.
 
 The runner handles several questions per Issue, including questions at different cutoffs. Within a paired trial, all five readers get the same question, system prompt, task prompt, model identity, effort, and sampling settings. Only their context and available tools differ:

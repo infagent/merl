@@ -1,0 +1,33 @@
+{
+  "schema": "merl.visible-reader-method/v1",
+  "version": "SYNTHETIC",
+  "question_policy": {
+    "semantic_vs_engine": "SYNTHETIC",
+    "time": "SYNTHETIC",
+    "alternatives": "SYNTHETIC",
+    "scope": "SYNTHETIC"
+  },
+  "matching_rules": [
+    "SYNTHETIC"
+  ],
+  "scoring_rules": {
+    "unit": "SYNTHETIC",
+    "prompt_selection": "SYNTHETIC",
+    "audit_labels": "SYNTHETIC",
+    "verdicts": {
+      "correct": "SYNTHETIC",
+      "incomplete": "SYNTHETIC",
+      "incorrect": "SYNTHETIC",
+      "not_scored": "SYNTHETIC"
+    },
+    "uncertainty_acceptance": "SYNTHETIC",
+    "extra_claim_guard": "SYNTHETIC",
+    "no_double_count": "SYNTHETIC",
+    "aggregation": "SYNTHETIC"
+  },
+  "method_approval": "SYNTHETIC",
+  "provenance": {
+    "approved_rules_sha256": "SYNTHETIC",
+    "approved_inventory_sha256": "SYNTHETIC"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "schema": "merl.visible-source-prefix/v1",
+  "case": "SYNTHETIC",
+  "source_observation_cutoff": 0,
+  "source_identity": {
+    "issue_provider_id": "SYNTHETIC",
+    "provider": "SYNTHETIC"
+  },
+  "history_fidelity": "SYNTHETIC",
+  "observations": [
+    {
+      "author": {
+        "login": "SYNTHETIC",
+        "provider_id": "SYNTHETIC"
+      },
+      "body": "SYNTHETIC",
+      "body_sha256": "SYNTHETIC",
+      "created_at": "SYNTHETIC",
+      "kind": "SYNTHETIC",
+      "occurred_at": "SYNTHETIC",
+      "provider_id": "SYNTHETIC",
+      "sequence": 0,
+      "version_id": "SYNTHETIC"
+    }
+  ]
+}
