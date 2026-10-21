@@ -14,7 +14,7 @@ JSON results and never opens SQLite or calls application crates.
 | Setup | `project init`, `project authority grant`, `inbox subscribe` | An administrator grants review authority. The captured source supplies the Issue author's identity for a separate decision-author grant. |
 | Capture and review | `issue capture`, `source assertions`, `source apply`, `candidate list/show/accept` | Eager compilation records an interpretation. D1 remains absent until a reviewer accepts its candidate. |
 | Provenance | `show D1 --source --history` | The decision names its policy evaluation and input, compiler run, source version, and exact byte span containing `Keep gain fixed.` |
-| Incremental delivery | `issue view`, `inbox poll/ack`, `issue capture`, `source apply`, `project delta` | After the reader catches up, one new comment from the authorized author creates D2 in one accepted revision and one compact inbox entry. Capture and application retries add nothing. |
+| Incremental delivery | `issue view`, `inbox poll/ack`, `issue capture`, `source apply`, `project delta` | The comment advances the enclosing Issue's `updatedAt`. Capture updates freshness while leaving accepted revision and inbox unchanged. Application creates D2 in one accepted revision and one compact inbox entry. Capture and application retries add nothing. |
 | Revalidation | `project revalidation list/run/resolve`, `show D2 --source --history` | An edit makes support pending. A hindsight run and explicit confirmation restore support without replacing D2 or changing its semantic history. |
 | Recovery | `source replay`, `compilation show`, `project rebuild` | Replay produces a separate successful run. Accepted views, delta history, and D2's provenance remain unchanged. Rebuild dispatches no compiler work. |
 | Structured action and note | `decision create --note`, `source show`, `source compile/apply`, `candidate accept` | D3 reaches accepted state without a compiler. Later compilation marks the repeated decision `duplicate`; review accepts the note's added finding F1. D3 retains one semantic transition. |
@@ -60,7 +60,14 @@ services are required. This evidence supports the
 audit, establish model quality, or replace a smoke test against a real repository.
 
 The [live #127 smoke test](../evaluation/live-smoke-127.md) found that GitHub
-advances the Issue timestamp when a comment arrives, producing an extra accepted
-provider revision and inbox entry. This fixture keeps the enclosing timestamp
-unchanged. [#128](https://github.com/infagent/merl/issues/128) tracks the resulting
-gap in the one-comment delivery contract before freeze.
+advances the Issue timestamp when a comment arrives. The original fixture left
+that timestamp unchanged and missed the extra provider revision. The #128
+regression advances it and checks the captured freshness before semantic
+application. The test failed on `provider_changed=true` before the fix.
+
+The focused scenarios in `tests/issue_capture_cli.rs` also cover timestamp-only
+refresh, rebuild, stale responses after a sighting, and a later real provider
+change. A table checks comments arriving alongside changes to state, labels,
+assignees, milestone, or title: each still creates its own provider revision and
+inbox entry. These controlled regressions preserve the live report as evidence
+of the original failure; they do not claim a second live-model run.

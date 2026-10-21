@@ -12,6 +12,7 @@ pub use relation_evidence::{
 };
 mod commands;
 mod expansions;
+mod provider;
 mod revalidation;
 mod temporal;
 pub use candidates::{Candidate, CandidateReview, ReviewAction};
@@ -35,7 +36,7 @@ use merl_core::{
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 
-const SCHEMA_VERSION: i64 = 30;
+const SCHEMA_VERSION: i64 = 31;
 
 /// Failures at the local persistence boundary.
 #[derive(Debug)]
@@ -642,6 +643,10 @@ pub struct AcceptedProviderObservation {
     pub revision: ProjectRevision,
     /// Last provider sighting, including reconfirmations that did not advance the project.
     pub last_seen_at_millis: i64,
+    /// Latest upstream activity time across this accepted fact and its sightings.
+    ///
+    /// The accepted input retains the timestamp used by its original policy evaluation.
+    pub latest_upstream_updated_at_millis: Option<i64>,
 }
 
 /// Immutable intent and causal input for one compiler attempt.
@@ -1034,6 +1039,10 @@ impl Store {
             if version < 30 {
                 transaction
                     .execute_batch(include_str!("../migrations/0030_compilation_selectors.sql"))?;
+            }
+            if version < 31 {
+                transaction
+                    .execute_batch(include_str!("../migrations/0031_provider_freshness.sql"))?;
             }
             let broken: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
@@ -4542,13 +4551,13 @@ impl Store {
         project: &ProjectId,
         issue: &ObjectId,
     ) -> Result<Option<AcceptedProviderObservation>, StoreError> {
-        let row: Option<(String, String, String, String, Option<i64>, Option<i64>, i64, i64, i64, i64, i64)> = self
+        let row: Option<(String, String, String, String, Option<i64>, Option<i64>, i64, i64, i64, i64, i64, Option<i64>)> = self
             .connection
             .query_row(
                 "SELECT o.id, o.binding_id, o.issue_state, o.snapshot_payload_id,
                     o.upstream_updated_at_millis, o.closed_at_millis, o.observed_at_millis, b.revision,
-                    o.label_ids_known, o.assignee_ids_known, h.last_seen_at_millis
-             FROM provider_issue_heads h
+                    o.label_ids_known, o.assignee_ids_known, h.last_seen_at_millis, h.upstream_updated_at_millis
+             FROM provider_issue_freshness h
              JOIN provider_observations o
                ON o.project_id = h.project_id AND o.id = h.observation_id
              JOIN domain_event_batches b
@@ -4568,6 +4577,7 @@ impl Store {
                         row.get(8)?,
                         row.get(9)?,
                         row.get(10)?,
+                        row.get(11)?,
                     ))
                 },
             )
@@ -4585,6 +4595,7 @@ impl Store {
                 label_ids_known,
                 assignee_ids_known,
                 last_seen_at_millis,
+                latest_upstream_updated_at_millis,
             )| {
                 let label_provider_ids = provider_fact_ids(
                     &self.connection,
@@ -4627,6 +4638,7 @@ impl Store {
                         u64::try_from(revision).map_err(|_| StoreError::CorruptHistory)?,
                     ),
                     last_seen_at_millis,
+                    latest_upstream_updated_at_millis,
                 })
             },
         )
@@ -4639,37 +4651,24 @@ impl Store {
     /// a value the provider reconfirmed more recently.
     ///
     /// # Errors
-    /// Returns an error if the Issue mirror is missing or storage fails.
+    /// Returns an error if the Issue mirror is missing, changes before the
+    /// sighting commits, the seen time regresses, or storage fails.
     pub fn note_provider_seen(
         &mut self,
         project: &ProjectId,
         issue: &ObjectId,
         observed_at_millis: i64,
     ) -> Result<(), StoreError> {
-        let transaction = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let observation: Option<String> = transaction.query_row(
-            "SELECT observation_id FROM provider_issue_heads WHERE project_id=?1 AND issue_id=?2",
-            params![project.as_str(), issue.as_str()], |row| row.get(0),
-        ).optional()?;
-        let observation = observation.ok_or(StoreError::CorruptHistory)?;
-        transaction.execute(
-            "INSERT OR IGNORE INTO provider_issue_sightings (project_id,issue_id,observation_id,seen_at_millis)
-             VALUES (?1,?2,?3,?4)",
-            params![project.as_str(),issue.as_str(),observation,observed_at_millis],
-        )?;
-        let changed = transaction.execute(
-            "UPDATE provider_issue_heads
-             SET last_seen_at_millis = MAX(last_seen_at_millis, ?3)
-             WHERE project_id = ?1 AND issue_id = ?2",
-            params![project.as_str(), issue.as_str(), observed_at_millis],
-        )?;
-        if changed == 0 {
-            return Err(StoreError::CorruptHistory);
-        }
-        transaction.commit()?;
-        Ok(())
+        let head = self
+            .provider_issue_head(project, issue)?
+            .ok_or(StoreError::CorruptHistory)?;
+        self.note_provider_sighting(
+            project,
+            issue,
+            &head.input.id,
+            observed_at_millis,
+            head.latest_upstream_updated_at_millis,
+        )
     }
 
     /// Rebuilds the disposable object projection from the accepted event log.
@@ -6263,9 +6262,8 @@ fn ensure_fresh_provider_observation(
 ) -> Result<(), StoreError> {
     let prior: Option<(i64, Option<i64>)> = transaction
         .query_row(
-            "SELECT h.last_seen_at_millis, o.upstream_updated_at_millis
-         FROM provider_issue_heads h JOIN provider_observations o
-         ON o.project_id = h.project_id AND o.id = h.observation_id
+            "SELECT h.last_seen_at_millis, h.upstream_updated_at_millis
+         FROM provider_issue_freshness h
          WHERE h.project_id = ?1 AND h.issue_id = ?2",
             params![project.as_str(), observation.issue.as_str()],
             |row| Ok((row.get(0)?, row.get(1)?)),

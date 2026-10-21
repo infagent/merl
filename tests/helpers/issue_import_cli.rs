@@ -11,6 +11,10 @@ use merl_core::{
 use merl_store::{SourceBinding, SourceCapture, Store};
 use sha2::{Digest, Sha256};
 
+#[path = "issue_import_cli/fixture_retry.rs"]
+mod fixture_retry;
+pub use fixture_retry::FixtureRetry;
+
 pub struct CliIssueHistory {
     directory: TestDirectory,
     latest: Option<serde_json::Value>,

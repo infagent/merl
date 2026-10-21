@@ -218,11 +218,19 @@ impl Workflow {
         comment["updatedAt"] = comment["createdAt"].clone();
         comment["userContentEdits"]["nodes"] = json!([]);
         comment["includesCreatedEdit"] = json!(false);
+        // GitHub also advances the enclosing Issue timestamp when a comment arrives.
+        self.pages[0]["data"]["repository"]["issue"]["updatedAt"] = comment["createdAt"].clone();
         self.pages[0]["data"]["repository"]["issue"]["comments"]["nodes"]
             .as_array_mut()
             .unwrap()
             .push(comment);
         self.capture("later_capture");
+        let view = self.issue_view();
+        self.recorded.insert("before_later_apply", view);
+        self.record(
+            "before_later_inbox",
+            &["inbox", "poll", "--agent", "reader"],
+        );
         let run = self.source("later_capture", "comment-2", "run");
         self.record(
             "later_apply",
@@ -271,6 +279,19 @@ impl Workflow {
         assert_eq!(self.get("later_capture")["captured"], 1);
         assert_eq!(self.get("later_capture")["compiled"], 1);
         assert_eq!(self.get("later_capture")["provider_changed"], false);
+        assert_eq!(
+            self.get("before_later_apply")["project_revision"],
+            self.get("caught_up")["project_revision"]
+        );
+        assert_eq!(self.get("before_later_inbox")["entries"], json!([]));
+        assert_eq!(
+            self.get("before_later_apply")["provider"]["upstream_updated_at_millis"],
+            self.get("caught_up")["provider"]["upstream_updated_at_millis"]
+        );
+        assert_eq!(
+            self.get("before_later_apply")["provider"]["freshness"]["upstream_updated_at_millis"],
+            1_767_268_800_000_i64
+        );
         let expected = self.get("caught_up")["project_revision"].as_u64().unwrap() + 1;
         assert_eq!(self.get("later_apply")["revision"], expected);
         assert_eq!(self.get("later_apply")["inputs"][0]["outcome"], "accepted");

@@ -130,9 +130,19 @@ provider timestamps before appending source versions.
 Each new eager body gets a causal compiler intent before execution. A successful
 or failed completed run keeps its identity on refresh and does not run again.
 An interrupted pending intent can resume with the same compiler configuration.
-Compilation records assertions; deterministic provider policy accepts open/closed
-state, labels, assignees, and timestamps through the project revision and inbox.
+Compilation records assertions; deterministic provider policy accepts changes to
+open/closed state, labels, assignees, title, and milestone through the project
+revision and inbox. A refresh that changes only the Issue's `updatedAt` records
+a durable freshness sighting without a revision or inbox entry. An identical
+snapshot also records a sighting. Both paths retain the upstream watermark so
+an older response cannot replace the mirror.
 Use `source assertions` to inspect a run and `source apply` to evaluate its assertions through policy.
+
+In `merl.issue-view/v1`, `provider.upstream_updated_at_millis` remains the timestamp
+from the immutable accepted provider input. `provider.freshness` reports the
+latest `upstream_updated_at_millis` and local `last_seen_at_millis`, including
+later sightings. Human Issue views report the same freshness times. Rebuild
+preserves them without inventing another accepted provider change.
 
 Both output modes report `captured`, `unchanged`, `failed`, or `incomplete`.
 JSON uses `merl.issue-capture/v1` and reports the binding policy, new version and
@@ -152,6 +162,9 @@ merl issue import-fixture --project project-a --database project.sqlite --fixtur
 ```
 
 It reports the number of new source versions, the observation head, and the accepted revision. A repeat import does not create another observation or accepted provider snapshot. The fixture's terminal provider facts enter at capture time; Merl does not place them at earlier historical cutoffs.
+
+Retrying an unchanged fixture after a later sighting succeeds as an unchanged
+import. It preserves the latest freshness times, including after a rebuild.
 
 A retry of the same source version and body must preserve its entity author. If the stored capture and retry provide different stable provider author IDs, Merl reports a source conflict. A matching ID, or a missing ID on either side, leaves the first capture unchanged. Older captures with no recorded author remain unknown, even if a retry supplies one. An edit by another person remains valid: the entity author and version editor are separate identities.
 

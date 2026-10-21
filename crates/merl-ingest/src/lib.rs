@@ -406,16 +406,21 @@ fn observe_terminal_issue_snapshot(
     let issue = fixture_issue_id(fixture)?;
     let bytes = serde_json::to_vec(&fixture.provider_snapshot)
         .map_err(|error| ImportError::Serialization(error.to_string()))?;
-    if let Some(current) = store.object(project, &issue)? {
-        if current.kind.as_str() != "provider_issue" {
-            return Err(StoreError::SourceConflict.into());
-        }
-        if let Some(payload) = current.payload
-            && store.read_payload(project, &payload)? == PayloadRead::Available(bytes.clone())
-        {
-            store.note_provider_seen(project, &issue, captured_at_millis)?;
-            return Ok(false);
-        }
+    let updated_at = fixture
+        .provider_snapshot
+        .updated_at
+        .as_deref()
+        .map(utc_millis)
+        .transpose()?;
+    if record_provider_reconfirmation(
+        store,
+        project,
+        &issue,
+        &bytes,
+        captured_at_millis,
+        updated_at,
+    )? {
+        return Ok(false);
     }
     let encoded = std::str::from_utf8(&bytes)
         .map_err(|error| ImportError::Serialization(error.to_string()))?;
@@ -457,12 +462,7 @@ fn observe_terminal_issue_snapshot(
         binding: binding.id.clone(),
         issue: issue.clone(),
         state,
-        upstream_updated_at_millis: fixture
-            .provider_snapshot
-            .updated_at
-            .as_deref()
-            .map(utc_millis)
-            .transpose()?,
+        upstream_updated_at_millis: updated_at,
         closed_at_millis: fixture
             .provider_snapshot
             .closed_at
@@ -489,6 +489,55 @@ fn observe_terminal_issue_snapshot(
         observed_at_millis: captured_at_millis,
     };
     accept_provider_snapshot(store, project, &batch, observation, &identity)
+}
+
+fn record_provider_reconfirmation(
+    store: &mut Store,
+    project: &ProjectId,
+    issue: &ObjectId,
+    bytes: &[u8],
+    captured_at_millis: i64,
+    updated_at: Option<i64>,
+) -> Result<bool, StoreError> {
+    if let Some(current) = store.object(project, issue)? {
+        if current.kind.as_str() != "provider_issue" {
+            return Err(StoreError::SourceConflict);
+        }
+        if let Some(payload) = current.payload
+            && let PayloadRead::Available(prior) = store.read_payload(project, &payload)?
+            && same_provider_facts(&prior, bytes)?
+        {
+            let head = store
+                .provider_issue_head(project, issue)?
+                .filter(|head| head.input.snapshot_payload == payload)
+                .ok_or(StoreError::PolicyConflict)?;
+            store.note_provider_sighting(
+                project,
+                issue,
+                &head.input.id,
+                captured_at_millis,
+                updated_at,
+            )?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// GitHub advances Issue activity time for comments as well as fact changes.
+/// Compare the whole snapshot except that watermark so new mirrored fields keep
+/// their ordinary policy path without an allowlist here.
+fn same_provider_facts(prior: &[u8], incoming: &[u8]) -> Result<bool, StoreError> {
+    let without_activity = |bytes: &[u8]| -> Result<serde_json::Value, StoreError> {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|_| StoreError::CorruptHistory)?;
+        value
+            .as_object_mut()
+            .ok_or(StoreError::CorruptHistory)?
+            .remove("updated_at");
+        Ok(value)
+    };
+    Ok(without_activity(prior)? == without_activity(incoming)?)
 }
 
 fn accept_provider_snapshot(
