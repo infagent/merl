@@ -45,15 +45,19 @@ impl Store {
         }
         // Check durable retries before freshness: a later sighting must not make
         // an earlier successful capture fail or move the mirror's watermark back.
+        // Legacy sightings inherit upstream time from their accepted observation.
         let recorded: bool = transaction.query_row(
             "SELECT EXISTS (
                SELECT 1 FROM provider_observations
                WHERE project_id=?1 AND issue_id=?2 AND id=?3
                  AND observed_at_millis=?4 AND upstream_updated_at_millis IS ?5
                UNION ALL
-               SELECT 1 FROM provider_issue_sightings
-               WHERE project_id=?1 AND issue_id=?2 AND observation_id=?3
-                 AND seen_at_millis=?4 AND upstream_updated_at_millis IS ?5
+               SELECT 1 FROM provider_issue_sightings s
+               JOIN provider_observations o
+                 ON o.project_id=s.project_id AND o.id=s.observation_id
+               WHERE s.project_id=?1 AND s.issue_id=?2 AND s.observation_id=?3
+                 AND s.seen_at_millis=?4
+                 AND COALESCE(s.upstream_updated_at_millis, o.upstream_updated_at_millis) IS ?5
              )",
             params![
                 project.as_str(),

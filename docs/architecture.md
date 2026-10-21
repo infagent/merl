@@ -549,8 +549,9 @@ sightings. Both live capture and the accepted-write boundary reject snapshots
 older than that upstream watermark; a changed fact must advance it. Sighting
 writes guard the accepted observation they reconfirm. Rebuild restores the same
 freshness from retained sightings, including legacy sightings that have only a
-local seen time. Compilation and semantic acceptance remain independent of this
-freshness path.
+local seen time. Legacy sightings inherit their accepted observation's upstream
+time for freshness and retry recognition. Compilation and semantic acceptance
+remain independent of this freshness path.
 
 Replay and evaluation results do not enter accepted state on their own. Promotion creates a new policy evaluation against current state. The original inputs remain unchanged.
 

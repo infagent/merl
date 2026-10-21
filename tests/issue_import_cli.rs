@@ -15,6 +15,19 @@ fn fixture_retries_after_later_sightings_preserve_freshness() {
 }
 
 #[test]
+fn fixture_retries_recognize_legacy_sightings_after_upgrade_and_rebuild() {
+    FixtureRetry::given_an_issue_with_legacy_sightings()
+        .when_the_earlier_fixtures_are_retried()
+        .then_the_retries_are_unchanged_and_keep_the_latest_freshness()
+        .when_the_project_is_rebuilt()
+        .then_the_latest_freshness_is_preserved()
+        .when_the_earlier_fixtures_are_retried()
+        .then_the_retries_are_unchanged_and_keep_the_latest_freshness()
+        .when_an_unseen_older_capture_is_imported()
+        .then_the_stale_capture_is_rejected_without_changing_freshness();
+}
+
+#[test]
 fn an_issue_fixture_import_is_offline_and_retryable() {
     CliIssueHistory::new()
         .given_a_new_project()

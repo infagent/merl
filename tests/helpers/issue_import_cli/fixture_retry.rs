@@ -18,11 +18,40 @@ pub struct FixtureRetry {
 
 impl FixtureRetry {
     pub fn given_an_issue_seen_at_three_capture_times() -> Self {
+        Self::with_upstream_updated_at(None)
+    }
+
+    pub fn given_an_issue_with_legacy_sightings() -> Self {
+        let case = Self::with_upstream_updated_at(Some("2026-09-18T23:00:00Z"));
+        // Recreate schema 30's sightings from public imports. Reopening through
+        // the CLI must migrate them without inventing stored upstream times.
+        rusqlite::Connection::open(case.history.database())
+            .expect("legacy database")
+            .execute_batch(
+                "DROP VIEW provider_issue_freshness;
+                 DROP INDEX provider_sighting_watermarks;
+                 ALTER TABLE provider_issue_sightings DROP COLUMN upstream_updated_at_millis;
+                 PRAGMA user_version=30;",
+            )
+            .expect("restore schema 30");
+        case
+    }
+
+    fn with_upstream_updated_at(updated_at: Option<&str>) -> Self {
         let mut history = CliIssueHistory::new();
         history.given_a_new_project();
         let mut fixture: Value =
             serde_json::from_str(include_str!("../../../corpus/development/DEV-C3.json"))
                 .expect("fixture");
+        if let Some(updated_at) = updated_at {
+            fixture["provider_snapshot"]["updated_at"] = json!(updated_at);
+            let parsed: merl_corpus::fixture::Fixture =
+                serde_json::from_value(fixture.clone()).expect("versioned fixture");
+            fixture["capture"]["source_sha256"] = json!(merl_corpus::fixture::source_digest(
+                &parsed.provider_snapshot,
+                &parsed.observations,
+            ));
+        }
         let mut issue = String::new();
         for (index, captured_at) in [
             "2026-09-19T00:00:00Z",
@@ -118,8 +147,9 @@ impl FixtureRetry {
         self
     }
 
-    pub fn then_the_latest_freshness_is_preserved(self) {
+    pub fn then_the_latest_freshness_is_preserved(self) -> Self {
         assert_eq!(self.rebuilt.as_ref().expect("rebuilt view"), &self.before);
+        self
     }
 }
 
