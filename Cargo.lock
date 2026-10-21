@@ -232,7 +232,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "merl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "merl-cli",
  "merl-compiler",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "merl-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "merl-compiler",
  "merl-core",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "merl-compiler"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "merl-core",
  "merl-store",
@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "merl-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "schemars",
  "serde",
@@ -285,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "merl-corpus"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -295,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "merl-eval"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "merl-cli",
  "merl-core",
@@ -310,7 +310,7 @@ dependencies = [
 
 [[package]]
 name = "merl-ingest"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "merl-compiler",
  "merl-core",
@@ -324,7 +324,7 @@ dependencies = [
 
 [[package]]
 name = "merl-policy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "merl-core",
  "merl-store",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "merl-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "merl-core",
  "rusqlite",
