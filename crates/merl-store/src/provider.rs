@@ -11,7 +11,8 @@ impl Store {
     ///
     /// The caller must compare all provider facts except the activity timestamp.
     /// `observation` pins that comparison to the immutable accepted input. Both the
-    /// local seen time and upstream watermark must remain monotonic.
+    /// local seen time and upstream watermark must remain monotonic. An exact
+    /// retry of that input or a recorded sighting succeeds without changing freshness.
     ///
     /// # Errors
     /// Returns a conflict if the accepted observation changed, a stale-observation
@@ -41,6 +42,30 @@ impl Store {
         let (accepted, seen, updated) = head.ok_or(StoreError::CorruptHistory)?;
         if accepted != observation.as_str() {
             return Err(StoreError::PolicyConflict);
+        }
+        // Check durable retries before freshness: a later sighting must not make
+        // an earlier successful capture fail or move the mirror's watermark back.
+        let recorded: bool = transaction.query_row(
+            "SELECT EXISTS (
+               SELECT 1 FROM provider_observations
+               WHERE project_id=?1 AND issue_id=?2 AND id=?3
+                 AND observed_at_millis=?4 AND upstream_updated_at_millis IS ?5
+               UNION ALL
+               SELECT 1 FROM provider_issue_sightings
+               WHERE project_id=?1 AND issue_id=?2 AND observation_id=?3
+                 AND seen_at_millis=?4 AND upstream_updated_at_millis IS ?5
+             )",
+            params![
+                project.as_str(),
+                issue.as_str(),
+                observation.as_str(),
+                seen_at_millis,
+                upstream_updated_at_millis
+            ],
+            |row| row.get(0),
+        )?;
+        if recorded {
+            return Ok(());
         }
         if seen_at_millis < seen
             || (updated.is_some() && upstream_updated_at_millis < updated)

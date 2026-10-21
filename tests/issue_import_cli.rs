@@ -1,7 +1,18 @@
 #[path = "helpers/issue_import_cli.rs"]
 mod issue_import_cli;
 
-use issue_import_cli::CliIssueHistory;
+use issue_import_cli::{CliIssueHistory, FixtureRetry};
+
+#[test]
+fn fixture_retries_after_later_sightings_preserve_freshness() {
+    FixtureRetry::given_an_issue_seen_at_three_capture_times()
+        .when_the_earlier_fixtures_are_retried()
+        .then_the_retries_are_unchanged_and_keep_the_latest_freshness()
+        .when_an_unseen_older_capture_is_imported()
+        .then_the_stale_capture_is_rejected_without_changing_freshness()
+        .when_the_project_is_rebuilt()
+        .then_the_latest_freshness_is_preserved();
+}
 
 #[test]
 fn an_issue_fixture_import_is_offline_and_retryable() {
