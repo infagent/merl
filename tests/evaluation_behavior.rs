@@ -2,6 +2,15 @@
 mod evaluation_behavior;
 
 use evaluation_behavior::EvaluationScenario;
+use evaluation_behavior::SemanticCase;
+
+#[test]
+fn semantic_units_keep_cutoff_prompts_and_categorical_grades_with_shared_preparation() {
+    SemanticCase::given_three_units_at_two_cutoffs()
+        .when_all_five_methods_answer()
+        .then_every_unit_keeps_its_exact_prompt_and_categorical_verdicts()
+        .then_shared_preparation_does_not_collapse_scoring_units();
+}
 
 #[test]
 fn a_benchmark_reader_cannot_see_a_later_correction() {

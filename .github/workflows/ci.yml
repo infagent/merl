@@ -57,6 +57,11 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-${{ env.CACHE_NAMESPACE }}-
 
+      - name: Install isolated evaluator runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y bubblewrap
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 

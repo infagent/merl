@@ -21,6 +21,8 @@ const WIRE_SCHEMA: &str = "merl.eval-adapter/v1";
 #[derive(Debug)]
 pub struct ProcessModelAdapter {
     program: PathBuf,
+    isolated: Option<crate::isolation::IsolatedProgram>,
+    calls: Vec<crate::isolation::ProcessCallRecord>,
     max_request_bytes: usize,
     max_response_bytes: usize,
 }
@@ -35,19 +37,48 @@ impl ProcessModelAdapter {
     ) -> Self {
         Self {
             program: program.into(),
+            isolated: None,
+            calls: Vec::new(),
             max_request_bytes,
             max_response_bytes,
         }
     }
 
-    fn call(&self, request: &Value) -> Result<WireResponse, String> {
-        let response: WireResponse = run_json_process(
-            &self.program,
-            request,
-            self.max_request_bytes,
-            self.max_response_bytes,
-            None,
-        )?;
+    /// Pins a network-denied model worker. Only method-disclosed stdin is visible;
+    /// the trusted controller's source pool is never mounted in the worker.
+    #[must_use]
+    pub fn isolated(program: crate::isolation::IsolatedProgram) -> Self {
+        Self {
+            program: PathBuf::new(),
+            isolated: Some(program),
+            calls: Vec::new(),
+            max_request_bytes: 0,
+            max_response_bytes: 0,
+        }
+    }
+
+    /// Invocation hashes for isolated runs, without model or grader prose.
+    #[must_use]
+    pub fn calls(&self) -> &[crate::isolation::ProcessCallRecord] {
+        &self.calls
+    }
+
+    fn call(&mut self, request: &Value) -> Result<WireResponse, String> {
+        let response: WireResponse = if let Some(program) = &self.isolated {
+            let value = program
+                .recorded_call(&std::collections::BTreeMap::new(), request, &mut self.calls)
+                .map_err(|error| error.to_string())?;
+            serde_json::from_value(value)
+                .map_err(|_| "invalid model adapter response".to_owned())?
+        } else {
+            run_json_process(
+                &self.program,
+                request,
+                self.max_request_bytes,
+                self.max_response_bytes,
+                None,
+            )?
+        };
         if response.schema() != WIRE_SCHEMA {
             return Err("model adapter returned an unsupported schema".to_owned());
         }

@@ -9,8 +9,12 @@ use merl_corpus::fixture::{
 use serde::Serialize;
 
 mod adapters;
+pub mod grading;
+pub mod isolation;
+pub mod package;
 mod preparation;
 mod runner;
+pub mod visible;
 
 pub use adapters::{CliMerlSurface, MerlTrialArtifact, ProcessModelAdapter, ProcessScorer};
 pub use preparation::{
@@ -22,8 +26,8 @@ pub use runner::{
     AnswerAction, AnswerCallAction, AnswerCallRecord, AnswerRequest, AnswerResponse,
     BenchmarkConfig, BenchmarkError, BenchmarkMethod, BenchmarkReport, BenchmarkRunner, BreakEven,
     CutoffFidelity, EvaluationQuestion, MerlPrepared, MerlSurface, MethodStats, ModelAdapter,
-    RandomnessControl, Score, Scorer, SummaryCallRecord, SummaryRequest, SummaryResponse,
-    SummarySource, TokenUsage, TrialIdentity, TrialReport,
+    PreparationRecord, RandomnessControl, Score, Scorer, SummaryCallRecord, SummaryRequest,
+    SummaryResponse, SummarySource, TokenUsage, TrialFailure, TrialIdentity, TrialReport,
 };
 
 /// One of the reading methods in the first-release comparison.

@@ -11,6 +11,135 @@ use merl_eval::{
 use merl_ingest::import_fixture_for_causal_replay_through;
 use merl_store::Store;
 
+pub struct SemanticCase {
+    report: Option<BenchmarkReport<merl_eval::grading::CategoricalGrade>>,
+    prompts: Vec<String>,
+}
+
+impl SemanticCase {
+    pub fn given_three_units_at_two_cutoffs() -> Self {
+        Self {
+            report: None,
+            prompts: vec![],
+        }
+    }
+
+    pub fn when_all_five_methods_answer(mut self) -> Self {
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("../../corpus/development/DEV-C1.json")).unwrap();
+        let mut model = FakeModel::default();
+        let mut merl = FakeMerl;
+        let mut grader = CategoricalTestGrader { calls: 0 };
+        let questions = [
+            ("Q1@2", 2, "What was instructed then?"),
+            ("Q2@2", 2, "What remained unresolved then?"),
+            ("Q1@4", 4, "What is instructed now?"),
+        ]
+        .into_iter()
+        .map(|(id, cutoff, text)| EvaluationQuestion {
+            id: id.to_owned(),
+            cutoff,
+            capture_phase: false,
+            text: text.to_owned(),
+        })
+        .collect();
+        self.report = Some(
+            BenchmarkRunner {
+                model: &mut model,
+                merl: &mut merl,
+                scorer: &mut grader,
+            }
+            .run_suite(
+                &fixture,
+                questions,
+                BenchmarkConfig {
+                    model: "synthetic".into(),
+                    model_version: "v1".into(),
+                    effort: "none".into(),
+                    system_prompt: "Use the supplied evidence.".into(),
+                    task_prompt: "Answer the question.".into(),
+                    trials: vec![TrialIdentity {
+                        id: "pair-a".into(),
+                        randomness: RandomnessControl::Seed(7),
+                    }],
+                    recent_window: 2,
+                    max_tool_rounds: 2,
+                    search_results: 2,
+                    temperature: Some(0.0),
+                },
+            )
+            .expect("categorical question-level execution"),
+        );
+        self.prompts = model.questions;
+        self
+    }
+
+    pub fn then_every_unit_keeps_its_exact_prompt_and_categorical_verdicts(self) -> Self {
+        let report = self.report.as_ref().expect("semantic report");
+        assert_eq!(report.trials.len(), 15);
+        for (index, (unit, prompt)) in [
+            ("Q1@2", "What was instructed then?"),
+            ("Q2@2", "What remained unresolved then?"),
+            ("Q1@4", "What is instructed now?"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for offset in 0..5 {
+                let trial = &report.trials[index * 5 + offset];
+                assert_eq!(trial.question_id, unit);
+                assert_eq!(trial.score.unit_id, unit);
+                assert_eq!(self.prompts[index * 5 + offset], prompt);
+                let wire = serde_json::to_value(&trial.score).unwrap();
+                assert!(wire.get("correctness").is_none());
+                assert!(!trial.score.reason.is_empty());
+            }
+        }
+        for method in &report.methods {
+            assert!(method.mean_correctness.is_none());
+        }
+        self
+    }
+
+    pub fn then_shared_preparation_does_not_collapse_scoring_units(self) {
+        let report = self.report.expect("semantic report");
+        assert_eq!(report.questions.len(), 3);
+        assert_eq!(report.source_fidelity.len(), 2);
+        assert_eq!(report.summary_calls.len(), 6);
+        assert_eq!(report.methods[1].total_preparation_tokens, 12);
+        assert_eq!(report.methods[3].total_preparation_tokens, 12);
+        assert_eq!(report.methods[4].total_preparation_tokens, 60);
+    }
+}
+
+struct CategoricalTestGrader {
+    calls: usize,
+}
+impl merl_eval::grading::Grader for CategoricalTestGrader {
+    type Grade = merl_eval::grading::CategoricalGrade;
+    fn grade(
+        &mut self,
+        unit_id: &str,
+        _answer: &str,
+        _citations: &[String],
+    ) -> Result<Self::Grade, String> {
+        use merl_eval::grading::Verdict;
+        let verdict = [
+            Verdict::Correct,
+            Verdict::Incomplete,
+            Verdict::Incorrect,
+            Verdict::NotScored,
+            Verdict::Correct,
+        ][self.calls % 5];
+        self.calls += 1;
+        Ok(Self::Grade {
+            unit_id: unit_id.to_owned(),
+            verdict,
+            reason: "Synthetic semantic verdict; no object or enum comparison.".into(),
+        })
+    }
+}
+
 pub struct EvaluationScenario {
     fixture: Fixture,
     raw: Option<ReaderInput>,
