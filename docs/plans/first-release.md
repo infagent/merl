@@ -31,7 +31,7 @@ The [benchmark harness](../evaluation/benchmark-harness.md) runs the five-method
 
 Before the evaluator builds v4, we finish the visible benchmark and test every first-release promise that does not need held-out results. If Merl cannot complete a promised workflow through its public interface, we fix it or remove that promise from the release. We then freeze Merl, the corpus format, and the harness. The evaluator builds and reviews v4 from the selected sources against that frozen contract. Only v4 supports the release claim.
 
-Before compiler work begins, maintainers freeze 10 to 30 complete Issue histories and divide them into three sets:
+The original plan called for freezing 10 to 30 complete Issue histories before compiler work. That timing promise was not met. The approved first visible pass contains eight cases: two natural histories and six controlled histories. It is not evidence that the complete-history target has been met. The contract freeze in #134 must record the remaining corpus-size commitment and the evaluator's count attestation; this accounting does not require expanding the visible pilot first. The corpus keeps three separate partitions:
 
 - a development set for ontology, prompt, rule, and policy work;
 - a held-out set that remains unseen until a release candidate is ready;
@@ -39,13 +39,19 @@ Before compiler work begins, maintainers freeze 10 to 30 complete Issue historie
 
 The split happens by complete thread or project. Comments from one thread never appear in both development and held-out sets. Held-out and adversarial results may guide the release decision, but they do not become tuning data. If maintainers tune against a revealed case, they move it into development and replace it before the next claimed held-out result.
 
-Each fixture has a human-reviewed expected state covering active decisions, requirements, questions, facts, blockers, findings, hypotheses, claims, and next actions. Two people independently label part of the held-out set. The corpus retains disagreements instead of forcing false certainty, then records an adjudicated result where the benchmark needs one expected answer.
+Each scored question has reviewed expected meanings and explicit evidence limits. The visible inventory was independently annotated in an agent session, compared by the planner, and adjudicated after the original annotations were frozen. The sole human maintainer approved it after sample review. Independent agent sessions may provide separate annotations for later evaluation; record their models, access and roles accurately rather than claiming two-human review. The corpus retains disagreements instead of forcing false certainty, then records an adjudicated result where the benchmark needs one expected answer. Justified uncertainty can be a correct answer; an underspecified rubric must be repaired or excluded.
 
 Evaluation reports task correctness, provenance accuracy, stale-state errors, missed blockers, context expansion, clarification, and total token cost. Token accounting includes compilation, context construction, views, source expansion, corrections, and retries.
 
-Reports lead with the break-even point, not the compression ratio. They compare full raw history, a rolling summary, recent-window retrieval with search, summary plus retrieval, and Merl's materialized state with expansion. They cover one agent reading once, two agents revisiting the Issue, and a larger team returning many times. Merl may cost more for a single read and still prove useful for repeated work.
+The quantitative benchmark compares full raw history, a rolling summary, recent-window retrieval with search, summary plus retrieval, and Merl's materialized state with expansion. Reports with sufficient measured usage lead with the break-even point, not the compression ratio. They cover one agent reading once, two agents revisiting the Issue, and a larger team returning many times. Merl may cost more for a single read and still prove useful for repeated work.
 
 Each comparison records the model and version, reasoning effort, system and task prompts, tool access, and sampling controls. Paired repeated trials expose variance instead of treating one model response as a stable measurement.
+
+### Immediate visible evidence
+
+For #132, run the [bounded visible pilot](../evaluation/visible-pilot.md) using existing Codex sessions. Compare raw history with actual Merl state on eight preselected question/cutoff units. No new paid API integration, automated remote grader or exhaustive 57-unit run is required for this step. Report unavailable usage honestly; this pilot cannot establish statistical parity, a token-saving percentage or a break-even curve.
+
+This is the maintainer-authorized change to the visible-evidence gate, made before candidate results. It preserves the milestone order and product acceptance criteria. #134 may use this pilot as its visible report, but must keep quantitative and held-out evidence explicitly outstanding. The later #32 evaluation and #55 release decision cannot claim those gates passed on the pilot's evidence. The existing five-method harness remains available; further provider-integration work is deferred until explicitly requested.
 
 ## End-to-end slice
 
