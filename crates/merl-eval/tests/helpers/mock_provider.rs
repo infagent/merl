@@ -94,10 +94,9 @@ impl MockProvider {
                             "missing_usage" => {
                                 response.as_object_mut().unwrap().remove("usage");
                             }
-                            "credential_echo" => response["text"] = json!("synthetic-secret-value"),
                             _ => {}
                         }
-                        let response = response.to_string();
+                        let response = response_body(&mode, response);
                         write!(stream,"HTTP/1.1 {status}\r\n{extra}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
                     } else {
                         thread::sleep(Duration::from_millis(2));
@@ -126,5 +125,29 @@ impl Drop for MockProvider {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         self.thread.take().unwrap().join().unwrap();
+    }
+}
+
+fn response_body(mode: &str, mut response: Value) -> String {
+    match mode {
+        "credential_echo" | "credential_echo_escaped_text" => {
+            response["text"] = json!("synthetic-secret-value");
+        }
+        "credential_echo_escaped_model" => {
+            response["model"] = json!("synthetic-secret-value");
+        }
+        "credential_echo_escaped_nested_value" => {
+            response["metadata"] = json!([{"nested":"prefix synthetic-secret-value suffix"}]);
+        }
+        "credential_echo_escaped_key" => {
+            response["metadata"] = json!([{"synthetic-secret-value":"synthetic metadata"}]);
+        }
+        _ => {}
+    }
+    let response = response.to_string();
+    if mode.starts_with("credential_echo_escaped_") {
+        response.replace("synthetic-secret-value", r"\u0073ynthetic-secret-value")
+    } else {
+        response
     }
 }

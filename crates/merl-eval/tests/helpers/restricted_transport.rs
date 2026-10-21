@@ -252,7 +252,19 @@ print(json.dumps({'schema':'merl.transport-final/v1','response':out}),flush=True
                 assert_eq!(call["http_status"], 307);
                 assert_eq!(call["error"], "provider_redirect");
             }
-            "credential_echo" => assert_eq!(call["error"], "credential_echo"),
+            mode if mode.starts_with("credential_echo") => {
+                assert_eq!(call["error"], "credential_echo");
+                assert!(call["reported_model"].is_null());
+                assert!(call["request_id"].is_null());
+                assert!(call["usage"].is_null());
+                let adapter_calls = call["adapter_calls"].as_array().unwrap();
+                assert_eq!(
+                    adapter_calls.len(),
+                    1,
+                    "provider JSON must not reach the decoder"
+                );
+                assert_eq!(adapter_calls[0]["kind"], "encode");
+            }
             "unavailable" => {
                 assert_eq!(call["error"], "provider_http");
                 assert!(call["usage"].is_null());

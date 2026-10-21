@@ -45,6 +45,20 @@ fn transport_rejects_capability_changes_and_retains_provider_failures() {
 }
 
 #[test]
+fn json_escaped_credentials_are_withheld_from_translators_and_workers() {
+    for mode in [
+        "credential_echo_escaped_model",
+        "credential_echo_escaped_text",
+        "credential_echo_escaped_nested_value",
+        "credential_echo_escaped_key",
+    ] {
+        Scenario::given_a_mock_provider_and_isolated_worker(mode)
+            .when_the_transport_runs()
+            .then_the_boundary_fails_closed();
+    }
+}
+
+#[test]
 fn failed_remote_reads_and_shared_preparation_keep_their_known_costs() {
     for mode in ["bad_final", "empty_summary"] {
         Scenario::given_a_mock_provider_and_isolated_worker(mode)

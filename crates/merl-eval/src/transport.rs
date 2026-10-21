@@ -506,7 +506,29 @@ impl RemoteTransport {
         }
         let body: Value =
             serde_json::from_slice(&response_bytes).map_err(|_| TransportError::Protocol)?;
+        // JSON escapes can hide credentials on the wire. Check decoded keys and
+        // strings before the provider translator can receive the response.
+        if self
+            .secrets
+            .iter()
+            .any(|secret| contains_credential(&body, secret))
+        {
+            return Err(TransportError::CredentialEcho);
+        }
         Ok((status, body))
+    }
+}
+
+fn contains_credential(value: &Value, secret: &str) -> bool {
+    match value {
+        Value::String(text) => text.contains(secret),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| contains_credential(value, secret)),
+        Value::Object(fields) => fields
+            .iter()
+            .any(|(key, value)| key.contains(secret) || contains_credential(value, secret)),
+        _ => false,
     }
 }
 
