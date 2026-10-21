@@ -35,7 +35,7 @@ impl IsolationCase {
         std::fs::write(
             &program,
             r"#!/usr/bin/python3
-import json, os, socket, sys
+import json, os, socket, subprocess, sys
 request = json.load(sys.stdin)
 outside = request['outside']
 connection = socket.socket()
@@ -52,6 +52,7 @@ previous_state = os.path.exists(state)
 with open(state, 'w') as handle:
     handle.write('synthetic state from a different unit')
 json.dump({
+    'nested_user_namespace': subprocess.run(['/usr/bin/unshare', '--user', '--map-root-user', '/usr/bin/true'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0,
     'outside_visible': os.path.exists(outside),
     'proc_escape_visible': os.path.exists('/proc/1/root' + outside),
     'host_service_visible': host_service,
@@ -125,6 +126,7 @@ json.dump({
             assert_eq!(response["outside_visible"], false);
             assert_eq!(response["proc_escape_visible"], false);
             assert_eq!(response["host_service_visible"], false);
+            assert_eq!(response["nested_user_namespace"], false);
         }
         self
     }

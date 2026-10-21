@@ -227,6 +227,8 @@ fn spawn_worker(
             &format!("{}s", limits.seconds),
             "/usr/bin/bwrap",
             "--unshare-all",
+            "--unshare-user",
+            "--disable-userns",
             "--die-with-parent",
             "--new-session",
             "--cap-drop",
