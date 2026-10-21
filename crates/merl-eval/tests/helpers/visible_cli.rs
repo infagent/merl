@@ -8,6 +8,7 @@ use std::{
 pub struct Scenario {
     directory: PathBuf,
     output: Option<Output>,
+    provider: Option<crate::mock_provider::MockProvider>,
 }
 impl Scenario {
     pub fn given_a_synthetic_package() -> Self {
@@ -30,6 +31,7 @@ impl Scenario {
         Self {
             directory,
             output: None,
+            provider: None,
         }
     }
     pub fn when_the_package_is_verified(mut self) -> Self {
@@ -65,7 +67,14 @@ impl Scenario {
         assert_eq!(report["scored_units"], 0);
         assert!(!String::from_utf8_lossy(&output.stdout).contains("required_meanings"));
     }
-    pub fn when_synthetic_readers_execute_a_prepared_prefix(mut self) -> Self {
+    pub fn when_synthetic_readers_execute_a_prepared_prefix(self) -> Self {
+        self.execute_prefix(false)
+    }
+    pub fn when_remote_readers_execute_a_prepared_prefix(self) -> Self {
+        self.execute_prefix(true)
+    }
+
+    fn execute_prefix(mut self, remote: bool) -> Self {
         let root = self.directory.join("package");
         let model = self.directory.join("model.py");
         let grader = self.directory.join("grader.py");
@@ -90,7 +99,7 @@ assert json.load(open('/input/oracle.json'))['unit_id']==r['unit_id']
 json.dump({'unit_id':r['unit_id'],'verdict':'not_scored','reason':'Synthetic exclusion outcome, never success credit.'},sys.stdout)
 ").unwrap();
         let prefix = self.prepare_prefix();
-        let plan = json!({"schema":"merl.eval-visible-plan/v1", "package":{
+        let mut plan = json!({"schema":"merl.eval-visible-plan/v1", "package":{
             "root":root,"manifest_sha256":hash(&root.join("package.sha256")),
             "inventory_sha256":hash(&root.join("evaluator-only/approved-artifacts/question-inventory.json")),
             "rules_sha256":hash(&root.join("evaluator-only/approved-artifacts/scoring-rules.json")),"expected_units":3},
@@ -98,10 +107,67 @@ json.dump({'unit_id':r['unit_id'],'verdict':'not_scored','reason':'Synthetic exc
                 "trials":[{"id":"synthetic-pair-a","randomness":{"seed":7}}],"recent_window":1,"max_tool_rounds":1,"search_results":1,"temperature":0},
             "model_program":model,"model_program_sha256":hash(&model),"grader_program":grader,"grader_program_sha256":hash(&grader),
             "limits":{"request_bytes":1_048_576,"response_bytes":262_144,"program_bytes":67_108_864,"seconds":30},"prefixes":[prefix]});
+        if remote {
+            let provider = crate::mock_provider::MockProvider::start("package");
+            let adapter = self.directory.join("provider.py");
+            std::fs::write(&adapter, include_str!("../fixtures/provider_adapter.py")).unwrap();
+            for (role, path, env) in [
+                ("reader", &model, "READER_KEY"),
+                ("grader", &grader, "GRADER_KEY"),
+            ] {
+                let config = json!({"schema":"merl.remote-transport/v1","role":role,"endpoint":provider.endpoint(&format!("/{role}")),
+                    "credential_headers":[{"name":"Authorization","env":env,"prefix":"Bearer "}],
+                    "adapter_program":adapter,"adapter_program_sha256":hash(&adapter),
+                    "settings":{"model":"synthetic","model_version":"v1","effort":"none","temperature":0,"max_output_tokens":50},
+                    "limits":{"request_bytes":1_048_576,"response_bytes":262_144,"program_bytes":67_108_864,"seconds":10},"max_calls":1});
+                let config_path = self.directory.join(format!("{role}-transport.json"));
+                std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+                let key = if role == "reader" {
+                    "model_transport"
+                } else {
+                    "grader_transport"
+                };
+                plan[key] = json!({"path":config_path,"sha256":hash(&config_path)});
+                let mut code = std::fs::read_to_string(path)
+                    .unwrap()
+                    .replace("json.load(sys.stdin)", "json.loads(sys.stdin.readline())");
+                if role == "reader" {
+                    code=code.replace("if r['kind']=='summarize':", r"print(json.dumps({'schema':'merl.model-call/v1','messages':[{'role':'user','text':json.dumps(r)}]}),flush=True)
+reply=json.loads(sys.stdin.readline())
+assert reply['usage']=={'input':10,'output':5}
+if r['kind']=='summarize':")
+                        .replace("{'input':5,'output':2}","reply['usage']")
+                        .replace("{'input':10,'output':5}}", "reply['usage']}")
+                        .replace("json.dump(out,sys.stdout)","print(json.dumps({'schema':'merl.transport-final/v1','response':out}),flush=True)");
+                } else {
+                    code=r"#!/usr/bin/python3
+import json,os,sys
+r=json.loads(sys.stdin.readline())
+assert 'READER_KEY' not in os.environ and 'GRADER_KEY' not in os.environ
+oracle=json.load(open('/input/oracle.json'))
+assert oracle['unit_id']==r['unit_id']
+print(json.dumps({'schema':'merl.model-call/v1','messages':[{'role':'user','text':json.dumps(oracle)}]}),flush=True)
+reply=json.loads(sys.stdin.readline())
+assert reply['usage']=={'input':10,'output':5}
+out={'unit_id':r['unit_id'],'verdict':'not_scored','reason':'Synthetic exclusion outcome, never success credit.'}
+print(json.dumps({'schema':'merl.transport-final/v1','response':out}),flush=True)
+".into();
+                }
+                std::fs::write(path, code).unwrap();
+                plan[if role == "reader" {
+                    "model_program_sha256"
+                } else {
+                    "grader_program_sha256"
+                }] = json!(hash(path));
+            }
+            self.provider = Some(provider);
+        }
         let path = self.directory.join("plan.json");
         std::fs::write(&path, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
         self.output = Some(
             Command::new(env!("CARGO_BIN_EXE_merl-eval"))
+                .env("READER_KEY", "reader-secret")
+                .env("GRADER_KEY", "grader-secret")
                 .args(["package", "run", "--plan"])
                 .arg(&path)
                 .args(["--plan-sha256", &hash(&path)])
@@ -141,6 +207,43 @@ json.dump({'unit_id':r['unit_id'],'verdict':'not_scored','reason':'Synthetic exc
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    pub fn then_remote_calls_keep_role_separation_and_explicit_costs(self) {
+        let output = self.output.as_ref().unwrap();
+        let wire: Value =
+            serde_json::from_slice(&output.stdout).unwrap_or_else(|e| panic!("{e}: {output:?}"));
+        assert_eq!(wire["model_transport"]["role"], "reader");
+        assert_eq!(wire["grader_transport"]["role"], "grader");
+        assert_eq!(
+            wire["model_transport"]["calls"].as_array().unwrap().len(),
+            11,
+            "{wire}"
+        );
+        assert_eq!(
+            wire["grader_transport"]["calls"].as_array().unwrap().len(),
+            10,
+            "{wire}"
+        );
+        for key in ["model_transport", "grader_transport"] {
+            for call in wire[key]["calls"].as_array().unwrap() {
+                assert_eq!(call["usage"], json!({"input":10,"output":5}));
+                assert!(call["error"].is_null());
+                for adapter_call in call["adapter_calls"].as_array().unwrap() {
+                    assert_eq!(adapter_call["input_sha256"], json!({}));
+                }
+            }
+        }
+        let requests = self.provider.as_ref().unwrap().requests();
+        assert_eq!(requests.len(), 21);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.starts_with("POST /grader "))
+                .count(),
+            10
+        );
+        self.then_exclusions_failures_missing_units_and_shared_costs_remain_explicit();
     }
 
     fn prepare_prefix(&self) -> Value {

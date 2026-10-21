@@ -7,7 +7,7 @@ use std::{
     collections::BTreeMap,
     error::Error,
     fmt, fs,
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -44,10 +44,12 @@ impl Default for ProcessLimits {
 pub struct ProcessCallRecord {
     /// Exact pinned executable.
     pub program_sha256: String,
-    /// Exact stdin bytes.
+    /// Serialized initial JSON request, excluding JSON-lines framing.
     pub request_sha256: String,
-    /// Exact stdout bytes when the transport completed.
+    /// Returned response bytes: exact stdout for EOF, final payload for JSON-lines.
     pub response_sha256: Option<String>,
+    /// Explicit protocol; remote model calls have their own transport receipts.
+    pub protocol: &'static str,
     /// Explicitly mounted files, including the grader's runtime answer.
     pub input_sha256: BTreeMap<String, String>,
     /// Transport completion; protocol validation is reported by its caller.
@@ -135,12 +137,46 @@ impl IsolatedProgram {
         request: &Value,
         records: &mut Vec<ProcessCallRecord>,
     ) -> Result<Value, IsolationError> {
+        self.record_call(inputs, request, records, None)
+    }
+
+    /// Runs the JSON-lines model-call extension with a role-bound trusted broker.
+    ///
+    /// The worker retains the same filesystem and network isolation as [`Self::call`].
+    /// Only the broker can perform configured provider requests.
+    ///
+    /// # Errors
+    /// Rejects invalid frames, failed model calls and the execution errors of [`Self::call`].
+    pub fn recorded_remote_call(
+        &self,
+        inputs: &BTreeMap<String, Vec<u8>>,
+        request: &Value,
+        records: &mut Vec<ProcessCallRecord>,
+        transport: &mut crate::transport::RemoteTransport,
+    ) -> Result<Value, IsolationError> {
+        transport.begin(request);
+        self.record_call(inputs, request, records, Some(transport))
+    }
+
+    fn record_call(
+        &self,
+        inputs: &BTreeMap<String, Vec<u8>>,
+        request: &Value,
+        records: &mut Vec<ProcessCallRecord>,
+        transport: Option<&mut crate::transport::RemoteTransport>,
+    ) -> Result<Value, IsolationError> {
         let bytes = serde_json::to_vec(request).map_err(|_| IsolationError::InvalidResponse)?;
-        let response = self.call_bytes(inputs, &bytes);
+        let protocol = if transport.is_some() {
+            "json_lines_model_calls"
+        } else {
+            "json_eof"
+        };
+        let response = self.invoke(inputs, &bytes, transport);
         records.push(ProcessCallRecord {
             program_sha256: self.digest.clone(),
             request_sha256: hex_digest(&bytes),
             response_sha256: response.as_ref().ok().map(|b| hex_digest(b)),
+            protocol,
             input_sha256: inputs
                 .iter()
                 .map(|(name, bytes)| (name.clone(), hex_digest(bytes)))
@@ -165,6 +201,15 @@ impl IsolatedProgram {
         &self,
         inputs: &BTreeMap<String, Vec<u8>>,
         request: &[u8],
+    ) -> Result<Vec<u8>, IsolationError> {
+        self.invoke(inputs, request, None)
+    }
+
+    fn invoke(
+        &self,
+        inputs: &BTreeMap<String, Vec<u8>>,
+        request: &[u8],
+        transport: Option<&mut crate::transport::RemoteTransport>,
     ) -> Result<Vec<u8>, IsolationError> {
         if request.len() > self.limits.request_bytes {
             return Err(IsolationError::RequestTooLarge);
@@ -206,12 +251,94 @@ impl IsolatedProgram {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&executable, fs::Permissions::from_mode(0o500))?;
         }
-        exchange(
-            spawn_worker(&input, &executable, self.limits)?,
-            request,
-            self.limits.response_bytes,
-        )
+        let child = spawn_worker(&input, &executable, self.limits)?;
+        if let Some(transport) = transport {
+            exchange_remote(child, request, self.limits, transport)
+        } else {
+            exchange(child, request, self.limits.response_bytes)
+        }
     }
+}
+
+fn exchange_remote(
+    mut child: std::process::Child,
+    request: &[u8],
+    limits: ProcessLimits,
+    transport: &mut crate::transport::RemoteTransport,
+) -> Result<Vec<u8>, IsolationError> {
+    let result = (|| {
+        let mut stdin = child.stdin.take().ok_or(IsolationError::ProcessFailed)?;
+        stdin.write_all(request)?;
+        stdin.write_all(b"\n")?;
+        let stdout = child.stdout.take().ok_or(IsolationError::ProcessFailed)?;
+        // Bound the entire transcript, including model requests and final output.
+        let mut stdout =
+            BufReader::new(stdout.take((limits.response_bytes as u64).saturating_add(1)));
+        let mut consumed = 0;
+        loop {
+            let mut line = Vec::new();
+            if stdout.read_until(b'\n', &mut line)? == 0 {
+                return Err(IsolationError::InvalidResponse);
+            }
+            consumed += line.len();
+            if consumed > limits.response_bytes {
+                return Err(IsolationError::ResponseTooLarge);
+            }
+            let frame: Value =
+                serde_json::from_slice(&line).map_err(|_| IsolationError::InvalidResponse)?;
+            if frame["schema"] == "merl.transport-final/v1" {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Final {
+                    schema: String,
+                    response: Value,
+                }
+                let final_frame: Final =
+                    serde_json::from_value(frame).map_err(|_| IsolationError::InvalidResponse)?;
+                if final_frame.schema != "merl.transport-final/v1"
+                    || !transport.invocation_succeeded()
+                {
+                    return Err(IsolationError::InvalidResponse);
+                }
+                if let Some(usage) = final_frame.response.get("usage") {
+                    let usage: crate::TokenUsage = serde_json::from_value(usage.clone())
+                        .map_err(|_| IsolationError::InvalidResponse)?;
+                    if usage
+                        != transport
+                            .invocation_usage()
+                            .map_err(|_| IsolationError::InvalidResponse)?
+                    {
+                        return Err(IsolationError::InvalidResponse);
+                    }
+                }
+                drop(stdin);
+                let mut tail = Vec::new();
+                stdout.read_to_end(&mut tail)?;
+                if !tail.is_empty() {
+                    return Err(IsolationError::InvalidResponse);
+                }
+                if !child.wait()?.success() {
+                    return Err(IsolationError::ProcessFailed);
+                }
+                return serde_json::to_vec(&final_frame.response)
+                    .map_err(|_| IsolationError::InvalidResponse);
+            }
+            let reply = transport
+                .generate(frame)
+                .map_err(|_| IsolationError::RemoteFailure)?;
+            let bytes = serde_json::to_vec(&reply).map_err(|_| IsolationError::InvalidResponse)?;
+            if bytes.len() > limits.request_bytes {
+                return Err(IsolationError::RequestTooLarge);
+            }
+            stdin.write_all(&bytes)?;
+            stdin.write_all(b"\n")?;
+        }
+    })();
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
 }
 
 fn spawn_worker(
@@ -337,6 +464,8 @@ pub enum IsolationError {
     Timeout,
     /// Protocol response is not valid JSON.
     InvalidResponse,
+    /// A bounded model-call frame or configured provider operation failed.
+    RemoteFailure,
     /// Local runtime I/O failed.
     Io(std::io::Error),
 }
@@ -354,6 +483,7 @@ impl IsolationError {
             Self::ProcessFailed => "process_failed",
             Self::Timeout => "timeout",
             Self::InvalidResponse => "invalid_json",
+            Self::RemoteFailure => "remote_failure",
             Self::Io(_) => "io_failure",
         }
     }
@@ -369,6 +499,7 @@ impl fmt::Display for IsolationError {
             Self::ProcessFailed => "isolated adapter or sandbox failed",
             Self::Timeout => "isolated adapter exceeded time limit",
             Self::InvalidResponse => "invalid isolated adapter JSON",
+            Self::RemoteFailure => "restricted model transport failed",
             Self::Io(_) => "isolated process I/O failed",
         })
     }
@@ -408,7 +539,7 @@ impl Drop for Workspace {
     }
 }
 
-fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, IsolationError> {
+pub(crate) fn read_bounded(path: &Path, limit: usize) -> Result<Vec<u8>, IsolationError> {
     if !fs::metadata(path)?.is_file() {
         return Err(IsolationError::ProcessFailed);
     }

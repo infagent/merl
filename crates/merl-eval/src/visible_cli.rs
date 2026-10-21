@@ -4,6 +4,7 @@ use merl_corpus::fixture::{Fixture, Partition};
 use merl_eval::grading::CategoricalProcessGrader;
 use merl_eval::isolation::{IsolatedProgram, ProcessLimits};
 use merl_eval::package::{PackagePin, VerifiedPackage};
+use merl_eval::transport::{RemoteTransport, TransportPin, TransportRole};
 use merl_eval::visible::{PackageReport, run_prefix};
 use merl_eval::{BenchmarkConfig, CliMerlSurface, EvaluationQuestion, ProcessModelAdapter};
 use serde::Deserialize;
@@ -46,6 +47,8 @@ struct VisiblePlan {
     model_program_sha256: String,
     grader_program: PathBuf,
     grader_program_sha256: String,
+    model_transport: Option<TransportPin>,
+    grader_transport: Option<TransportPin>,
     limits: ProcessLimits,
     prefixes: Vec<PrefixPlan>,
 }
@@ -230,8 +233,24 @@ fn execute(path: &Path, pin: &str, run: bool) -> Result<(String, bool), String> 
         "preparation_record_sha256":p.trials.record_digests,"database_sha256":p.trials.database_digests})).collect::<Vec<_>>();
     let mut reports = Vec::new();
     let mut prefix_failures = Vec::new();
-    let mut model = ProcessModelAdapter::isolated(model_program);
-    let mut grader = CategoricalProcessGrader::new(&package, grader_program);
+    let mut model = if let Some(pin) = &plan.model_transport {
+        let transport =
+            RemoteTransport::open(pin, TransportRole::Reader).map_err(|e| e.to_string())?;
+        transport
+            .check_reader(&plan.config)
+            .map_err(|e| e.to_string())?;
+        ProcessModelAdapter::with_transport(model_program, transport).map_err(|e| e.to_string())?
+    } else {
+        ProcessModelAdapter::isolated(model_program)
+    };
+    let mut grader = if let Some(pin) = &plan.grader_transport {
+        let transport =
+            RemoteTransport::open(pin, TransportRole::Grader).map_err(|e| e.to_string())?;
+        CategoricalProcessGrader::with_transport(&package, grader_program, transport)
+            .map_err(|e| e.to_string())?
+    } else {
+        CategoricalProcessGrader::new(&package, grader_program)
+    };
     if run {
         for prefix in prepared {
             let mut merl = CliMerlSurface::new(
@@ -257,12 +276,39 @@ fn execute(path: &Path, pin: &str, run: bool) -> Result<(String, bool), String> 
     let complete = run && report.missing.is_empty() && report.counts.iter().all(|c| c.failed == 0);
     output(
         &json!({"schema":"merl.eval-visible-execution/v1","executed":run,"complete":complete,
-        "plan_sha256":super::digest(&bytes),"evaluator_binary_sha256":super::digest(&read(&std::env::current_exe().map_err(|_|"evaluator path")?)?),
+        "plan_sha256":super::digest(&bytes),"evaluator_binary_sha256":binary_digest()?,
         "model_program_sha256":plan.model_program_sha256,"grader_program_sha256":plan.grader_program_sha256,
         "prepared_prefixes":manifest,"prefix_failures":prefix_failures,"report":report,
-        "model_calls":model.calls(),"grader_calls":grader.calls()}),
+        "model_calls":model.calls(),"grader_calls":grader.calls(),
+        "model_transport":model.transport_report(),"grader_transport":grader.transport_report()}),
         !run || complete,
     )
+}
+
+fn binary_digest() -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    use std::io::Read as _;
+    let path = std::env::current_exe().map_err(|_| "evaluator path")?;
+    let mut file = fs::File::open(path).map_err(|_| "evaluator binary unreadable")?;
+    // Debug builds can exceed the package input ceiling. Stream trusted binary
+    // bytes so adding transport code does not weaken bounds on external inputs.
+    let mut hash = Sha256::new();
+    let mut buffer = [0; 16_384];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| "evaluator binary unreadable")?;
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read]);
+    }
+    let mut text = String::from("sha256:");
+    for byte in hash.finalize() {
+        let _ = write!(text, "{byte:02x}");
+    }
+    Ok(text)
 }
 
 fn output(value: &Value, success: bool) -> Result<(String, bool), String> {

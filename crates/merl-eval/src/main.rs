@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+mod transport_cli;
 mod visible_cli;
 
 const PLAN_SCHEMA: &str = "merl.eval-plan/v1";
@@ -92,8 +93,16 @@ struct VerifiedTrials {
 
 fn main() {
     let arguments = env::args().collect::<Vec<_>>();
-    if arguments.get(1).is_some_and(|arg| arg == "package") {
-        match visible_cli::command(&arguments[2..]) {
+    if arguments
+        .get(1)
+        .is_some_and(|arg| matches!(arg.as_str(), "package" | "transport"))
+    {
+        let command = if arguments[1] == "package" {
+            visible_cli::command
+        } else {
+            transport_cli::command
+        };
+        match command(&arguments[2..]) {
             Ok((report, success)) => {
                 println!("{report}");
                 if !success {
@@ -103,7 +112,7 @@ fn main() {
             Err(code) => {
                 eprintln!(
                     "{}",
-                    json!({"schema":"merl.eval-visible-error/v1","error":code})
+                    json!({"schema":if arguments[1]=="transport" {"merl.transport-error/v1"} else {"merl.eval-visible-error/v1"},"error":code})
                 );
                 process::exit(1);
             }
@@ -112,7 +121,7 @@ fn main() {
     }
     if arguments.len() == 2 && arguments[1] == "--help" {
         println!(
-            "merl-eval <inspect|run> --plan <path>\nmerl-eval package <verify|inspect|run> ...\nInspect freeze digests or run five paired Issue readers. Held-out runs require a freeze record."
+            "merl-eval <inspect|run> --plan <path>\nmerl-eval package <verify|inspect|run> ...\nmerl-eval transport call --plan PATH --plan-sha256 HEX\nInspect freeze digests or run five paired Issue readers. Held-out runs require a freeze record."
         );
         return;
     }

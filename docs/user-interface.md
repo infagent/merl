@@ -1440,6 +1440,8 @@ merl-eval run --plan /path/to/frozen-evaluation-plan.json
 
 The report records model and version, reasoning effort, prompts, available tools, sampling controls, per-trial answers, correctness, total token cost, and variance. It identifies the read count where each approach becomes cheaper than repeated raw-history consumption. A hindsight compilation cannot enter a causal Merl trial. See the [benchmark harness](evaluation/benchmark-harness.md) for the process protocol and held-out gate.
 
+Approved visible-package execution uses `merl-eval package` and native categorical verdicts. Its optional [restricted model transport](evaluation/restricted-model-transport.md) keeps workers network-denied and records provider usage/failures separately for readers and graders. `merl-eval transport call --plan PATH --plan-sha256 HEX` accepts one JSON request on stdin and returns a response-and-receipts envelope, including receipts on execution failure. It supplies a compiler-wrapper seam without adding usage fields to the compiler response schema.
+
 ## Errors and non-interactive use
 
 Human errors state what happened, what remained unchanged, and the next safe action. Machine errors have stable codes and structured details.

@@ -2,7 +2,7 @@
 
 The maintainer approved visible v2 for a first pass: 38 questions, 57 question-cutoff units, 43 distinct case/cutoff prefixes and eight cases. X01–X14 remain recorded exclusions, without success credit. Historical pending/zero fields in the frozen proposal stay unchanged; the receipt-bound scope overlay records effective approval. This integration does not close #131 or establish a benchmark result.
 
-The package adapter implements the field names demonstrated in the planner's wholly synthetic interface sample. Only synthetic examples have been executed. The evaluator must verify the actual package and its optional field variants before #132. Natural captures and answers remain in the evaluator workspace; redistribution permission is separate from correctness approval.
+The package adapter implements the field names demonstrated in the planner's wholly synthetic interface sample. The evaluator verified #142's exact head (`1ae35862b49b84be4d3820dba2a56eb7eb6652fc`) against the approved package and attested all 11 original synthetic integration/isolation tests with bubblewrap retained. Implementation work uses synthetic examples only. Natural captures and answers remain in the evaluator workspace; redistribution permission is separate from correctness approval.
 
 ## Artifact contract
 
@@ -47,7 +47,7 @@ The new categorical parser implements the sample's proposed response shape:
 
 The only verdicts are `correct`, `incomplete`, `incorrect`, and `not_scored`. The unit must match and the reason must be nonempty. Legacy numeric-score objects and unknown fields are rejected. The grader applies approved meanings, accepted alternatives, uncertainty/history guards and evidence scope from its unchanged oracle and method files. The harness does not replace semantic grading with object keys, support-state enums or string equality. It does not assign numeric weights to these categories. Grader output never enters a reader request or later preparation.
 
-The implementation supports deterministic local workers. A network-denied worker cannot call a remote provider. An evaluator-owned transport or narrowly scoped broker still needs an interface and isolation review before remote execution; its endpoint, credentials and launch protocol are not supplied by the approved package. Do not enable general networking or use the legacy unrestricted subprocess path to bypass this gap.
+Workers can use the [restricted model transport](restricted-model-transport.md) through a bounded JSON-lines extension. The controller alone owns a fixed endpoint and credentials; provider translation also runs network-denied. Reader/preparer and grader configurations remain separate. A concrete provider adapter and evaluator-selected configuration are still needed for one real call. Neither general networking nor the legacy unrestricted subprocess path is a remote fallback.
 
 ## Preparation and accounting
 
@@ -59,7 +59,7 @@ A fresh rolling summary starts from an empty string for each cutoff/trial and re
 
 Preparation records retain costs once per applicable method, trial and prefix, including known summary calls before failure. Per-answer usage and tool rounds stay separate. Aggregate method costs include known calls from failed slots and use the shared preparation ledger, so a failed first answer cannot erase preparation costs. An aggregate `usage_incomplete` flag identifies totals that are lower bounds because additional usage may be unknown. A failure does not transfer a preparation charge onto every question or erase known calls. An unsuccessful model call may have unknown additional usage; `usage_incomplete` or an incomplete preparation record makes that limitation explicit. Failed grading retains the submitted answer, citations and reported read usage. Failure of a shared summary skips only its dependent scoring slots. No break-even claim is made from incomplete categorical execution.
 
-The execution envelope records the plan, evaluator binary, worker executable, preparation-record and database digests, plus runtime stdin/stdout and mounted-file hashes. Runtime answer-file hashes are separate from static package hashes. Keep detailed reports local: they contain answers and grader reasons and may contain natural text. Only non-sensitive counts and verification attestations should leave the evaluator workspace without redistribution approval.
+The execution envelope records the plan, evaluator binary, worker executable, preparation-record and database digests, plus process request/response and mounted-file hashes. Remote transport adds separate provider/configuration receipts and reported costs. Process records identify whether response hashes cover exact EOF stdout or the JSON-lines final payload. Runtime answer-file hashes are separate from static package hashes. Keep detailed reports local: they contain answers and grader reasons and may contain natural text. Only non-sensitive counts and verification attestations should leave the evaluator workspace without redistribution approval.
 
 ## Evaluator commands
 
@@ -70,6 +70,7 @@ First run only synthetic integration and isolation checks:
 ```sh
 rtk proxy cargo test --locked --test evaluation_isolation --test visible_package
 rtk proxy cargo test --locked -p merl-eval --test visible_cli
+rtk proxy cargo test --locked -p merl-eval --test restricted_transport
 rtk proxy cargo build --locked -p merl-eval
 ```
 
@@ -95,6 +96,7 @@ A new evaluator-owned `merl.eval-visible-plan/v1` selects execution inputs. It i
 | `config` | Existing `BenchmarkConfig`, shared across all five methods and prefixes |
 | `model_program`, `model_program_sha256` | Isolated model worker path and byte digest |
 | `grader_program`, `grader_program_sha256` | Separate categorical worker path and byte digest |
+| `model_transport`, `grader_transport` | Optional, separately pinned [restricted transport configurations](restricted-model-transport.md#configuration) |
 | `limits` | `request_bytes`, `response_bytes`, `program_bytes`, `seconds` |
 | `prefixes` | Entries described below, one per distinct case/cutoff |
 
@@ -111,4 +113,4 @@ Inspection verifies supplied authorities and returns every scoring slot as missi
 
 The same plan can later be passed to `package run` by the evaluator during the separately arranged benchmark. An incomplete run writes its partial report to stdout and exits 1; a completed run exits 0, including legitimate incorrect/incomplete/not-scored verdicts. Transport integrity does not certify answer quality. No scored benchmark was run to implement this integration.
 
-Remaining work belongs to the planner/evaluator: verify the actual 57-unit package and all field variants, confirm all 43 prepared prefix groups and provider usage, arrange a restricted remote transport if needed, choose and verify the independent semantic grader, reconcile wider corpus/split commitments and reviewer-role wording, and arrange #132. Held-out work and v4 are outside this integration.
+The evaluator's actual-package verification is complete. Remaining work belongs to the planner/evaluator: confirm all 43 prepared prefix groups and provider usage, supply one concrete provider adapter/configuration, choose and validate the independent semantic grader, reconcile wider corpus/split commitments and reviewer-role wording, and arrange #132. The first-pass annotation work is finished. Held-out work and v4 are outside this integration.
