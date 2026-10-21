@@ -59,6 +59,9 @@ impl MockProvider {
                             .lock()
                             .unwrap()
                             .push(format!("{headers}{}", String::from_utf8(bytes).unwrap()));
+                        if mode == "unavailable" {
+                            continue;
+                        }
                         let mut response = json!({"text":"Synthetic amber answer.","usage":{"input":10,"output":5},"model":"synthetic-resolved-v1","request_id":"mock-1"});
                         if mode == "package" {
                             let is_grader = headers.starts_with("POST /grader ");

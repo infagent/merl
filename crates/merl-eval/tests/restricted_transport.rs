@@ -30,6 +30,8 @@ fn transport_rejects_capability_changes_and_retains_provider_failures() {
         "redirect",
         "provider_failure",
         "missing_usage",
+        "unavailable",
+        "missing_credentials",
         "credential_echo",
         "call_limit",
         "bad_usage",

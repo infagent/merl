@@ -115,9 +115,22 @@ print(json.dumps({'schema':'merl.transport-final/v1','response':out}),flush=True
             .args(["transport", "call", "--plan"])
             .arg(&plan)
             .args(["--plan-sha256", &hash(&plan)])
-            .env("MOCK_PROVIDER_KEY", "synthetic-secret-value")
+            .env(
+                "MOCK_PROVIDER_KEY",
+                if self.mode == "missing_credentials" {
+                    ""
+                } else {
+                    "synthetic-secret-value"
+                },
+            )
             .env("HTTP_PROXY", "http://127.0.0.1:1")
             .env("HTTPS_PROXY", "http://127.0.0.1:1")
+            .env("ALL_PROXY", "http://127.0.0.1:1")
+            .env("http_proxy", "http://127.0.0.1:1")
+            .env("https_proxy", "http://127.0.0.1:1")
+            .env("all_proxy", "http://127.0.0.1:1")
+            .env("NO_PROXY", "")
+            .env("no_proxy", "")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -200,7 +213,7 @@ print(json.dumps({'schema':'merl.transport-final/v1','response':out}),flush=True
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(!text.contains("synthetic-secret-value"));
-        if ["role_swap", "adapter_tamper"].contains(&self.mode.as_str()) {
+        if ["role_swap", "adapter_tamper", "missing_credentials"].contains(&self.mode.as_str()) {
             assert!(
                 output.stdout.is_empty(),
                 "preflight must reject before invoking workers"
@@ -240,6 +253,10 @@ print(json.dumps({'schema':'merl.transport-final/v1','response':out}),flush=True
                 assert_eq!(call["error"], "provider_redirect");
             }
             "credential_echo" => assert_eq!(call["error"], "credential_echo"),
+            "unavailable" => {
+                assert_eq!(call["error"], "provider_http");
+                assert!(call["usage"].is_null());
+            }
             "missing_usage" => {
                 assert!(call["usage"].is_null());
                 assert!(call["error"].is_string());
