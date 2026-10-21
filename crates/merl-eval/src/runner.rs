@@ -364,15 +364,17 @@ pub struct SummaryCallRecord {
 pub struct MethodStats {
     /// Reading method.
     pub method: BenchmarkMethod,
-    /// Exact preparation cost across independent trials.
+    /// Known preparation cost across independent trials, including failed slots.
     pub total_preparation_tokens: u128,
-    /// Mean preparation cost per trial.
+    /// Mean known preparation cost per trial.
     pub mean_preparation_tokens: f64,
     /// Sample variance of preparation cost.
     pub preparation_token_variance: f64,
-    /// Exact total across paired reads, used for break-even arithmetic.
+    /// Known total across paired reads, including calls retained by failed slots.
     pub total_read_tokens: u128,
-    /// Mean per-read token cost across paired trials.
+    /// Additional provider usage may be unknown; known totals are lower bounds.
+    pub usage_incomplete: bool,
+    /// Mean known token cost per recorded visit, including failed slots.
     pub mean_read_tokens: f64,
     /// Sample variance of per-read token cost.
     pub read_token_variance: f64,
@@ -828,7 +830,7 @@ impl<M: ModelAdapter, S: MerlSurface, J: Grader> BenchmarkRunner<'_, M, S, J> {
 
         let methods = BenchmarkMethod::ALL
             .into_iter()
-            .map(|method| method_stats(method, &trials))
+            .map(|method| method_stats(method, &trials, &failures, &preparation))
             .collect::<Vec<_>>();
         let raw_cost = methods[0].total_read_tokens;
         let break_even = methods[1..]
@@ -1184,19 +1186,51 @@ fn failed_slot(
     clippy::too_many_lines,
     reason = "legacy display statistics retain their native scalar grade contract"
 )]
-fn method_stats<G: TrialGrade>(method: BenchmarkMethod, trials: &[TrialReport<G>]) -> MethodStats {
+fn method_stats<G: TrialGrade>(
+    method: BenchmarkMethod,
+    trials: &[TrialReport<G>],
+    failures: &[TrialFailure],
+    preparation: &[PreparationRecord],
+) -> MethodStats {
     let reads = trials
         .iter()
         .filter(|trial| trial.method == method)
         .collect::<Vec<_>>();
-    // Provider usage is exact in the report; floating point is only for display statistics.
+    let failed = failures
+        .iter()
+        .filter(|failure| failure.method == method)
+        .collect::<Vec<_>>();
+    let preparation = preparation
+        .iter()
+        .filter(|record| record.method == method)
+        .collect::<Vec<_>>();
+    let costs = reads
+        .iter()
+        .map(|read| read.read_usage.total())
+        .chain(failed.iter().map(|failure| {
+            failure
+                .answer_calls
+                .iter()
+                .map(|call| call.usage.total())
+                .sum()
+        }))
+        .collect::<Vec<u128>>();
+    // Floating point is only for display; totals retain every reported call.
     #[expect(clippy::cast_precision_loss, reason = "display-only mean and variance")]
-    let count = reads.len() as f64;
+    let count = costs.len() as f64;
     let mut preparation_by_trial = std::collections::BTreeMap::<&str, u128>::new();
-    for read in &reads {
+    for trial_id in reads
+        .iter()
+        .map(|read| read.trial_id.as_str())
+        .chain(failed.iter().map(|failure| failure.trial_id.as_str()))
+    {
+        preparation_by_trial.entry(trial_id).or_default();
+    }
+    // The ledger owns shared costs even when the first attributable answer fails.
+    for record in &preparation {
         *preparation_by_trial
-            .entry(read.trial_id.as_str())
-            .or_default() += read.preparation_usage.total();
+            .entry(record.trial_id.as_str())
+            .or_default() += record.known_usage.total();
     }
     let total_preparation_tokens = preparation_by_trial.values().sum();
     #[expect(clippy::cast_precision_loss, reason = "display-only mean and variance")]
@@ -1213,18 +1247,14 @@ fn method_stats<G: TrialGrade>(method: BenchmarkMethod, trials: &[TrialReport<G>
     } else {
         0.0
     };
-    let total_read_tokens = reads.iter().map(|trial| trial.read_usage.total()).sum();
+    let total_read_tokens = costs.iter().sum();
     #[expect(clippy::cast_precision_loss, reason = "display-only mean and variance")]
-    let mean_read_tokens = reads
-        .iter()
-        .map(|trial| trial.read_usage.total() as f64)
-        .sum::<f64>()
-        / count.max(1.0);
+    let mean_read_tokens = costs.iter().map(|cost| *cost as f64).sum::<f64>() / count.max(1.0);
     #[expect(clippy::cast_precision_loss, reason = "display-only mean and variance")]
-    let read_token_variance = if reads.len() > 1 {
-        reads
+    let read_token_variance = if costs.len() > 1 {
+        costs
             .iter()
-            .map(|trial| (trial.read_usage.total() as f64 - mean_read_tokens).powi(2))
+            .map(|cost| (*cost as f64 - mean_read_tokens).powi(2))
             .sum::<f64>()
             / (count - 1.0)
     } else {
@@ -1238,14 +1268,24 @@ fn method_stats<G: TrialGrade>(method: BenchmarkMethod, trials: &[TrialReport<G>
         .iter()
         .map(|trial| trial.score.scalar().and_then(|grade| grade.provenance))
         .collect::<Option<Vec<_>>>();
-    let (mean_correctness, correctness_variance) = grade_stats(correctness.as_deref());
-    let (mean_provenance, provenance_variance) = grade_stats(provenance.as_deref());
+    let (mean_correctness, correctness_variance) = if failed.is_empty() {
+        grade_stats(correctness.as_deref())
+    } else {
+        (None, None)
+    };
+    let (mean_provenance, provenance_variance) = if failed.is_empty() {
+        grade_stats(provenance.as_deref())
+    } else {
+        (None, None)
+    };
     MethodStats {
         method,
         total_preparation_tokens,
         mean_preparation_tokens,
         preparation_token_variance,
         total_read_tokens,
+        usage_incomplete: failed.iter().any(|f| f.usage_incomplete)
+            || preparation.iter().any(|p| !p.complete),
         mean_read_tokens,
         read_token_variance,
         mean_correctness,

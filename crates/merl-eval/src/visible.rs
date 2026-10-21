@@ -121,7 +121,9 @@ pub fn run_prefix<M: ModelAdapter, S: MerlSurface, J: Grader<Grade = Categorical
         .ok_or(BenchmarkError::InvalidConfig("unapproved case/cutoff"))?;
     let length =
         usize::try_from(cutoff).map_err(|_| BenchmarkError::InvalidConfig("cutoff length"))?;
-    // Remove later observations before *any* renderer or stateful preparation runs.
+    let boundary_unordered = crate::cutoff_splits_unordered_group(&fixture, cutoff);
+    // Preserve the boundary's fidelity fact, then remove all later source bytes
+    // before any renderer or stateful preparation runs.
     // Terminal provider facts remain internal validation metadata, never model input.
     let mut bounded = fixture.clone();
     bounded.observations.truncate(length);
@@ -139,12 +141,18 @@ pub fn run_prefix<M: ModelAdapter, S: MerlSurface, J: Grader<Grade = Categorical
         })
         .collect();
     let mut disclosed_model = VisibleModel { package, model };
-    let result = BenchmarkRunner {
+    let mut result = BenchmarkRunner {
         model: &mut disclosed_model,
         merl,
         scorer: grader,
     }
     .run_suite_recording(&bounded, questions, config)?;
+    if boundary_unordered {
+        for source in &mut result.source_fidelity {
+            source.fidelity.cutoff_splits_unordered_group = true;
+            source.fidelity.exact_replay = false;
+        }
+    }
     Ok(PrefixReport {
         case: first.case().to_owned(),
         cutoff,

@@ -48,3 +48,17 @@ fn a_failed_shared_summary_does_not_erase_costs_or_block_independent_methods() {
         .when_a_shared_summary_fails()
         .then_only_dependent_units_fail_and_known_preparation_cost_survives();
 }
+
+#[test]
+fn a_prefix_boundary_keeps_timestamp_ambiguity_without_disclosing_the_next_body() {
+    PackageCase::given_a_synthetic_approved_package()
+        .when_the_cutoff_splits_a_timestamp_tie()
+        .then_the_boundary_remains_ambiguous_and_cannot_claim_exact_replay();
+}
+
+#[test]
+fn failed_grading_keeps_read_and_shared_preparation_costs_in_method_totals() {
+    visible_package::CostCase::given_two_units_sharing_preparation()
+        .when_the_first_units_answers_cannot_be_graded()
+        .then_method_totals_include_all_reported_reads_and_preparation();
+}

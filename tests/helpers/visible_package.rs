@@ -592,3 +592,132 @@ fn tamper_filesystem(mutation: &str, directory: &std::path::Path, root: &std::pa
         _ => {}
     }
 }
+
+impl PackageCase {
+    pub fn when_the_cutoff_splits_a_timestamp_tie(mut self) -> Self {
+        let package = self.verify().unwrap();
+        let mut fixture = Self::fixture(&package);
+        fixture.origin = merl_corpus::fixture::Origin::Natural;
+        let (earlier, later) = fixture.observations.split_at_mut(1);
+        later[0].created_at.clone_from(&earlier[0].created_at);
+        later[0].occurred_at.clone_from(&earlier[0].occurred_at);
+        later[0].ambiguous_order_with_previous = true;
+        fixture.capture.source_sha256 =
+            merl_corpus::fixture::source_digest(&fixture.provider_snapshot, &fixture.observations);
+        let before =
+            merl_eval::prepare_reader_input(&fixture, 1, merl_eval::ReaderMethod::RawHistory, 1)
+                .unwrap();
+        assert!(before.fidelity.cutoff_splits_unordered_group);
+        assert!(!before.fidelity.exact_replay);
+        let config = semantic_config();
+        let prefix = merl_eval::visible::run_prefix(
+            &package,
+            &serde_json::to_vec(&fixture).unwrap(),
+            1,
+            config.clone(),
+            &mut ToyModel,
+            &mut ToyMerl,
+            &mut FaultGrader { calls: 1 },
+        )
+        .unwrap();
+        self.report = Some(
+            merl_eval::visible::PackageReport::assemble(&package, config, vec![prefix]).unwrap(),
+        );
+        self
+    }
+    pub fn then_the_boundary_remains_ambiguous_and_cannot_claim_exact_replay(self) {
+        let report = self.report.as_ref().unwrap();
+        let fidelity = &report.prefixes[0].source_fidelity[0].fidelity;
+        assert!(fidelity.cutoff_splits_unordered_group);
+        assert!(!fidelity.exact_replay);
+        assert_eq!(report.prefixes[0].trials.len(), 10);
+        assert_eq!(report.prefixes[0].summary_calls.len(), 1);
+    }
+}
+
+pub struct CostCase {
+    report: Option<merl_eval::BenchmarkReport<merl_eval::grading::CategoricalGrade>>,
+}
+impl CostCase {
+    pub fn given_two_units_sharing_preparation() -> Self {
+        Self { report: None }
+    }
+    pub fn when_the_first_units_answers_cannot_be_graded(mut self) -> Self {
+        let case = PackageCase::given_a_synthetic_approved_package();
+        let package = case.verify().unwrap();
+        let fixture = PackageCase::fixture(&package);
+        let questions = package.units()[..2]
+            .iter()
+            .map(|u| merl_eval::EvaluationQuestion {
+                id: u.id().to_owned(),
+                cutoff: u.cutoff(),
+                capture_phase: false,
+                text: u.question().to_owned(),
+            })
+            .collect();
+        self.report = Some(
+            merl_eval::BenchmarkRunner {
+                model: &mut CostModel,
+                merl: &mut ToyMerl,
+                scorer: &mut FailFirstQuestion,
+            }
+            .run_suite_recording(&fixture, questions, semantic_config())
+            .unwrap(),
+        );
+        self
+    }
+    pub fn then_method_totals_include_all_reported_reads_and_preparation(self) {
+        let report = self.report.unwrap();
+        assert_eq!(report.failures.len(), 5);
+        assert_eq!(report.trials.len(), 5);
+        for (stats, preparation) in report.methods.iter().zip([0, 7, 0, 7, 20]) {
+            assert_eq!(stats.total_read_tokens, 30, "{:?}", stats.method);
+            assert!((stats.mean_read_tokens - 15.0).abs() < f64::EPSILON);
+            assert!(stats.read_token_variance.abs() < f64::EPSILON);
+            assert_eq!(
+                stats.total_preparation_tokens, preparation,
+                "{:?}",
+                stats.method
+            );
+            assert!(!stats.usage_incomplete);
+        }
+    }
+}
+struct CostModel;
+impl merl_eval::ModelAdapter for CostModel {
+    fn summarize(
+        &mut self,
+        r: merl_eval::SummaryRequest<'_>,
+    ) -> Result<merl_eval::SummaryResponse, String> {
+        merl_eval::ModelAdapter::summarize(&mut ToyModel, r)
+    }
+    fn answer(
+        &mut self,
+        _: merl_eval::AnswerRequest<'_>,
+    ) -> Result<merl_eval::AnswerResponse, String> {
+        Ok(merl_eval::AnswerResponse {
+            action: merl_eval::AnswerAction::Final {
+                answer: "An amber heading.".into(),
+                citations: vec!["O1".into()],
+            },
+            usage: merl_eval::TokenUsage {
+                input: 10,
+                output: 5,
+            },
+        })
+    }
+}
+struct FailFirstQuestion;
+impl merl_eval::grading::Grader for FailFirstQuestion {
+    type Grade = merl_eval::grading::CategoricalGrade;
+    fn grade(&mut self, id: &str, _: &str, _: &[String]) -> Result<Self::Grade, String> {
+        if id == "SYN-Q1@1" {
+            return Err("synthetic grading failure".into());
+        }
+        Ok(Self::Grade {
+            unit_id: id.into(),
+            verdict: merl_eval::grading::Verdict::Correct,
+            reason: "Synthetic semantic agreement.".into(),
+        })
+    }
+}
