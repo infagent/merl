@@ -73,7 +73,7 @@ Guidance keeps its scope, author, authority, provenance, priority, and lifecycle
 
 A Task remains knowledge-plane state. An Assignment connects one logical Agent to that Task for a period of responsibility. The Assignment can exist before a process starts and survives session replacement.
 
-Phase 4 supports direct assignment by an authorized human and self-claim where project policy allows it. It records assignment history rather than rewriting ownership in place. An `AgentSession` may hold the Assignment's execution lease. The lease prevents two sessions from acting as the same worker, but its expiry does not end the Assignment.
+Phase 4 supports direct assignment by an authorized human, assignment and reassignment by a planner within human-established project policy, and self-claim where that policy allows it. The planner coordinates existing logical agents; a human still starts their processes. Assignment authority does not grant runtime selection or process control. Merl records assignment history rather than rewriting ownership in place. An `AgentSession` may hold the Assignment's execution lease. The lease prevents two sessions from acting as the same worker, but its expiry does not end the Assignment.
 
 The task keeps its independent planning facets:
 
@@ -86,6 +86,14 @@ The task keeps its independent planning facets:
 Deferring or pausing work removes it from the actionable queue without erasing the assignment history. Pausing in-progress work requires a checkpoint before Merl releases the execution lease.
 
 A handoff references the Task, current project revision, relevant objects, artifacts, and an optional short note payload. The next agent receives current objects. It does not inherit a copied snapshot that can drift from accepted state.
+
+### Planner decisions and outstanding obligations
+
+The daily-use workflow has one planner per project coordinating implementers, researchers, and reviewers. A worker can raise a Question with alternatives and evidence. The planner records a Decision within its authority, or leaves the question pending for an authorized human. A conditional decision links to the Tasks and Blockers that express its prerequisites and follow-up work, with an owner and an explicit completion or verification criterion for each obligation. These use existing knowledge types and relations.
+
+Revising one part of a decision must preserve its unaffected obligations. A reviewer can challenge a factual premise or requirement and return it to the planner for disposition. The finding remains visible until an authorized resolution is recorded; delivery or acknowledgement alone does not resolve it.
+
+Provider merge state, permission to proceed, and verification of an outcome remain separate facts. Several independent prerequisites may constrain a Task. A local Task may record an external prerequisite and the evidence needed to clear it, without automating another project or probing external resources. A merge cannot by itself clear those prerequisites or verify the promised outcome.
 
 ## Repository synchronization
 
@@ -123,6 +131,8 @@ The context contains, within a recorded budget:
 6. expandable references for omitted detail.
 
 Relation kind and direction affect priority. A blocker should appear before an incidental mention. The response reports selector version, coverage scope, and truncation so an agent cannot mistake a bounded view for proof that no other state exists.
+
+A planner's coordination assignment needs a bounded view across the work it oversees: questions awaiting rulings, challenged assumptions, blocked or deferred Tasks, outstanding obligations, and reported outcomes awaiting acceptance. Selection follows that explicit coordination scope and project policy. It reports the same budgets, omissions, and expansion references as a worker view; a planner role does not justify loading the whole project. A fresh planner session must recover this queue from accepted state without reconstructing it from conversations.
 
 Phase 4 does not need staffing requirements such as preferred model, reasoning effort, or cost class. Those fields help Phase 5 choose among runtimes. Product requirements and review obligations that affect implementation are ordinary accepted project state and belong in the Phase 4 context.
 
@@ -221,6 +231,8 @@ Phase 4 measures whether a team can work reliably with less repeated context. Ea
 - review findings caught, missed, or rediscovered;
 - unnecessary source and history rereads.
 
+The ledger covers the planner and all workers, including decision reconciliation, review and revision loops, failed attempts, and context replacements. Record every human copy/paste or repeated instruction needed to finish the workflow, with its reason. Report manual interventions separately from measured token usage; unavailable host measurements remain unavailable. Both comparison arms use these accounting boundaries.
+
 The report compares Merl with a transcript-oriented team running the same scenario. Merl succeeds only if the team completes the workflow at least as reliably while consuming substantially less repeated project context. The report includes failures and disagreements rather than treating low token use as success by itself.
 
 ## Deliverables
@@ -260,12 +272,16 @@ Phase 4 is complete when:
 - project role and membership come from durable policy rather than runtime claims;
 - one active session holds a logical agent's actionable inbox and Assignment execution leases;
 - ending or replacing that session does not end the Assignment or discard its workspace;
-- an authorized human can assign a Task, while an allowed agent can claim eligible work;
+- an authorized human or policy-authorized planner can assign a Task to an existing logical agent, while an allowed agent can claim eligible work;
+- assignment outside the planner's authority is rejected without changing responsibility;
 - assignment history survives reassignment, pause, deferral, completion, and cancellation;
 - two agents assigned different Tasks receive different default context without supplying `--focus`;
 - focus selection uses relation kind and direction, records its selector version, and reports truncation;
 - session resume returns bounded guidance, assignment state, checkpoint references, relevant deltas, and current accepted objects;
 - current accepted state overrides stale checkpoint prose;
+- planner resume recovers pending rulings, challenges, obligations, blockers, and outcomes awaiting acceptance within an explicit coordination scope and budget;
+- a partial decision revision preserves unaffected obligations and routes the relevant changes to their owners;
+- merge observation does not clear independent prerequisites or imply outcome verification;
 - a new writable assignment receives a unique branch and worktree;
 - two active writers cannot obtain leases for the same working tree;
 - read-only review work cannot modify the writer's checkout;
@@ -297,18 +313,35 @@ The release scenario uses an existing GitHub repository plus a PM, an engineer, 
 1. A human attaches the repository and selects its active milestone and agent-work labels.
 2. Merl catalogs the repository, captures selected existing Issues, and leaves unrelated backlog prose out of compiler input.
 3. A later sync records one new comment and one provider-state change without duplicating earlier work.
-4. The PM assigns separate accepted Tasks to the engineer and researcher.
+4. Within human-established policy, the planner assigns separate accepted Tasks to the engineer and researcher.
 5. Merl creates an isolated writable worktree for each Task that needs repository access.
 6. The engineer and researcher attach through different host adapters and resume into different assignment-focused contexts.
-7. The researcher records a finding that changes the engineer's Task.
-8. The engineer receives a compact delta and expands only the finding and its evidence.
-9. The engineer sends a supplemental note linked to a structured Task transition; Merl does not create duplicate work from that note.
-10. The engineer publishes its assignment branch as a pull request.
-11. A reviewer opens the reviewed commit in a separate read-only workspace and records a finding.
-12. GitHub reports the final merge state through the project revision and inbox.
-13. Both workers checkpoint and close, releasing their session leases while their unfinished Assignments and workspaces remain durable.
-14. Fresh sessions acquire new execution and workspace leases and resume from current state and referenced objects without receiving the prior transcripts.
-15. Merl reports task correctness, missed state, review outcomes, continuity failures, rereads, and context cost for both the Merl and transcript-oriented teams.
+7. The researcher raises a Question with alternatives and evidence. The planner records a conditional Decision and links owned prerequisite and follow-up Tasks.
+8. The engineer receives a compact delta and expands the decision and relevant evidence. A supplemental note does not duplicate the structured work.
+9. The engineer publishes its assignment branch as a pull request.
+10. A reviewer opens the pinned commit in a separate read-only workspace and challenges one premise of the decision. The planner revises that part while preserving an independent obligation.
+11. While work remains unfinished, the planner and engineer checkpoint and close. Their Assignments, outstanding obligations, and workspaces remain durable.
+12. Fresh sessions acquire new leases and recover the planner's pending queue and the engineer's current requirements without prior transcripts. Stale checkpoint prose cannot restore the superseded premise.
+13. The team resolves the review finding against the applicable commit and GitHub reports the final merge state through the project revision and inbox.
+14. An independent prerequisite remains open after merge. The team records the required evidence before accepting the dependent outcome.
+15. Merl reports task correctness, lost obligations, missed state, review outcomes, continuity failures, manual copying, rereads, and whole-team context cost for both comparison arms.
+
+Use synthetic project content for the published scenario and evidence. Freeze its expected obligations, revision boundaries, restart points, and verification rules before the comparative run.
+
+### Task ownership
+
+The existing Phase 4 tasks own these requirements:
+
+| Work | Tasks |
+| --- | --- |
+| Planner assignment authority and obligation lifecycle | #87 |
+| Bounded planner context and worker/planner restart | #97, #98 |
+| Planner routing and conditional decision coordination | #100, #102 |
+| Review challenges, disposition, and merge versus verification | #106, #107 |
+| Frozen scenario, whole-team ledger, and comparison | #109, #111, #112 |
+| Exploratory planner workflow and manual-copy findings | #138 |
+
+The exploratory checkpoint does not replace the frozen comparison or reorder the release milestones.
 
 ## Deferred work
 
