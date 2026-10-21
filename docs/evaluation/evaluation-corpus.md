@@ -1,5 +1,7 @@
 # Evaluation corpus
 
+The visible v2 inventory has now been reviewed and approved for a first pass: eight cases, 38 questions and 57 question/cutoff units. The immediate execution scope is the eight-unit [bounded visible pilot](visible-pilot.md); the full inventory and original annotations stay frozen. Natural redistribution remains pending. The historical curation descriptions below do not revoke the recorded v2 approval in #131.
+
 Merl needs issue histories where the current answer differs from an earlier answer. A long thread alone does not test that. The visible development set has two public captures awaiting review and three controlled histories that test different failure modes.
 
 The corpus is split by complete issue, never by comment. Development material is visible to implementers. Adversarial cases remain separate. Held-out v3 stays with the evaluator as an archive; this harness cannot run it.
