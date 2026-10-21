@@ -22,7 +22,11 @@ const WIRE_SCHEMA: &str = "merl.eval-adapter/v1";
 pub struct ProcessModelAdapter {
     program: PathBuf,
     isolated: Option<crate::isolation::IsolatedProgram>,
+    transport: Option<crate::transport::RemoteTransport>,
     calls: Vec<crate::isolation::ProcessCallRecord>,
+    // A successful response transfers its usage to the runner. Retaining it here
+    // would charge an empty summary twice when the runner later rejects the text.
+    known_usage: TokenUsage,
     max_request_bytes: usize,
     max_response_bytes: usize,
 }
@@ -38,7 +42,9 @@ impl ProcessModelAdapter {
         Self {
             program: program.into(),
             isolated: None,
+            transport: None,
             calls: Vec::new(),
+            known_usage: TokenUsage::default(),
             max_request_bytes,
             max_response_bytes,
         }
@@ -51,7 +57,9 @@ impl ProcessModelAdapter {
         Self {
             program: PathBuf::new(),
             isolated: Some(program),
+            transport: None,
             calls: Vec::new(),
+            known_usage: TokenUsage::default(),
             max_request_bytes: 0,
             max_response_bytes: 0,
         }
@@ -63,11 +71,40 @@ impl ProcessModelAdapter {
         &self.calls
     }
 
+    /// Uses an isolated reader with a role-bound, fixed-endpoint model transport.
+    ///
+    /// # Errors
+    /// Rejects a preparer or grader transport on the reader boundary.
+    pub fn with_transport(
+        program: crate::isolation::IsolatedProgram,
+        transport: crate::transport::RemoteTransport,
+    ) -> Result<Self, crate::transport::TransportError> {
+        transport.require_role(crate::transport::TransportRole::Reader)?;
+        let mut adapter = Self::isolated(program);
+        adapter.transport = Some(transport);
+        Ok(adapter)
+    }
+
+    /// Remote generation receipts, separate from worker process receipts.
+    #[must_use]
+    pub fn transport_report(&self) -> Option<crate::transport::TransportReport<'_>> {
+        self.transport
+            .as_ref()
+            .map(crate::transport::RemoteTransport::report)
+    }
+
     fn call(&mut self, request: &Value) -> Result<WireResponse, String> {
         let response: WireResponse = if let Some(program) = &self.isolated {
-            let value = program
-                .recorded_call(&std::collections::BTreeMap::new(), request, &mut self.calls)
-                .map_err(|error| error.to_string())?;
+            let inputs = std::collections::BTreeMap::new();
+            let value = if let Some(transport) = &mut self.transport {
+                let response =
+                    program.recorded_remote_call(&inputs, request, &mut self.calls, transport);
+                self.known_usage = transport.invocation_usage().map_err(|e| e.to_string())?;
+                response
+            } else {
+                program.recorded_call(&inputs, request, &mut self.calls)
+            }
+            .map_err(|error| error.to_string())?;
             serde_json::from_value(value)
                 .map_err(|_| "invalid model adapter response".to_owned())?
         } else {
@@ -82,12 +119,29 @@ impl ProcessModelAdapter {
         if response.schema() != WIRE_SCHEMA {
             return Err("model adapter returned an unsupported schema".to_owned());
         }
+        if let Some(transport) = &self.transport
+            && response.usage() != transport.invocation_usage().map_err(|e| e.to_string())?
+        {
+            return Err("worker usage differs from provider receipts".into());
+        }
         Ok(response)
+    }
+
+    fn check_config(&mut self, config: &crate::BenchmarkConfig) -> Result<(), String> {
+        self.known_usage = TokenUsage::default();
+        if let Some(transport) = &self.transport {
+            transport.check_reader(config).map_err(|e| e.to_string())?;
+        }
+        Ok(())
     }
 }
 
 impl ModelAdapter for ProcessModelAdapter {
+    fn failed_usage(&self) -> TokenUsage {
+        self.known_usage
+    }
     fn summarize(&mut self, request: SummaryRequest<'_>) -> Result<SummaryResponse, String> {
+        self.check_config(request.config)?;
         let response = self.call(&json!({
             "schema": WIRE_SCHEMA,
             "kind": "summarize",
@@ -107,12 +161,16 @@ impl ModelAdapter for ProcessModelAdapter {
             }
         }))?;
         match response {
-            WireResponse::Summary { text, usage, .. } => Ok(SummaryResponse { text, usage }),
+            WireResponse::Summary { text, usage, .. } => {
+                self.known_usage = TokenUsage::default();
+                Ok(SummaryResponse { text, usage })
+            }
             _ => Err("model adapter returned an answer to a summary request".to_owned()),
         }
     }
 
     fn answer(&mut self, request: AnswerRequest<'_>) -> Result<AnswerResponse, String> {
+        self.check_config(request.config)?;
         let response = self.call(&answer_wire_request(&request))?;
         let (action, usage) = match response {
             WireResponse::Final {
@@ -129,6 +187,7 @@ impl ModelAdapter for ProcessModelAdapter {
                 return Err("model adapter returned a summary to an answer request".to_owned());
             }
         };
+        self.known_usage = TokenUsage::default();
         Ok(AnswerResponse { action, usage })
     }
 }
@@ -185,6 +244,14 @@ enum WireResponse {
 }
 
 impl WireResponse {
+    fn usage(&self) -> TokenUsage {
+        match self {
+            Self::Summary { usage, .. }
+            | Self::Final { usage, .. }
+            | Self::Search { usage, .. }
+            | Self::Expand { usage, .. } => *usage,
+        }
+    }
     fn schema(&self) -> &str {
         match self {
             Self::Summary { schema, .. }

@@ -98,6 +98,7 @@ impl<T: Scorer> Grader for T {
 pub struct CategoricalProcessGrader<'a> {
     package: &'a crate::package::VerifiedPackage,
     program: crate::isolation::IsolatedProgram,
+    transport: Option<crate::transport::RemoteTransport>,
     calls: Vec<crate::isolation::ProcessCallRecord>,
 }
 impl<'a> CategoricalProcessGrader<'a> {
@@ -110,6 +111,7 @@ impl<'a> CategoricalProcessGrader<'a> {
         Self {
             package,
             program,
+            transport: None,
             calls: Vec::new(),
         }
     }
@@ -117,6 +119,29 @@ impl<'a> CategoricalProcessGrader<'a> {
     #[must_use]
     pub fn calls(&self) -> &[crate::isolation::ProcessCallRecord] {
         &self.calls
+    }
+
+    /// Adds an independently configured grader model transport.
+    ///
+    /// # Errors
+    /// Rejects reader/preparer capabilities at the evaluator-owned grader boundary.
+    pub fn with_transport(
+        package: &'a crate::package::VerifiedPackage,
+        program: crate::isolation::IsolatedProgram,
+        transport: crate::transport::RemoteTransport,
+    ) -> Result<Self, crate::transport::TransportError> {
+        transport.require_role(crate::transport::TransportRole::Grader)?;
+        let mut grader = Self::new(package, program);
+        grader.transport = Some(transport);
+        Ok(grader)
+    }
+
+    /// Provider costs and failures of the grader, never charged to reader methods.
+    #[must_use]
+    pub fn transport_report(&self) -> Option<crate::transport::TransportReport<'_>> {
+        self.transport
+            .as_ref()
+            .map(crate::transport::RemoteTransport::report)
     }
 }
 impl Grader for CategoricalProcessGrader<'_> {
@@ -140,10 +165,14 @@ impl Grader for CategoricalProcessGrader<'_> {
             "response.json".into(),
             serde_json::to_vec(&request).map_err(|_| "grader input JSON")?,
         );
-        let response = self
-            .program
-            .recorded_call(&inputs, &request, &mut self.calls)
-            .map_err(|error| error.to_string())?;
+        let response = if let Some(transport) = &mut self.transport {
+            self.program
+                .recorded_remote_call(&inputs, &request, &mut self.calls, transport)
+        } else {
+            self.program
+                .recorded_call(&inputs, &request, &mut self.calls)
+        }
+        .map_err(|error| error.to_string())?;
         let grade: CategoricalGrade =
             serde_json::from_value(response).map_err(|_| "invalid categorical response")?;
         grade.validate(unit_id).map_err(|error| error.to_string())?;

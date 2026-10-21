@@ -367,6 +367,9 @@ struct VisibleModel<'a, M> {
     model: &'a mut M,
 }
 impl<M: ModelAdapter> ModelAdapter for VisibleModel<'_, M> {
+    fn failed_usage(&self) -> crate::TokenUsage {
+        self.model.failed_usage()
+    }
     fn summarize(
         &mut self,
         request: crate::SummaryRequest<'_>,

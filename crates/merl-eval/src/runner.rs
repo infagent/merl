@@ -219,6 +219,12 @@ pub struct AnswerResponse {
 
 /// Model-facing adapter. It never receives the evaluator's answer key.
 pub trait ModelAdapter {
+    /// Known provider cost of the most recent failed invocation. Missing usage
+    /// remains incomplete; implementations must never estimate it from text.
+    fn failed_usage(&self) -> TokenUsage {
+        TokenUsage::default()
+    }
+
     /// Update a rolling summary once from one newly visible source version.
     ///
     /// # Errors
@@ -334,6 +340,8 @@ pub struct AnswerCallRecord {
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnswerCallAction {
+    /// A provider call incurred known cost but no valid reader action completed.
+    Failed,
     /// The reader returned an answer.
     Final,
     /// The reader requested source search.
@@ -471,6 +479,16 @@ struct ReadProgress {
     calls: Vec<AnswerCallRecord>,
     answer: Option<String>,
     citations: Vec<String>,
+}
+impl ReadProgress {
+    fn model_failure(&mut self, round: usize, usage: TokenUsage, error: String) -> BenchmarkError {
+        self.calls.push(AnswerCallRecord {
+            round,
+            action: AnswerCallAction::Failed,
+            usage,
+        });
+        BenchmarkError::Model(error)
+    }
 }
 
 /// Source evidence available at one question cutoff.
@@ -714,8 +732,13 @@ impl<M: ModelAdapter, S: MerlSurface, J: Grader> BenchmarkRunner<'_, M, S, J> {
                     trial,
                     &mut summary_calls,
                 );
+                let failed_summary_usage = if summary.is_err() {
+                    self.model.failed_usage()
+                } else {
+                    TokenUsage::default()
+                };
                 let summary = strict_or_recorded(summary, record_failures)?;
-                let mut summary_usage = TokenUsage::default();
+                let mut summary_usage = failed_summary_usage;
                 for call in &summary_calls[before..] {
                     summary_usage.add(call.usage)?;
                 }
@@ -1002,19 +1025,18 @@ impl<M: ModelAdapter, S: MerlSurface, J: Grader> BenchmarkRunner<'_, M, S, J> {
                 BenchmarkMethod::RecentRetrieval | BenchmarkMethod::SummaryRetrieval
             );
             let can_expand = method == BenchmarkMethod::Merl;
-            let response = self
-                .model
-                .answer(AnswerRequest {
-                    config,
-                    trial,
-                    method,
-                    question_id: &question.id,
-                    question: &question.text,
-                    context: &context,
-                    can_search,
-                    can_expand,
-                })
-                .map_err(BenchmarkError::Model)?;
+            let response = self.model.answer(AnswerRequest {
+                config,
+                trial,
+                method,
+                question_id: &question.id,
+                question: &question.text,
+                context: &context,
+                can_search,
+                can_expand,
+            });
+            let response = response
+                .map_err(|error| progress.model_failure(round, self.model.failed_usage(), error))?;
             usage.add(response.usage)?;
             answer_calls.push(AnswerCallRecord {
                 round,

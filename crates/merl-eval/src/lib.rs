@@ -14,6 +14,7 @@ pub mod isolation;
 pub mod package;
 mod preparation;
 mod runner;
+pub mod transport;
 pub mod visible;
 
 pub use adapters::{CliMerlSurface, MerlTrialArtifact, ProcessModelAdapter, ProcessScorer};
