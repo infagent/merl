@@ -46,6 +46,8 @@ Pick an open issue or discuss the change before investing in a large patch. The 
 Install the stable Rust toolchain with [rustup](https://rustup.rs/). The CI workflow is the source of truth for required components and checks. Once the Rust workspace is present, the usual commands are:
 
 ```sh
+python3 scripts/check_test_conventions.py
+python3 -m unittest discover -s scripts -p 'test_*.py'
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
@@ -69,6 +71,11 @@ In the pull request description:
 - include sample human and JSON CLI output when either changes.
 
 Use a conventional commit subject such as `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, or `chore:`. Release Please uses these prefixes to prepare release notes and versions.
+
+Both `Rust checks` and `Test conventions` must pass before a pull request can
+merge into `main`, including release pull requests. The branch must include the
+current `main`; update it and rerun CI if another change lands first. See the
+[release gates](docs/release-gates.md) for the ruleset and verification evidence.
 
 Maintainers may ask for revisions or split work before merging. Review focuses on observable behavior, compatibility, correctness, and fit with the current milestone.
 

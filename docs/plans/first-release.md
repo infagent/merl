@@ -20,6 +20,9 @@ Before product code, the repository gets its build and release machinery:
 2. Release Please maintains a release pull request from conventional commits and creates a tag and GitHub release only after that pull request merges with required checks passing.
 3. Corpus, schema, compiler, policy, views, inbox, and benchmark work follow under those checks.
 
+The [release gates](../release-gates.md) record the active required checks,
+up-to-date branch policy, and release automation evidence for #130.
+
 This order makes the build and release contract visible from the first Rust change. Curl installation remains deferred until Merl produces an installable artifact.
 
 ## Evaluation corpus
