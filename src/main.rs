@@ -1,6 +1,6 @@
 //! Command-line interface for Merl.
 
-fn main() {
+fn main( ) {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match merl_cli::run(&arguments) {
         merl_cli::CliResponse::Success(output) => print!("{output}"),
