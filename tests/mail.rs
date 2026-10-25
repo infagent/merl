@@ -68,3 +68,10 @@ fn new_mail_joins_a_pending_wake_but_a_receipted_batch_does_not_delay_new_work()
         .when_new_messages_arrive_before_and_after_receipt()
         .then_pending_mail_coalesces_and_a_new_batch_wakes_immediately();
 }
+
+#[test]
+fn mail_uses_the_last_output_format_for_help_and_errors() {
+    Mailbox::given_three_named_agents("format")
+        .when_human_and_json_output_flags_are_mixed()
+        .then_the_last_flag_controls_success_and_error_output();
+}

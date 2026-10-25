@@ -35,8 +35,7 @@ pub(super) fn execute(
     json_output: &mut bool,
     clock: &impl Fn() -> Result<i64, CliError>,
 ) -> Result<String, CliError> {
-    *json_output = a.iter().any(|v| v == "--json")
-        || a.windows(2).any(|v| v[0] == "--format" && v[1] == "json");
+    *json_output = false;
     let mut options = BTreeMap::new();
     let mut words = Vec::new();
     let mut help = a[0] == "help";
@@ -44,7 +43,16 @@ pub(super) fn execute(
     while i < a.len() {
         let arg = a[i].as_str();
         match arg {
-            "--json" | "--unread" | "--pending" | "--outstanding" => {
+            "--json" => *json_output = true,
+            "--format" => {
+                i += 1;
+                match a.get(i).map(String::as_str) {
+                    Some("json") => *json_output = true,
+                    Some("human") => *json_output = false,
+                    _ => return Err(input("format must be human or json")),
+                }
+            }
+            "--unread" | "--pending" | "--outstanding" => {
                 if options.insert(arg, "true").is_some() {
                     return Err(input("duplicate option"));
                 }
@@ -64,8 +72,7 @@ pub(super) fn execute(
             | "--expected-generation"
             | "--after"
             | "--limit"
-            | "--codex"
-            | "--format" => {
+            | "--codex" => {
                 i += 1;
                 let value = a.get(i).ok_or_else(|| input("option requires a value"))?;
                 if options.insert(arg, value.as_str()).is_some() {
@@ -76,12 +83,6 @@ pub(super) fn execute(
             word => words.push(word),
         }
         i += 1;
-    }
-    if options
-        .get("--format")
-        .is_some_and(|s| !matches!(*s, "human" | "json"))
-    {
-        return Err(input("format must be human or json"));
     }
     if words.len() > 1 {
         return Err(input("load one mail operation at a time"));

@@ -84,6 +84,32 @@ impl Mailbox {
         assert_eq!(self.results[12]["messages"], json!([]));
     }
 
+    pub fn when_human_and_json_output_flags_are_mixed(mut self) -> Self {
+        for (flags, fail) in [
+            (vec!["--json", "--format", "human"], false),
+            (vec!["--format", "human", "--json"], false),
+            (vec!["--json", "--format", "human"], true),
+            (vec!["--format", "human", "--json"], true),
+        ] {
+            let mut arguments: Vec<String> = vec!["mail".into()];
+            arguments.extend(flags.into_iter().map(str::to_owned));
+            arguments.push(if fail { "--unknown" } else { "--help" }.into());
+            self.results.push(match run_with_clock(&arguments,&||Ok(0)) {
+                CliResponse::Success(output)=>json!({"kind":"success","is_json":serde_json::from_str::<Value>(&output).is_ok()}),
+                CliResponse::HumanError(_)=>json!({"kind":"human_error"}),
+                CliResponse::JsonError(_)=>json!({"kind":"json_error"}),
+            });
+        }
+        self
+    }
+
+    pub fn then_the_last_flag_controls_success_and_error_output(self) {
+        assert_eq!(self.results[0], json!({"kind":"success","is_json":false}));
+        assert_eq!(self.results[1], json!({"kind":"success","is_json":true}));
+        assert_eq!(self.results[2]["kind"], "human_error");
+        assert_eq!(self.results[3]["kind"], "json_error");
+    }
+
     fn call(&self, args: &[&str], now: i64) -> Value {
         call(&self.home, args, now)
     }

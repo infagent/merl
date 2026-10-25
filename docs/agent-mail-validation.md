@@ -13,6 +13,7 @@ This slice implements [#145](https://github.com/infagent/merl/issues/145). It wa
 - Read-but-unreceipted notes and requests stay recoverable; receipted unfinished requests remain in the outstanding folder; duplicate handling preserves original timestamps.
 - A foreground watcher reports temporary dispatch-lock contention and resumes without restarting.
 - Successful host enqueue has a receipt grace period rather than rapidly queuing duplicate model turns.
+- Output-format precedence matches the existing CLI contract for help and errors.
 - New mail joins the pending batch's notification window, while a fully receipted batch does not delay genuinely new work.
 
 The initial scenarios failed because the interface did not exist. Interrupted read recovery, watcher contention, receipt grace, and new-message coalescing each had a failing regression before its fix. Root scenarios contain Given/When/Then steps; mechanics and assertions live in `tests/helpers/mail.rs`. Existing help-tree traversal discovers each new operation and checks both formats.
