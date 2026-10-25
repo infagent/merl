@@ -11,6 +11,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+// A minute allows asynchronous receipt without rapid empty model turns while
+// bounding recovery latency. New work after a receipted batch bypasses this wait.
+const RECEIPT_GRACE_MILLIS: i64 = 60_000;
+// The crash lease exceeds the ten-second host-command deadline, so a crashed
+// dispatcher does not immediately race its possibly accepted enqueue.
+const DISPATCH_LEASE_MILLIS: i64 = 30_000;
+const HOST_TIMEOUT_SECS: u64 = 10;
+
 /// An exact Codex session UUID and a verified local host socket.
 #[derive(Debug)]
 pub struct Binding {
@@ -162,7 +170,7 @@ impl Mailbox {
         let attempts = prior.saturating_add(1);
         // This persisted lease bounds crash recovery without holding a database lock
         // while the host command runs. Enqueue itself has no idempotency guarantee.
-        self.db.execute("UPDATE notifications SET state='dispatching',next_at=?2,attempts=?3,generation=?4 WHERE agent=?1",params![agent,now.saturating_add(30_000),attempts,binding.0])?;
+        self.db.execute("UPDATE notifications SET state='dispatching',next_at=?2,attempts=?3,generation=?4 WHERE agent=?1",params![agent,now.saturating_add(DISPATCH_LEASE_MILLIS),attempts,binding.0])?;
         let state = if let (Some(session), Some(socket), Some(recorded)) =
             (&binding.1, &binding.2, &binding.3)
         {
@@ -196,7 +204,13 @@ impl Mailbox {
         };
         let shift = u32::try_from(attempts.clamp(0, 6))
             .map_err(|_| failure("MAIL_STORAGE", "invalid attempt counter"))?;
-        let delay = (1000_i64 << shift).min(60_000);
+        // Enqueue is asynchronous: allow a normal agent turn to record receipt
+        // before another wake. Failed host calls retain faster bounded backoff.
+        let delay = if state == "enqueued" {
+            RECEIPT_GRACE_MILLIS
+        } else {
+            (1000_i64 << shift).min(60_000)
+        };
         let error = if state == "enqueued" {
             None
         } else {
@@ -250,7 +264,7 @@ fn enqueue(codex: &Path, socket: &str, session: &str, pointer: &str) -> Result<b
     let Ok(mut child) = child else {
         return Ok(false);
     };
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(HOST_TIMEOUT_SECS);
     loop {
         let Ok(status) = child.try_wait() else {
             let _ = child.kill();

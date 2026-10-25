@@ -269,6 +269,98 @@ impl Mailbox {
     }
 
     #[cfg(unix)]
+    pub fn when_the_host_accepts_a_notification_before_the_agent_receipts_it(mut self) -> Self {
+        fs::remove_file(self.home.join("offline")).unwrap();
+        self.send("grace-1", "bob", "note", None);
+        self.results.push(self.dispatch(1000));
+        self.results.push(self.dispatch(10_000));
+        self.results.push(self.dispatch(80_000));
+        self.results
+            .push(self.call(&["receipt", "--agent", "bob", "--id", "grace-1"], 80_000));
+        self.results.push(self.dispatch(200_000));
+        self
+    }
+
+    #[cfg(unix)]
+    pub fn then_rapid_duplicates_are_coalesced_and_missing_receipts_remain_retryable(self) {
+        assert_eq!(self.results[0]["notifications"][0]["state"], "enqueued");
+        assert_eq!(self.results[1]["notifications"], json!([]));
+        assert_eq!(self.results[2]["notifications"][0]["state"], "enqueued");
+        assert_eq!(self.results[4]["notifications"], json!([]));
+        assert_eq!(
+            fs::read_to_string(self.home.join("calls.jsonl"))
+                .unwrap()
+                .lines()
+                .count(),
+            2
+        );
+    }
+
+    #[cfg(unix)]
+    pub fn when_new_messages_arrive_before_and_after_receipt(mut self) -> Self {
+        fs::remove_file(self.home.join("offline")).unwrap();
+        self.send("batch-1", "bob", "note", None);
+        self.results.push(self.dispatch(1000));
+        let body = self.home.join("body.txt");
+        let send = |id: &str, now| {
+            self.call(
+                &[
+                    "send",
+                    "--from",
+                    "alice",
+                    "--to",
+                    "bob",
+                    "--id",
+                    id,
+                    "--kind",
+                    "note",
+                    "--body-file",
+                    body.to_str().unwrap(),
+                ],
+                now,
+            )
+        };
+        assert_eq!(send("batch-2", 5000)["outcome"], "sent");
+        self.results.push(self.dispatch(6000));
+        for id in ["batch-1", "batch-2"] {
+            self.call(&["receipt", "--agent", "bob", "--id", id], 7000);
+        }
+        self.results.push(self.call(
+            &[
+                "send",
+                "--from",
+                "alice",
+                "--to",
+                "bob",
+                "--id",
+                "batch-3",
+                "--kind",
+                "note",
+                "--body-file",
+                body.to_str().unwrap(),
+            ],
+            8000,
+        ));
+        self.results.push(self.dispatch(8000));
+        self
+    }
+
+    #[cfg(unix)]
+    pub fn then_pending_mail_coalesces_and_a_new_batch_wakes_immediately(self) {
+        assert_eq!(self.results[0]["notifications"][0]["state"], "enqueued");
+        assert_eq!(self.results[1]["notifications"], json!([]));
+        assert_eq!(self.results[2]["outcome"], "sent");
+        assert_eq!(self.results[3]["notifications"][0]["state"], "enqueued");
+        assert_eq!(
+            fs::read_to_string(self.home.join("calls.jsonl"))
+                .unwrap()
+                .lines()
+                .count(),
+            2
+        );
+    }
+
+    #[cfg(unix)]
     fn bind(&self, generation: u64) -> Value {
         self.call(
             &[

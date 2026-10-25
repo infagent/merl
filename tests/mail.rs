@@ -50,3 +50,21 @@ fn the_foreground_watcher_survives_temporary_dispatch_contention() {
         .when_another_dispatch_temporarily_owns_the_host_boundary()
         .then_the_watcher_waits_and_resumes_without_restarting();
 }
+
+#[cfg(unix)]
+#[test]
+fn a_successful_host_enqueue_allows_time_for_application_receipt() {
+    Mailbox::given_three_named_agents("receipt-grace")
+        .given_a_bound_recipient_and_unavailable_host()
+        .when_the_host_accepts_a_notification_before_the_agent_receipts_it()
+        .then_rapid_duplicates_are_coalesced_and_missing_receipts_remain_retryable();
+}
+
+#[cfg(unix)]
+#[test]
+fn new_mail_joins_a_pending_wake_but_a_receipted_batch_does_not_delay_new_work() {
+    Mailbox::given_three_named_agents("coalesce-new-mail")
+        .given_a_bound_recipient_and_unavailable_host()
+        .when_new_messages_arrive_before_and_after_receipt()
+        .then_pending_mail_coalesces_and_a_new_batch_wakes_immediately();
+}
