@@ -8,6 +8,10 @@ The first release tests whether agents can rely on compact shared state and spen
 
 The [product description](product-description.md) defines the full product. The [architecture](architecture.md) and [UI behavior contract](user-interface.md) define its semantics. The shorter plans below choose what to build and what evidence closes each phase.
 
+## Authorized immediate slice
+
+The maintainer has advanced [durable local agent mail](agent-mail.md), tracked by [#145](https://github.com/infagent/merl/issues/145), ahead of the sequence below. This is a bounded product-direction change, documented in [ADR 0003](adr/0003-durable-agent-mail.md), rather than evidence that the earlier evaluation gates passed. General team operations and provisioning retain their separate scope; existing semantic code and evaluation records are preserved.
+
 ## Release sequence
 
 | Phase | Outcome | Plan |

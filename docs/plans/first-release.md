@@ -4,6 +4,10 @@ Status: draft
 
 This document owns the scope and acceptance criteria for Merl's first release. The [roadmap](../roadmap.md) places it in the release sequence. The [product description](../product-description.md), [user interface and behavior contract](../user-interface.md), and [architecture](../architecture.md) describe the larger product.
 
+## Authorized direction change
+
+On 2026-10-25 the maintainer authorized [#145](https://github.com/infagent/merl/issues/145): [durable local agent mail and existing-session wake](../agent-mail.md) proceed as a bounded operational slice before the Issue evaluation gates. [ADR 0003](../adr/0003-durable-agent-mail.md) governs that exception. The deferred list below describes the original semantic-release track; mail transport is no longer deferred by it. This does not close old roadmap issues, change benchmark answers, establish evaluation results, or pull in generalized team operations. Existing implementation and frozen artifacts remain intact.
+
 ## Goal
 
 Merl's product goal is a persistent team of humans and agents that coordinates with less manual context copying and repeated token spend. The first release tests a foundation of that workflow: after repeated reads, agents can use compact state as accurately as the original GitHub thread and spend fewer tokens overall.

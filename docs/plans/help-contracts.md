@@ -21,6 +21,8 @@ product architecture includes commands for later releases.
 | `show` | inspect an object or relation |
 | `security` | `explain` |
 
+The independently authorized [mail slice](../agent-mail.md) adds `mail register`, `bind`, `unbind`, `send`, `list`, `show`, `read`, `receipt`, `complete`, `status`, `dispatch` and `watch`. Their help uses the same versioned help envelope and is included in the root traversal. This extends the interface without changing the 52-command audit's historical scope.
+
 ## Reading a contract
 
 Run `merl help source compile` for a human example, or add `--json` for the

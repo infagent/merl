@@ -4,6 +4,10 @@ Status: draft for implementation
 
 This document defines Merl's implementation architecture. The [product description](product-description.md) explains the product and its intended use. The [user interface and behavior contract](user-interface.md) defines what callers can observe. This document fixes the boundaries, consistency model, and failure behavior that the code must preserve.
 
+## Authorized messaging slice
+
+[ADR 0003](adr/0003-durable-agent-mail.md) advances local coordination mail and existing-session wake ahead of the deferred team-operations roadmap. The dedicated mail store contains bounded immutable plaintext and separate handling/notification state; it does not enter source compilation or accepted project semantics, and semantic-store purge does not erase it. Its SQLite transaction and scoped dispatch locks do not implement the broader Project Authority daemon described below. [Mail operations](agent-mail.md) define the shipped boundary and retention limits.
+
 ## Decision summary
 
 | Area | Decision |

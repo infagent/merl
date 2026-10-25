@@ -8,6 +8,7 @@ mod capture;
 mod commands;
 mod compilations;
 mod help;
+mod mail;
 mod revalidation;
 mod security;
 mod source_requirement;
@@ -215,6 +216,9 @@ fn execute(
     json_output: &mut bool,
     clock: &impl Fn() -> Result<i64, CliError>,
 ) -> Result<String, CliError> {
+    if mail::handles(arguments) {
+        return mail::execute(arguments, json_output, clock);
+    }
     let mut command_options = commands::Options::default();
     let mut candidate_kind = None;
     let mut candidate_value = None;

@@ -255,6 +255,7 @@ dependencies = [
  "merl-core",
  "merl-corpus",
  "merl-ingest",
+ "merl-mail",
  "merl-policy",
  "merl-store",
  "serde_json",
@@ -320,6 +321,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "time",
+]
+
+[[package]]
+name = "merl-mail"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde_json",
 ]
 
 [[package]]

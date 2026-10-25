@@ -16,6 +16,10 @@ Merl is under development as a Rust CLI with a local SQLite authority. The first
 
 Start with the [product description](docs/product-description.md), then read the [UI behavior contract](docs/user-interface.md), [architecture](docs/architecture.md), and [architecture decisions](docs/adr/).
 
+## Agent messaging slice
+
+The maintainer has authorized a bounded change of direction: [durable local agent mail](docs/agent-mail.md) and wake-up of existing Codex sessions proceed before the wider team-operations roadmap. The prior Issue implementation and evaluation history remain available. This slice does not establish the old benchmark or broader team-management claims. See [ADR 0003](docs/adr/0003-durable-agent-mail.md).
+
 ## Contributing
 
 Bug reports, design feedback, documentation fixes, and code contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.

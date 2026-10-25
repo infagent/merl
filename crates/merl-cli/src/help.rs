@@ -73,6 +73,7 @@ pub(super) fn render(
 fn children(command: &str) -> Vec<String> {
     let names: &[&str] = match command {
         "" => &[
+            "mail",
             "project",
             "issue",
             "source",

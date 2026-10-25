@@ -6,6 +6,10 @@ This document describes how people and agents use Merl. It defines observable be
 
 The command names are the first proposed interface. We may refine spelling during implementation, but the behavioral distinctions in this document are requirements.
 
+## Shipped messaging boundary
+
+The maintainer-authorized [agent-mail slice](agent-mail.md) adds `merl mail` independently of the larger semantic messaging and continuity design below. It retains bounded coordination prose in a standalone local mailbox, with explicit host/session bindings, separate read/receipt/completion and a foreground dispatcher. It does not create semantic tasks, compile prose, provision agents or implement the broader session lifecycle. [ADR 0003](adr/0003-durable-agent-mail.md) records the changed scope and retention boundary.
+
 ## Interface principles
 
 Merl's interface follows these rules:
