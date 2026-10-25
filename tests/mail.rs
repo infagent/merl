@@ -75,3 +75,12 @@ fn mail_uses_the_last_output_format_for_help_and_errors() {
         .when_human_and_json_output_flags_are_mixed()
         .then_the_last_flag_controls_success_and_error_output();
 }
+
+#[cfg(unix)]
+#[test]
+fn an_older_enqueue_cannot_postpone_a_new_batch_published_during_host_io() {
+    Mailbox::given_three_named_agents("concurrent-batch")
+        .given_a_bound_recipient_and_unavailable_host()
+        .when_a_receipted_batch_is_replaced_while_its_enqueue_is_in_flight()
+        .then_the_new_batch_remains_immediately_due();
+}

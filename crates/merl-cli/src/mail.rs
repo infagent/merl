@@ -413,6 +413,7 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
         "receipt" => vec!["received"],
         "complete" => vec!["completed"],
         "dispatch" => vec![
+            "pending",
             "offline",
             "failed",
             "stale_binding",

@@ -216,10 +216,24 @@ impl Mailbox {
         } else {
             Some(state)
         };
-        self.db.execute(
-            "UPDATE notifications SET state=?2,next_at=?3,last_error=?4 WHERE agent=?1",
-            params![agent, state, now.saturating_add(delay), error],
+        // Dispatch is serialized, but send/receipt must remain available during
+        // host I/O. A freshly published batch resets this claim to pending. Only
+        // finalize the exact claim; otherwise preserve that batch's immediate due
+        // time. The dispatch lock prevents another claimant from recreating it.
+        let finalized=self.db.execute(
+            "UPDATE notifications SET state=?2,next_at=?3,last_error=?4 WHERE agent=?1 AND state='dispatching' AND next_at=?5 AND attempts=?6 AND generation=?7",
+            params![agent,state,now.saturating_add(delay),error,now.saturating_add(DISPATCH_LEASE_MILLIS),attempts,binding.0],
         )?;
+        if finalized == 0 {
+            let next: i64 = self.db.query_row(
+                "SELECT next_at FROM notifications WHERE agent=?1",
+                [agent],
+                |r| r.get(0),
+            )?;
+            return Ok(
+                json!({"agent":agent,"state":"pending","host_outcome":state,"attempts":attempts,"binding_generation":binding.0,"next_attempt_at":next,"superseded_by_new_batch":true}),
+            );
+        }
         Ok(
             json!({"agent":agent,"state":state,"attempts":attempts,"binding_generation":binding.0,"next_attempt_at":now.saturating_add(delay)}),
         )

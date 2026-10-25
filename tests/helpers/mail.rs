@@ -387,6 +387,68 @@ impl Mailbox {
     }
 
     #[cfg(unix)]
+    pub fn when_a_receipted_batch_is_replaced_while_its_enqueue_is_in_flight(mut self) -> Self {
+        use std::io::{Read, Write};
+        let gate = std::os::unix::net::UnixListener::bind(self.home.join("gate.sock")).unwrap();
+        let mock = self.home.join("codex-mock");
+        fs::write(&mock,"#!/usr/bin/python3\nimport pathlib,socket\np=pathlib.Path(__file__).parent\ns=socket.socket(socket.AF_UNIX)\ns.connect(str(p/'gate.sock'))\ns.sendall(b'R')\nassert s.recv(1)==b'G'\n").unwrap();
+        self.send("race-old", "bob", "note", None);
+        let home = self.home.clone();
+        let executable = mock.clone();
+        let owner = std::thread::spawn(move || {
+            call(
+                &home,
+                &["dispatch", "--codex", executable.to_str().unwrap()],
+                1000,
+            )
+        });
+        let (mut signal, _) = gate.accept().unwrap();
+        let mut ready = [0];
+        signal.read_exact(&mut ready).unwrap();
+        assert_eq!(ready, [b'R']);
+        self.call(&["receipt", "--agent", "bob", "--id", "race-old"], 1001);
+        self.call(
+            &[
+                "send",
+                "--from",
+                "alice",
+                "--to",
+                "bob",
+                "--id",
+                "race-new",
+                "--kind",
+                "note",
+                "--body-file",
+                self.home.join("body.txt").to_str().unwrap(),
+            ],
+            1002,
+        );
+        signal.write_all(b"G").unwrap();
+        self.results.push(owner.join().unwrap());
+        self.results
+            .push(self.call(&["status", "--agent", "bob"], 1003));
+        fs::write(&mock, "#!/usr/bin/python3\n").unwrap();
+        self.results.push(self.dispatch(1003));
+        self
+    }
+
+    #[cfg(unix)]
+    pub fn then_the_new_batch_remains_immediately_due(self) {
+        assert_eq!(
+            self.results[2]["notifications"].as_array().unwrap().len(),
+            1,
+            "older host completion postponed new mail"
+        );
+        assert_eq!(self.results[1]["notification"]["next_attempt_at"], 1002);
+        assert_eq!(self.results[0]["state"], Value::Null);
+        assert_eq!(self.results[0]["notifications"][0]["state"], "pending");
+        assert_eq!(
+            self.results[0]["notifications"][0]["host_outcome"],
+            "enqueued"
+        );
+    }
+
+    #[cfg(unix)]
     fn bind(&self, generation: u64) -> Value {
         self.call(
             &[
