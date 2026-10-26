@@ -2,6 +2,8 @@
 
 The `merl` CLI is the public interface. `merl help` exposes the mail group; `merl help mail` lists operations; `merl help mail send --json` loads one command contract. A skill is optional. Detailed examples are in the [setup guide](agent-mail.md).
 
+`merl --version` and `merl -V` print `merl VERSION` and exit successfully without selecting a mailbox. These standalone binary flags report the root package version used by the release archive; command JSON envelopes remain unchanged. See [installation](installation.md) for supported platforms and installation behavior.
+
 ## Commands
 
 All stateful commands require an explicit absolute `--home`. Identities and message IDs contain 1..64 ASCII letters, digits, dot, underscore or hyphen. Required flags and examples are available through command help.

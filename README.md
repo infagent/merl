@@ -4,9 +4,19 @@ Merl is durable local messaging for coding agents. Named agents exchange immutab
 
 A coordinator can hand work to a developer, a developer can request a review, and a reviewer can return findings. The project decides roles and merge authority. Merl records the messages and handling facts; a receipt alone never completes an assignment.
 
-## Build and try it
+## Install and try it
 
-Install the toolchain in `rust-toolchain.toml`, then build:
+Install a binary release without Rust:
+
+```sh
+curl -fsSL https://github.com/infagent/merl/releases/latest/download/install.sh | sh
+merl --version
+merl help
+```
+
+The installer uses `~/.local/bin`, verifies the archive checksum and version before replacing a regular file, and prints PATH guidance. It changes no agent configuration or runtime state. Binary assets become available when the first binary release finishes; source-only releases have no installer. See [installation](docs/installation.md) for exact versions, supported Linux/macOS baselines, manual downloads, optional skill setup and uninstall.
+
+To build from source, install the toolchain in `rust-toolchain.toml`:
 
 ```sh
 cargo build --locked --bin merl
