@@ -4,6 +4,12 @@ import hashlib
 import io
 import json
 import os
+import fcntl
+import pty
+import select
+import signal
+import termios
+import time
 from pathlib import Path
 import subprocess
 import tarfile
@@ -31,7 +37,8 @@ class Installer(unittest.TestCase):
         self.bin_dir = self.root / "user directory" / "bin"
         self.env = dict(os.environ, PATH=f"{self.tools}:/usr/bin:/bin",
                         FIXTURES=str(self.assets), REQUESTS=str(self.root / "requests"),
-                        TEST_OS="Linux", TEST_ARCH="x86_64", TMPDIR=str(self.root))
+                        TEST_OS="Linux", TEST_ARCH="x86_64", TMPDIR=str(self.root),
+                        SETUP_ARGS=str(self.root / "setup argv"))
         self.tool("uname", '#!/bin/sh\ncase "$1" in -s) echo "$TEST_OS";; -m) echo "$TEST_ARCH";; esac\n')
         self.tool("curl", '''#!/usr/bin/env python3
 import json, os, pathlib, shutil, sys
@@ -60,7 +67,13 @@ else:
         directory = self.assets / f"v{version}"
         directory.mkdir(exist_ok=True)
         name = f"merl-v{version}-{target}.tar.gz"
-        binary = f'#!/bin/sh\necho "merl {binary_version or version}"\n'.encode()
+        binary = ("#!/usr/bin/env python3\nimport json, os, pathlib, sys\n"
+                  f"version = {binary_version or version!r}\n"
+                  "if sys.argv[1:] == ['--version']: print('merl '+version)\n"
+                  "elif sys.argv[1:2] == ['init']:\n"
+                  "    pathlib.Path(os.environ['SETUP_ARGS']).write_text(json.dumps(sys.argv[1:]))\n"
+                  "    sys.exit(int(os.environ.get('SETUP_FAILURE', '0')))\n"
+                  "else: sys.exit(12)\n").encode()
         with tarfile.open(directory / name, "w:gz") as archive:
             for member, content in {
                 "merl/merl": binary, "merl/VERSION": version.encode(),
@@ -77,7 +90,7 @@ else:
         return directory / name
 
     def install(self, *args):
-        return subprocess.run(["sh", str(ROOT / "install.sh"), "--bin-dir", str(self.bin_dir), *args],
+        return subprocess.run(["sh", str(ROOT / "install.sh"), "--unattended", "--bin-dir", str(self.bin_dir), *args],
                               env=self.env, capture_output=True, text=True)
 
     def requests(self):
@@ -89,6 +102,67 @@ else:
         old = self.bin_dir / "merl"
         old.write_bytes(b"previous working installation")
         return old
+
+    def test_unattended_is_binary_only_and_explicit_setup_preserves_argv_and_failures(self):
+        result = self.install("--no-setup")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(Path(self.env["SETUP_ARGS"]).exists())
+        home = str(self.root / "literal $(touch SHOULD_NOT_EXIST) `echo nope` mail")
+        forwarded = ["--global", "--host", "none", "--home", home, "--yes", "--json"]
+        result = self.install("--setup", "--", *forwarded)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(Path(self.env["SETUP_ARGS"]).read_text()), ["init", *forwarded])
+        self.env["SETUP_FAILURE"] = "2"
+        result = self.install("--setup", "--", *forwarded)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("setup incomplete", result.stderr)
+        self.assertIn("remains installed", result.stderr)
+        self.assertTrue((self.bin_dir / "merl").is_file())
+        self.assertFalse((ROOT / "SHOULD_NOT_EXIST").exists())
+
+    def test_piped_script_without_a_terminal_installs_binary_only(self):
+        result = subprocess.run(["sh", "-s", "--", "--bin-dir", str(self.bin_dir)],
+                                input=(ROOT / "install.sh").read_text(), env=self.env,
+                                capture_output=True, text=True, start_new_session=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("no controlling terminal", result.stdout.lower())
+        self.assertFalse(Path(self.env["SETUP_ARGS"]).exists())
+
+    def test_piped_script_offers_setup_through_the_controlling_terminal(self):
+        master, slave = pty.openpty()
+        self.addCleanup(os.close, master)
+        def terminal_session():
+            os.setsid()
+            fcntl.ioctl(1, termios.TIOCSCTTY, 0)
+        process = subprocess.Popen(["sh", "-s", "--", "--bin-dir", str(self.bin_dir)],
+                                   stdin=subprocess.PIPE, stdout=slave, stderr=slave,
+                                   env=self.env, preexec_fn=terminal_session)
+        os.close(slave)
+        def stop_owned_process():
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+        self.addCleanup(stop_owned_process)
+        process.stdin.write((ROOT / "install.sh").read_bytes())
+        process.stdin.close()
+        output = b""
+        answered = False
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if select.select([master], [], [], .1)[0]:
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError:
+                    break
+                output += chunk
+                if b"Run guided setup now?" in output and not answered:
+                    os.write(master, b"y\n")
+                    answered = True
+            if process.poll() is not None:
+                break
+        self.assertTrue(answered, output.decode(errors="replace"))
+        self.assertEqual(process.wait(timeout=2), 0, output.decode(errors="replace"))
+        self.assertEqual(json.loads(Path(self.env["SETUP_ARGS"]).read_text()), ["init"])
 
     def test_each_supported_platform_installs_the_exact_tag_with_spaces_in_paths(self):
         for (system, arch), target in TARGETS.items():
@@ -113,7 +187,7 @@ else:
         home = self.root / "clean home"
         home.mkdir()
         env = dict(self.env, HOME=str(home))
-        result = subprocess.run(["sh", str(ROOT / "install.sh"), "--version", "v0.1.0"],
+        result = subprocess.run(["sh", str(ROOT / "install.sh"), "--unattended", "--version", "v0.1.0"],
                                 env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((home / ".local/bin/merl").is_file())

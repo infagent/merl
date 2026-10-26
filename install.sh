@@ -9,6 +9,8 @@ bin_dir=${HOME:?HOME must name your user directory}/.local/bin
 downloads=
 staged=
 releases=https://github.com/infagent/merl/releases
+setup_mode=offer
+unattended=no
 
 fail() { printf 'merl-install: %s\n' "$*" >&2; exit 1; }
 cleanup() {
@@ -20,19 +22,29 @@ trap 'exit 1' HUP INT TERM
 
 while [ "$#" -gt 0 ]; do
     case $1 in
+        --setup|--no-setup)
+            [ "$setup_mode" = offer ] || fail 'choose --setup or --no-setup once'
+            case $1 in --setup) setup_mode=yes;; --no-setup) setup_mode=no;; esac
+            shift
+            ;;
+        --unattended) unattended=yes; shift;;
+        --) shift; break;;
         --version|--bin-dir)
             [ "$#" -ge 2 ] || fail "$1 needs a value"
             case $1 in --version) version=$2;; --bin-dir) bin_dir=$2;; esac
             shift 2
             ;;
         --help|-h)
-            printf '%s\n' 'Usage: sh install.sh [--version vMAJOR.MINOR.PATCH] [--bin-dir /absolute/directory]' \
-                'Default: latest release into ~/.local/bin. No sudo, services or configuration changes.'
+            printf '%s\n' 'Usage: sh install.sh [--version vMAJOR.MINOR.PATCH] [--bin-dir /absolute/directory] [--setup|--no-setup] [--unattended] [-- INIT_ARGS...]' \
+                'Default: latest release into ~/.local/bin, then offer user setup on the controlling terminal.' \
+                'Without a terminal, or with --unattended, default to binary-only. --setup explicitly invokes merl init.' \
+                'Unattended setup needs --yes (or --show/--dry-run); forward choices after --. No sudo or service installation.'
             exit 0
             ;;
         *) fail "unknown option: $1";;
     esac
 done
+[ "$#" -eq 0 ] || [ "$setup_mode" = yes ] || fail 'initializer arguments require --setup'
 
 case $bin_dir in /*) ;; *) fail '--bin-dir must be an absolute path';; esac
 destination=$bin_dir/merl
@@ -109,5 +121,31 @@ case :${PATH:-}: in
     *) printf 'Add %s to PATH in your shell configuration to use merl by name.\n' "$bin_dir";;
 esac
 printf '%s\n' 'Verify: merl --version; merl help' \
-    'Upgrade: rerun the latest release installer. Uninstall: remove this merl binary.' \
-    'Optional skill setup and manual downloads: https://github.com/infagent/merl/blob/main/docs/installation.md'
+    'Upgrade: rerun the latest release installer. Binary uninstall: remove this merl binary.'
+
+# Script stdin may still contain the remainder of a curl|sh pipeline. Only the
+# controlling terminal may answer the offer; init uses that terminal separately.
+terminal=no
+if [ "$unattended" = no ] && ( : < /dev/tty ) 2>/dev/null; then terminal=yes; fi
+if [ "$setup_mode" = offer ]; then
+    if [ "$terminal" = yes ]; then
+        printf 'Run guided setup now? [y/N]: ' > /dev/tty
+        answer=
+        IFS= read -r answer < /dev/tty || answer=
+        case $answer in y|Y|yes|YES) setup_mode=yes;; *) setup_mode=no;; esac
+    elif [ "$unattended" = yes ]; then
+        printf '%s\n' 'Unattended installation: binary only. Run merl init later, or use --setup -- --host HOST --home PATH --yes.'
+    else
+        printf '%s\n' 'No controlling terminal: binary only. Run merl init later, or pass --setup -- --host HOST --home PATH --yes.'
+    fi
+fi
+if [ "$setup_mode" = yes ]; then
+    if [ "$terminal" = no ]; then
+        safe_input=no
+        for argument do
+            case $argument in --yes|--show|--dry-run) safe_input=yes;; esac
+        done
+        [ "$safe_input" = yes ] || fail "verified binary remains installed at $destination; setup incomplete: unattended setup requires --yes, --show or --dry-run"
+    fi
+    "$destination" init "$@" || fail "verified binary remains installed at $destination; setup incomplete. Retry $destination init with the same choices."
+fi

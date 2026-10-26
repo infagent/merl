@@ -59,6 +59,7 @@ pub(super) fn execute(
             }
             "--help" | "-h" => help = true,
             "--home"
+            | "--config"
             | "--agent"
             | "--from"
             | "--to"
@@ -94,7 +95,9 @@ pub(super) fn execute(
     let contract =
         contract(operation).ok_or_else(|| input("unknown mail operation; run merl help mail"))?;
     for key in options.keys() {
-        if !matches!(*key, "--home" | "--json" | "--format") && !contract.1.contains(key) {
+        if !matches!(*key, "--home" | "--config" | "--json" | "--format")
+            && !contract.1.contains(key)
+        {
             return Err(input("option does not apply to this mail operation"));
         }
     }
@@ -111,7 +114,11 @@ pub(super) fn execute(
             .map(|s| s.parse().map_err(CliError::from))
             .transpose()
     };
-    let mut store = Mailbox::open(Path::new(get("--home")?))?;
+    let home = merl_setup::resolve_home(
+        options.get("--home").copied(),
+        options.get("--config").copied(),
+    )?;
+    let mut store = Mailbox::open(&home)?;
     let now = clock()?;
     let result = match operation {
         "register" => store.register(&key("--agent")?)?,
@@ -387,7 +394,7 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
         })
         .collect();
     let usage = format!(
-        "merl {command}{} --home <absolute-path> [--format human|json] [--json]",
+        "merl {command}{} [--home <absolute-path>] [--config <absolute-path>] [--format human|json] [--json]",
         if op.is_empty() {
             " <operation>".into()
         } else {
@@ -446,7 +453,15 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
 }
 
 fn help_errors(op: &str) -> Vec<&'static str> {
-    let mut errors = vec!["MAIL_INPUT", "MAIL_IO", "MAIL_STORAGE", "MAIL_SCHEMA"];
+    let mut errors = vec![
+        "MAIL_INPUT",
+        "MAIL_IO",
+        "MAIL_STORAGE",
+        "MAIL_SCHEMA",
+        "INIT_INPUT",
+        "INIT_CONFIG",
+        "INIT_CONFLICT",
+    ];
     match op {
         "bind" => errors.extend([
             "MAIL_BUSY",

@@ -33,7 +33,7 @@ cp "$SMOKE_ASSETS/${url##*/}" "$output"
         curl.chmod(0o755)
         env = dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}", SMOKE_ASSETS=str(root), TMPDIR=str(root))
         destination = root / "user bin"
-        subprocess.run(["sh", str(installer), "--version", args.tag, "--bin-dir", str(destination)],
+        subprocess.run(["sh", str(installer), "--unattended", "--no-setup", "--version", args.tag, "--bin-dir", str(destination)],
                        env=env, check=True)
         version = subprocess.check_output([str(destination / "merl"), "--version"], text=True).strip()
         if version != f"merl {args.tag[1:]}":

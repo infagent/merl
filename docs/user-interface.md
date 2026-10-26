@@ -1,12 +1,12 @@
 # Messaging interface and behavior
 
-The `merl` CLI is the public interface. `merl help` exposes mail and lane groups; `merl help mail` and `merl help lane` list operations; leaf help loads one contract. A skill is optional. Detailed examples are in [mail setup](agent-mail.md) and [reviewer lanes](reviewer-lanes.md).
+The `merl` CLI is the public interface. `merl help` exposes init and the mail/lane groups; group help lists operations, and leaf help loads one contract. A skill is optional. Detailed examples are in [installation](installation.md), [mail setup](agent-mail.md) and [reviewer lanes](reviewer-lanes.md).
 
 `merl --version` and `merl -V` print `merl VERSION` and exit successfully without selecting a mailbox. These standalone binary flags report the root package version used by the release archive; command JSON envelopes remain unchanged. See [installation](installation.md) for supported platforms and installation behavior.
 
 ## Commands
 
-All stateful commands require an explicit absolute `--home`. Identities and message IDs contain 1..64 ASCII letters, digits, dot, underscore or hyphen. Required flags and examples are available through command help.
+Mail and lane commands require an absolute mailbox home, supplied with `--home` or saved by `merl init`. Explicit home bypasses all settings reads, even with a corrupt `--config`. Otherwise `--config` selects one absolute settings file, or the known platform user location is checked. There is no project config discovery. Missing settings require setup or explicit home; invalid settings return `INIT_CONFIG` before mailbox access. Help, version and unknown commands remain pure. Identities and message IDs contain 1..64 ASCII letters, digits, dot, underscore or hyphen. Required flags and examples are available through command help.
 
 | Command | Observable behavior |
 | --- | --- |
@@ -27,9 +27,17 @@ All stateful commands require an explicit absolute `--home`. Identities and mess
 
 Lists accept at most one of `--unread`, `--pending` or `--outstanding`. Without a filter they show all addressed headers. `--limit` is 1..100. Follow `next_after` with `--after`; a cursor from another recipient is invalid. Pending includes interrupted reads without receipt, and outstanding includes receipted unfinished requests. Read and receipt timestamps preserve their first values on retry.
 
+## User setup
+
+`merl init` guides user-global setup through the controlling terminal. `--global` makes the scope explicit for scripts. Repeat `--host codex|claude`, or select `none`; supply `--home`, optional `--config` and host-specific `--codex-skills-dir`/`--claude-skills-dir` overrides. `--dispatcher foreground|none` selects whether to show foreground start instructions. It never starts a process. No native host configuration or session binding is edited.
+
+`--show` reports `configured`, `incomplete` or `not_configured`. `--dry-run` validates a preview. Both create nothing, including directories and locks. First unattended apply needs explicit hosts/home and `--yes`; a known setup can reuse saved choices. JSON never prompts. `--uninstall --yes` removes unchanged owned setup files; optional `--host` selects only that host. Borrowed skills, local edits and every mailbox directory/descendant survive. Edits produce `INIT_CONFLICT` before conflict-plan mutation. Repeating the same setup options resumes failed publication; `--show` distinguishes incomplete setup.
+
+Results use `merl.init/v1`; errors use the common envelope with `INIT_INPUT`, `INIT_CONFIG`, `INIT_CONFLICT`, `INIT_BUSY` or `INIT_IO`. Dispatcher state is `not_requested`, `not_started` or `missing_codex`. A start command is shown only for a detected real absolute Codex executable. Claude skill installation does not enable automatic Claude wake. See [installation](installation.md) for ownership, recovery and installer pipeline behavior.
+
 ## Reviewer-lane commands
 
-All lane commands use the same explicit absolute `--home` and output-format options. Lane names use 1..32 key characters. Required labels are an AND selector; authors are never treated as lane identity.
+All lane commands use the same mailbox selection and output-format options. Lane names use 1..32 key characters. Required labels are an AND selector; authors are never treated as lane identity.
 
 | Command | Observable behavior |
 | --- | --- |

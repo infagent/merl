@@ -12,6 +12,7 @@ Merl has one product boundary: durable local agent messaging through the CLI. [A
 | `merl-cli` | bounded argument parsing, incremental help, JSON envelopes and clock boundary |
 | `merl-mail` | message/handling rules, SQLite transactions, explicit host binding and dispatch |
 | `merl-lane` | read-only PR metadata, lane generations, fair checkpoints and frozen mail intent |
+| `merl-setup` | known user settings, preflight and ownership of generated setup files |
 
 Only `serde_json` and bundled `rusqlite` are workspace dependencies. Clocks, IDs and selected paths enter through explicit boundaries. A host executable is configured by an absolute path; synthetic executables replace it in tests. No runtime service is automatically installed.
 
@@ -29,7 +30,11 @@ The configured authenticated gh runs fixed metadata-only GraphQL queries against
 
 ## Storage and publication
 
-The caller selects an absolute dedicated mailbox home. Merl opens `mail-v1/mail.sqlite` beneath it and creates private directories and database/lock files on Unix. It never discovers or opens an old project store. The `mail-v1` namespace and existing mail schema remain compatible with the running messaging sessions.
+The caller selects an absolute dedicated mailbox home, either through `--home` or an opt-in `merl init` user default. An explicit home bypasses settings entirely. Without it, only the selected `--config` or known platform user settings file is read; malformed settings fail before mailbox access. There is no project-config discovery. Help, version and unknown commands open neither settings nor runtime. [ADR 0006](adr/0006-user-setup.md) defines this extension to ADR 0004.
+
+Merl opens `mail-v1/mail.sqlite` beneath that home and creates private directories and database/lock files on Unix. It never discovers or opens an old project store. The `mail-v1` namespace and existing mail schema remain compatible with the running messaging sessions.
+
+Setup itself only creates the selected mailbox directory; it never opens a mail/lane store, registers identities or changes bindings. Generated skill/settings publication uses a separate settings-scoped lock and bounded ownership receipt, preserving borrowed files and edits. Preview/show create nothing. Uninstall removes unchanged owned setup artifacts while preserving mailbox directories and contents. It leaves the stable zero-byte setup lock in place, starts/stops no process and removes no binary. [Installation](installation.md) records paths and recovery commands.
 
 SQLite stores four kinds of record:
 

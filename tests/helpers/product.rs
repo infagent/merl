@@ -45,17 +45,21 @@ impl Product {
     }
     pub fn then_messaging_and_lane_commands_are_discoverable_with_matching_help(self) {
         let root = &self.help.iter().find(|(t, _, _)| t.is_empty()).unwrap().1;
-        assert_eq!(root["children"], serde_json::json!(["mail", "lane"]));
+        assert_eq!(
+            root["children"],
+            serde_json::json!(["mail", "lane", "init"])
+        );
         assert_eq!(
             self.help.len(),
-            22,
-            "root, mail and lane groups, and nineteen operations"
+            23,
+            "root, mail and lane groups, nineteen operations, and init"
         );
         for (topic, value, human) in &self.help {
             assert_eq!(value["schema"], "merl.help/v1");
             assert_eq!(value["command"], *topic);
             assert!(
                 topic.is_empty()
+                    || topic == "init"
                     || topic == "mail"
                     || topic.starts_with("mail ")
                     || topic == "lane"
