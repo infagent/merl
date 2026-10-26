@@ -1,5 +1,7 @@
 # Install Merl
 
+For a disposable first install, message and optional host binding, follow [onboarding](onboarding.md). It also separates local-artifact verification from the first public-release install check.
+
 Binary releases include Merl and need no Rust toolchain. Run:
 
 ```sh
