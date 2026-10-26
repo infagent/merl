@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/infagent/merl/compare/v0.2.0...v0.3.0) (2026-10-26)
+
+
+### Features
+
+* add guided user setup and installer integration ([#156](https://github.com/infagent/merl/issues/156)) ([642b507](https://github.com/infagent/merl/commit/642b50700b7d4b828bc179d7f3a383e4720cefb6))
+
 ## [0.2.0](https://github.com/infagent/merl/commits/89b0480eb7bcb5a1c73c741208f059a3afd2b696) (2026-10-26)
 
 
