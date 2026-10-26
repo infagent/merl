@@ -29,6 +29,8 @@ RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-de
 
 ## Pull requests and review
 
+For reviewer-lane changes, run `cargo test --locked --test lanes --test lane_integrity --test launch_directory --test mail --test product` during development, then the complete checks above. These scenarios use synthetic GitHub replies and supplied clocks; ordinary tests need no gh authentication or live host. Read-only live acceptance is separate and must identify the exact candidate application/dispatch binaries, existing idle reviewer and watcher-originated wake. See [reviewer lanes](docs/reviewer-lanes.md).
+
 Explain the final user-visible behavior, linked issue, validation, data/compatibility effects and material limits. Keep unrelated changes out. Document which head an independent reviewer checked and whether a live smoke used the replacement binary. Include example human/JSON output when it changes. Source deletion does not authorize runtime deletion.
 
 Use conventional commits such as `feat:`, `fix:` and `docs:`. Mark an incompatible product replacement with `!` so release automation can account for it. Release Please maintains the release PR and changelog; do not publish or merge a release as an incidental implementation step.

@@ -119,6 +119,8 @@ name = "merl"
 version = "0.1.0"
 dependencies = [
  "merl-cli",
+ "merl-lane",
+ "merl-mail",
  "serde_json",
 ]
 
@@ -126,7 +128,17 @@ dependencies = [
 name = "merl-cli"
 version = "0.1.0"
 dependencies = [
+ "merl-lane",
  "merl-mail",
+ "serde_json",
+]
+
+[[package]]
+name = "merl-lane"
+version = "0.1.0"
+dependencies = [
+ "merl-mail",
+ "rusqlite",
  "serde_json",
 ]
 

@@ -16,7 +16,9 @@ Readiness requires:
 - formatting, Clippy, the complete reduced workspace tests, rustdoc and Python checks passing;
 - independent review of the final head and a reviewed PR handed to the human before any merge.
 
-Release distribution provides version-bound Linux/macOS binaries and an optional matching skill through the [installation contract](installation.md). Draft publication, verification and recovery follow [release distribution](release-distribution.md). Installation changes no agent configuration, dispatcher lifecycle or mailbox. Durable service setup and GitHub subscriptions require later work.
+Release distribution provides version-bound Linux/macOS binaries and an optional matching skill through the [installation contract](installation.md). Draft publication, verification and recovery follow [release distribution](release-distribution.md). Installation changes no agent configuration, dispatcher lifecycle or mailbox.
+
+[Reviewer lanes](reviewer-lanes.md) add durable read-only repository/required-label subscriptions through [ADR 0005](adr/0005-reviewer-lanes.md). Readiness requires synthetic multi-PR/paging/generation/outbox/deadline regressions and an actual watcher-originated wake to an idle reviewer, with exact application/dispatch provenance. This is distinct from recovered manual-mail delivery. Scope/backfill/edit/resynchronization limitations remain explicit; no GitHub writes, actor spawning or merge authority are added. Durable service setup remains later work.
 
 ## Later decisions
 

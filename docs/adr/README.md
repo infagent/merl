@@ -3,6 +3,7 @@
 ## Current
 
 - [ADR 0004: Replace the former product with durable agent messaging](0004-messaging-product.md)
+- [ADR 0005: Durable read-only reviewer lanes](0005-reviewer-lanes.md)
 
 ## Superseded historical records
 

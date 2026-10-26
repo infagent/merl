@@ -41,7 +41,9 @@ Offline recipients keep their mail. To wake an existing Codex session, explicitl
 
 ## Product and limits
 
-The public interface is `merl mail`: registration, binding, send/read/receipt/completion, status and notification dispatch. Results and incremental help are versioned JSON when requested. The [product contract](docs/product-description.md), [UI contract](docs/user-interface.md), [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md) describe this messaging product.
+The public interface is `merl mail` for registration, binding and message handling, plus `merl lane` for optional read-only GitHub PR activity. A named reviewer lane selects a repository and required labels, follows many PRs across sessions, and sends bounded pointers through the same mail transport. It makes no GitHub writes or idle model calls. See [reviewer lanes](docs/reviewer-lanes.md) for setup, pause/resume, independent cursors and polling limits.
+
+Results and incremental help are versioned JSON when requested. The [product contract](docs/product-description.md), [UI contract](docs/user-interface.md), [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md) describe this messaging product.
 
 Mail is retained as plaintext in a private local SQLite store. Same-user identity flags are trusted claims, not authentication or an OS sandbox. Notification is at least once, so agents must handle duplicate wakes. There is no mail purge, encryption or storage quota yet. The [optional skill](skills/merl-mail/SKILL.md) is short transport guidance; [project role guidance](docs/agent-roles.md) stays separate.
 

@@ -6,6 +6,7 @@ Merl is durable local messaging with wake-up of explicitly bound existing agent 
 - [Installation](installation.md): binary releases, supported systems, version selection and optional skill setup.
 - [Release distribution](release-distribution.md): frozen source, draft publication, checks and recovery.
 - [Setup and recovery](agent-mail.md): register, bind, send, receipt, reply, complete, start and stop.
+- [Reviewer lanes](reviewer-lanes.md): durable repository/label subscriptions, multi-PR activity and notification limits.
 - [UI contract](user-interface.md): public commands, envelopes and error behavior.
 - [Architecture](architecture.md): storage, concurrency, dispatch and trust boundaries.
 - [Roadmap](roadmap.md): current release gates and later decisions.
