@@ -12,6 +12,10 @@ use std::{
 
 const SKILL: &str = include_str!("../../../skills/merl-mail/SKILL.md");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(super) const BUNDLE: Bundle<'_> = Bundle {
+    version: VERSION,
+    skill: SKILL,
+};
 
 impl From<SetupError> for CliError {
     fn from(error: SetupError) -> Self {
@@ -214,12 +218,16 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
             settings.mail_home = home.into();
         } else if saved.is_none() {
             if let Some(terminal) = &mut terminal {
-                settings.mail_home = terminal
-                    .ask(
-                        "Durable mailbox home",
-                        &settings.mail_home.to_string_lossy(),
-                    )?
-                    .into();
+                let default_home = settings.mail_home.clone();
+                let chosen = terminal.ask(
+                    "Durable mailbox home",
+                    &crate::status::display_path(&settings.mail_home),
+                )?;
+                settings.mail_home = if chosen == crate::status::display_path(&default_home) {
+                    default_home
+                } else {
+                    chosen.into()
+                };
             } else {
                 return Err(input("first unattended setup requires an explicit --home"));
             }
@@ -265,13 +273,29 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
         Plan::new(config.clone(), settings.clone(), bundle)?
     };
     if preview {
-        return report(Some(&settings), &config, "preview", *json_output);
+        return if *json_output {
+            report(Some(&settings), &config, "preview", true)
+        } else {
+            Ok(crate::status::summary(&crate::status::preview(
+                &config,
+                &settings,
+                &plan,
+                &args.hosts,
+                uninstall,
+            )?))
+        };
     }
     if !yes {
         let Some(terminal) = &mut terminal else {
             return Err(input("unattended apply/uninstall requires --yes"));
         };
-        terminal.write(&report(Some(&settings), &config, "preview", false)?)?;
+        terminal.write(&crate::status::summary(&crate::status::preview(
+            &config,
+            &settings,
+            &plan,
+            &args.hosts,
+            uninstall,
+        )?))?;
         if !terminal.confirm(
             if uninstall {
                 "Remove unchanged owned setup files? Mail is retained"
@@ -283,11 +307,24 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
             return Err(input("setup cancelled; no changes applied"));
         }
     }
+    let removal_changes = if uninstall && !*json_output {
+        Some(plan.changes(&args.hosts)?)
+    } else {
+        None
+    };
     let changed = if uninstall {
         plan.uninstall(&args.hosts, &mut |_| Ok(()))?
     } else {
         plan.apply(&mut |_| Ok(()))?
     };
+    if let Some(changes) = removal_changes {
+        return Ok(crate::status::summary(&crate::status::removal_result(
+            &config,
+            &settings,
+            &changes,
+            &args.hosts,
+        )?));
+    }
     if uninstall && !args.hosts.is_empty() {
         settings.skills.retain(|host, _| !args.hosts.contains(host));
     }
@@ -408,21 +445,19 @@ fn report(
     outcome: &str,
     json_output: bool,
 ) -> Result<String, CliError> {
+    if !json_output {
+        return Ok(crate::status::summary(&crate::status::observe(
+            config, "selected",
+        )?));
+    }
     let value = if let Some(settings) = settings {
         json!({"schema":"merl.init/v1","outcome":outcome,"config":config,"mail_home":settings.mail_home,"skills":settings.skills,"dispatcher":dispatcher(settings)?})
     } else {
         json!({"schema":"merl.init/v1","outcome":outcome,"config":config,"dispatcher":{"state":"not_requested"}})
     };
-    if json_output {
-        render_json(&value)
-    } else {
-        Ok(format!(
-            "{}\n",
-            serde_json::to_string_pretty(&value)
-                .map_err(|_| input("cannot render setup report"))?
-        ))
-    }
+    render_json(&value)
 }
+
 fn help(json_output: bool) -> Result<String, CliError> {
     let value = json!({"schema":"merl.help/v1","command":"init","kind":"command","usage":"merl init [--global] [--host codex|claude|none] [--home <absolute-path>] [--config <absolute-path>] [--dispatcher foreground|none] [--codex-skills-dir <absolute-path>] [--claude-skills-dir <absolute-path>] [--yes] [--dry-run|--show|--uninstall] [--format human|json] [--json]","summary":"Set up matching user skills and a durable mailbox default; optionally show dispatcher start instructions.","description":"Interactive input uses the controlling terminal. JSON never prompts. Setup never binds sessions, starts services, or migrates mail. Uninstall preserves all mail and borrowed/modified files.","children":[],"arguments":["--host (repeatable)","--home","--config","--dispatcher","--codex-skills-dir","--claude-skills-dir","--global","--yes","--dry-run","--show","--uninstall"],"outcomes":["preview","configured","not_configured","unchanged","uninstalled"],"errors":["INIT_INPUT","INIT_CONFIG","INIT_CONFLICT","INIT_BUSY","INIT_IO"],"related":["mail bind","mail watch"],"example":"merl init --global --host codex --home /absolute/durable-mail --dispatcher foreground --yes --json","examples":["merl init","merl init --show --json","merl init --uninstall --yes"]});
     if json_output {

@@ -1,6 +1,6 @@
 # Messaging interface and behavior
 
-The `merl` CLI is the public interface. `merl help` exposes init and the mail/lane groups; group help lists operations, and leaf help loads one contract. A skill is optional. Detailed examples are in [installation](installation.md), [mail setup](agent-mail.md) and [reviewer lanes](reviewer-lanes.md).
+The `merl` CLI is the public interface. `merl help` exposes init, status and the mail/lane groups; group help lists operations, and leaf help loads one contract. A skill is optional. Detailed examples are in [installation](installation.md), [mail setup](agent-mail.md) and [reviewer lanes](reviewer-lanes.md).
 
 `merl --version` and `merl -V` print `merl VERSION` and exit successfully without selecting a mailbox. These standalone binary flags report the root package version used by the release archive; command JSON envelopes remain unchanged. See [installation](installation.md) for supported platforms and installation behavior.
 
@@ -33,7 +33,29 @@ Lists accept at most one of `--unread`, `--pending` or `--outstanding`. Without 
 
 `--show` reports `configured`, `incomplete` or `not_configured`. `--dry-run` validates a preview. Both create nothing, including directories and locks. First unattended apply needs explicit hosts/home and `--yes`; a known setup can reuse saved choices. JSON never prompts. `--uninstall --yes` removes unchanged owned setup files; optional `--host` selects only that host. Borrowed skills, local edits and every mailbox directory/descendant survive. Edits produce `INIT_CONFLICT` before conflict-plan mutation. Repeating the same setup options resumes failed publication; `--show` distinguishes incomplete setup.
 
+Human init preview/results/show and top-level status share one summary layout: setup state, selected host skills, mailbox, settings and dispatcher. Preview says **will install/create/save/remove**; it does not present proposed files as already installed. Unchanged/borrowed files and retained mail are explicit. Apply confirmation remains separate; cancellation creates nothing. Paths beneath the user home display with `~`, while Enter keeps the underlying absolute default. The short next step loads relevant help instead of printing unresolved binding templates. Explicit `init --json` preserves its full existing record and remains noninteractive.
+
 Results use `merl.init/v1`; errors use the common envelope with `INIT_INPUT`, `INIT_CONFIG`, `INIT_CONFLICT`, `INIT_BUSY` or `INIT_IO`. Dispatcher state is `not_requested`, `not_started` or `missing_codex`. A start command is shown only for a detected real absolute Codex executable. Claude skill installation does not enable automatic Claude wake. See [installation](installation.md) for ownership, recovery and installer pipeline behavior.
+
+## Setup status
+
+`merl status` reads only bounded local setup metadata and selected skills. It creates no directory, lock, receipt, database or other file. It opens no mailbox store and probes no host, process or socket. This command differs from `mail status --agent NAME`, which reports one identity's mail/binding state.
+
+`merl status --verbose`, `-v`, `--json` and `--format json` return the same full `merl.status/v1` record. These are JSON aliases, not verbose prose. The last output option wins, as elsewhere. Help/version still bypass settings.
+
+| Field | Meaning |
+| --- | --- |
+| `setup.state` | `not_configured`, `configured`, `incomplete`, or `not_checked` |
+| `setup.pending`, `setup.issues` | Unfinished receipt intent and bounded local problem metadata |
+| `config.path`, `source`, `state` | Selected settings and its observation; source is `user_default`, `explicit`, or `bypassed` |
+| `mailbox.path`, `source`, `state` | Path and directory type only; source is `saved_default`, `receipt`, `explicit`, or `none` |
+| `skills[]` | Host, path, content state, receipt ownership and `matches_bundle`; no file contents |
+| `dispatcher.guidance`, `runtime` | Saved foreground/none/unknown guidance; runtime is always `not_checked` |
+| `next_step` | One relevant CLI/help command |
+
+Explicit `--home` bypasses settings and receipts entirely, even with corrupt `--config` or an unusable user environment. It reports the explicit directory and `setup.state=not_checked`, with no skill/default claims. Otherwise `--config` selects one file or the known user config path is checked. A receipt home without published settings is a **planned home, not an active saved default**. Invalid selected settings fail honestly with `INIT_CONFIG` and exit 2; raw config content is never echoed.
+
+Skills distinguish installed, outdated recorded bytes, missing, locally modified, different unmanaged bytes, pending publication and path/read conflicts. Ownership is separately owned, borrowed, unmanaged or pending; matching the current bundle never establishes ownership. A modified/missing/conflicting skill or unfinished setup makes status incomplete while preserving files. An intact older recorded skill can be configured and outdated. Symlink targets and unrelated host configuration are not read. These are best-effort local observations; a configured setup does not mean a dispatcher is running, any session is connected or work has been assigned. Human output says **Not checked** for runtime and abbreviates paths, while full JSON keeps exact paths and stable state identifiers.
 
 ## Reviewer-lane commands
 
