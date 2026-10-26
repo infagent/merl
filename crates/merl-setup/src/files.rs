@@ -58,7 +58,7 @@ fn read_limit(path: &Path, limit: u64) -> Result<Option<String>, SetupError> {
         .map(Some)
         .map_err(|_| conflict(path))
 }
-fn check_path(path: &Path) -> Result<(), SetupError> {
+pub(super) fn check_path(path: &Path) -> Result<(), SetupError> {
     absolute(path)?;
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
@@ -112,12 +112,75 @@ pub(super) fn recorded_settings(config: &Path) -> Result<Option<super::Settings>
         })
         .transpose()
 }
-fn sibling(path: &Path, suffix: &str) -> PathBuf {
+pub(super) fn sibling(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(format!(
         ".{}.{}",
         path.file_name().unwrap_or_default().to_string_lossy(),
         suffix
     ))
+}
+
+pub(super) fn receipt_value(config: &Path) -> Result<Option<Value>, SetupError> {
+    let path = sibling(config, "merl-init.json");
+    read_limit(&path, MAX_RECEIPT)?
+        .map(|text| {
+            let value: Value = serde_json::from_str(&text).map_err(|_| conflict(&path))?;
+            if value["schema"] != "merl.init-receipt/v1" {
+                return Err(conflict(&path));
+            }
+            Ok(value)
+        })
+        .transpose()
+}
+
+pub(super) fn changes(
+    plan: &Plan<'_>,
+    hosts: &[String],
+) -> Result<Vec<super::FileChange>, SetupError> {
+    use super::{Change, FileChange};
+    validate(plan)?;
+    let receipt = load(plan)?;
+    let mut wanted = desired(plan);
+    if plan.removing {
+        wanted.retain(|path, _| {
+            path == &plan.config
+                || plan.settings.skills.iter().any(|(host, target)| {
+                    target == path && (hosts.is_empty() || hosts.contains(host))
+                })
+        });
+        if !hosts.is_empty() {
+            let mut remaining = plan.settings.clone();
+            remaining.skills.retain(|host, _| !hosts.contains(host));
+            wanted.insert(plan.config.clone(), remaining.bytes());
+        }
+    }
+    wanted
+        .into_iter()
+        .map(|(path, text)| {
+            let actual = read(&path)?;
+            let owned = receipt.entries.get(&path).is_some_and(|entry| entry.owned);
+            let removing = plan.removing && (path != plan.config || hosts.is_empty());
+            if !removing && actual.as_ref().is_some_and(|actual| actual != &text) && !owned {
+                return Err(conflict(&path));
+            }
+            let action = if removing {
+                if owned {
+                    Change::Remove
+                } else {
+                    Change::Retain
+                }
+            } else if actual.is_none() {
+                Change::Create
+            } else if actual.as_deref() != Some(&text) {
+                Change::Update
+            } else if owned {
+                Change::Unchanged
+            } else {
+                Change::Borrowed
+            };
+            Ok(FileChange { path, action })
+        })
+        .collect()
 }
 fn load(plan: &Plan<'_>) -> Result<Receipt, SetupError> {
     let p = receipt_path(plan);

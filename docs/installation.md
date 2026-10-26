@@ -29,7 +29,8 @@ After a package-manager, Cargo or manual installation, the same setup is availab
 
 ```sh
 merl init
-merl init --show --json
+merl status
+merl status -v  # full JSON
 ```
 
 The guide detects Codex/Claude from executable or skill-directory presence without running a host. Select one, both or `none`; choose a durable absolute mailbox home, then optionally **show dispatcher start instructions**. Review concrete paths before accepting. `--global` means user-global scope, with no project config discovery.
@@ -51,6 +52,8 @@ Preview and inspect without creating even directories or locks:
 merl init --global --host codex --home /absolute/durable-mail --dry-run --json
 merl init --show --json
 ```
+
+The shared summary/status update is implemented by #158 and requires a release containing it; v0.3.0 users can inspect setup with `merl init --show --json`. Default init preview/results/show use the same concise summary as `merl status`. Preview marks proposed changes before confirmation; it does not dump internal JSON or placeholder session commands. `merl status -v`/`--verbose` returns full JSON; explicit `merl init --json` keeps the existing automation record. Status is read-only and never infers that saved foreground instructions mean a dispatcher is running. Interrupted receipt choices are shown as planned rather than active defaults. See the [status field/source contract](user-interface.md#setup-status).
 
 ## Setup paths and defaults
 

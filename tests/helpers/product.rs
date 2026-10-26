@@ -47,18 +47,19 @@ impl Product {
         let root = &self.help.iter().find(|(t, _, _)| t.is_empty()).unwrap().1;
         assert_eq!(
             root["children"],
-            serde_json::json!(["mail", "lane", "init"])
+            serde_json::json!(["mail", "lane", "init", "status"])
         );
         assert_eq!(
             self.help.len(),
-            23,
-            "root, mail and lane groups, nineteen operations, and init"
+            24,
+            "root, mail and lane groups, nineteen operations, init, and status"
         );
         for (topic, value, human) in &self.help {
             assert_eq!(value["schema"], "merl.help/v1");
             assert_eq!(value["command"], *topic);
             assert!(
                 topic.is_empty()
+                    || topic == "status"
                     || topic == "init"
                     || topic == "mail"
                     || topic.starts_with("mail ")
