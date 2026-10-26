@@ -43,7 +43,7 @@ sh install.sh --unattended --setup -- \
   --dispatcher foreground --yes --json
 ```
 
-No argument string is evaluated. Explicit unattended setup requires `--yes` (or read-only `--dry-run`/`--show`). First setup also requires `--host` and `--home`; a known setup can reuse saved choices. JSON never prompts. `--setup` failure exits nonzero and says that the verified binary remains installed while setup is incomplete. Retry `merl init` with the same choices; binary download/checksum/version guarantees are unchanged.
+No argument string is evaluated. The unattended guard follows option/value boundaries: a path value spelled `--yes` is not consent. Unsupported argument grammar fails before invoking init. Explicit unattended setup requires `--yes` (or read-only `--dry-run`/`--show`). First setup also requires `--host` and `--home`; a known setup can reuse saved choices. JSON never prompts. `--setup` failure exits nonzero and says that the verified binary remains installed while setup is incomplete. Retry `merl init` with the same choices; binary download/checksum/version guarantees are unchanged.
 
 Preview and inspect without creating even directories or locks:
 

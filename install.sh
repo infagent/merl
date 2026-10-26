@@ -142,9 +142,19 @@ fi
 if [ "$setup_mode" = yes ]; then
     if [ "$terminal" = no ]; then
         safe_input=no
+        needs_value=no
         for argument do
-            case $argument in --yes|--show|--dry-run) safe_input=yes;; esac
+            if [ "$needs_value" = yes ]; then needs_value=no; continue; fi
+            # Match init's argv boundaries: a value spelling --yes is not consent.
+            # Unknown options fail closed until their grammar is supported here.
+            case $argument in
+                --home|--config|--host|--dispatcher|--codex-skills-dir|--claude-skills-dir|--format) needs_value=yes;;
+                --yes|--show|--dry-run) safe_input=yes;;
+                --global|--uninstall|--json|--help|-h) ;;
+                *) fail "verified binary remains installed at $destination; setup incomplete: unrecognized unattended init argument";;
+            esac
         done
+        [ "$needs_value" = no ] || fail "verified binary remains installed at $destination; setup incomplete: init option needs a value"
         [ "$safe_input" = yes ] || fail "verified binary remains installed at $destination; setup incomplete: unattended setup requires --yes, --show or --dry-run"
     fi
     "$destination" init "$@" || fail "verified binary remains installed at $destination; setup incomplete. Retry $destination init with the same choices."

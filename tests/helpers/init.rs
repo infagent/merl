@@ -425,6 +425,44 @@ impl SetupCase {
         assert!(!self.claude_skill().exists());
         assert!(!self.config().exists());
     }
+    pub fn when_unattended_installer_forwards_a_consent_word_as_a_home_value(mut self) -> Self {
+        let output = Command::new("python3")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/helpers/init_unattended.py"
+            ))
+            .arg(env!("CARGO_BIN_EXE_merl"))
+            .arg(&self.profile)
+            .arg(&self.tools)
+            .arg(env!("CARGO_PKG_VERSION"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        self.outcomes.push(Outcome {
+            success: value["code"] == 0,
+            value,
+        });
+        self
+    }
+    pub fn then_it_exits_without_prompting_and_keeps_the_verified_binary(self) {
+        let result = &self.outcomes[0];
+        assert!(!result.success, "{}", result.value);
+        assert_eq!(result.value["prompted"], false, "{}", result.value);
+        assert_eq!(result.value["stalled"], false, "{}", result.value);
+        assert_eq!(result.value["binary_installed"], true);
+        assert!(
+            result.value["transcript"]
+                .as_str()
+                .unwrap()
+                .contains("setup incomplete")
+        );
+        assert!(!self.config().exists());
+    }
     pub fn then_recovery_is_visible_and_uninstall_preserves_borrowed_skill_and_mail(self) {
         assert_eq!(self.captured_skills[0], b"INIT_IO");
         assert_eq!(self.outcomes[0].value["outcome"], "incomplete");

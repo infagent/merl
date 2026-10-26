@@ -72,3 +72,10 @@ fn a_host_can_move_after_scoped_uninstall_without_adopting_its_old_borrowed_skil
         .when_a_host_is_uninstalled_then_installed_at_a_new_destination()
         .then_only_the_new_owned_skill_is_removed_and_the_borrowed_skill_remains();
 }
+
+#[test]
+fn unattended_installation_cannot_take_an_option_value_as_permission_to_prompt() {
+    SetupCase::given_an_unconfigured_user()
+        .when_unattended_installer_forwards_a_consent_word_as_a_home_value()
+        .then_it_exits_without_prompting_and_keeps_the_verified_binary();
+}
