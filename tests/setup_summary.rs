@@ -23,3 +23,10 @@ fn setup_previews_distinguish_unchanged_borrowed_and_owned_removals() {
         .when_setup_and_uninstall_are_previewed_then_uninstalled()
         .then_the_shared_summary_describes_changes_and_retained_mail();
 }
+
+#[test]
+fn uninstall_reports_borrowed_settings_that_still_select_a_mailbox() {
+    SummaryCase::given_borrowed_settings_with_owned_and_borrowed_skills()
+        .when_borrowed_setup_is_removed_and_status_is_read()
+        .then_removal_reports_the_remaining_default_and_agrees_with_status();
+}

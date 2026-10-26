@@ -200,13 +200,13 @@ pub(super) fn removal_result(
             continue;
         }
         if let Some(change) = changes.iter().find(|change| &change.path == path) {
+            skills.retain(|skill| skill["host"] != *host);
             skills.push(json!({"host":host,"path":path,"state":if change.action==Change::Remove {"removed"} else {"retained"},"ownership":if change.action==Change::Retain {"borrowed"} else {"owned"}}));
         }
     }
     record["skills"] = json!(skills);
-    record["mailbox"] = json!({"path":settings.mail_home,"source":if hosts.is_empty() {"retained"} else {"saved_default"},"state":directory_name(DirectoryState::inspect(&settings.mail_home)?)});
-    if hosts.is_empty() {
-        record["setup"]["state"] = json!("removed");
+    if record["mailbox"]["path"].is_null() {
+        record["mailbox"] = json!({"path":settings.mail_home,"source":"retained","state":directory_name(DirectoryState::inspect(&settings.mail_home)?)});
     }
     Ok(record)
 }
@@ -243,7 +243,6 @@ pub(super) fn summary(record: &Value) -> String {
         "incomplete" => "Incomplete",
         "preview" => "Preview (proposed changes)",
         "removal_preview" => "Preview (proposed removals)",
-        "removed" => "Removed",
         _ => "Not checked",
     };
     let mut lines = vec![format!("Merl setup: {title}")];

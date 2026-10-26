@@ -238,6 +238,55 @@ impl SummaryCase {
         case.setup(index);
         case
     }
+    pub fn given_borrowed_settings_with_owned_and_borrowed_skills() -> Self {
+        let mut case = Self::new();
+        let index = case.user("borrowed settings");
+        let user = &case.users[index];
+        let codex = user.profile.join(".agents/skills/merl-mail/SKILL.md");
+        let claude = user.profile.join(".claude/skills/merl-mail/SKILL.md");
+        fs::create_dir_all(codex.parent().unwrap()).unwrap();
+        fs::write(&codex, SKILL).unwrap();
+        fs::create_dir_all(user.config.parent().unwrap()).unwrap();
+        // A manually supplied, documented config is usable but never adopted.
+        fs::write(&user.config,format!("{}\n",json!({"schema":"merl.config/v1","mail_home":user.profile.join("mail"),"skills":{"codex":codex,"claude":claude},"dispatcher":"foreground"}))).unwrap();
+        case.setup(index);
+        let manual = case.user("manual settings");
+        let user = &case.users[manual];
+        fs::create_dir_all(user.config.parent().unwrap()).unwrap();
+        fs::create_dir(user.profile.join("mail")).unwrap();
+        fs::write(&user.config,format!("{}\n",json!({"schema":"merl.config/v1","mail_home":user.profile.join("mail"),"skills":{},"dispatcher":"none"}))).unwrap();
+        case
+    }
+    pub fn when_borrowed_setup_is_removed_and_status_is_read(mut self) -> Self {
+        for index in 0..self.users.len() {
+            let before = snapshot(&self.users[index].profile);
+            self.outputs.push(vec![
+                self.command(index, &["init", "--uninstall", "--yes"]),
+                self.command(index, &["status"]),
+            ]);
+            self.pure
+                .push(before == snapshot(&self.users[index].profile));
+        }
+        self
+    }
+    pub fn then_removal_reports_the_remaining_default_and_agrees_with_status(self) {
+        for (index, results) in self.outputs.iter().enumerate() {
+            assert!(results.iter().all(|output| output.success), "{results:?}");
+            let removal = &results[0].text;
+            let status = &results[1].text;
+            assert_eq!(removal.lines().next(), status.lines().next(), "{results:?}");
+            assert!(removal.contains("saved default"), "{removal}");
+            assert_eq!(
+                removal.matches("Codex skill:").count(),
+                usize::from(index == 0),
+                "{removal}"
+            );
+            assert!(self.users[index].config.is_file());
+            if self.users[index].expected == "manual settings" {
+                assert!(self.pure[index], "unowned settings were changed");
+            }
+        }
+    }
     pub fn when_terminal_setup_is_cancelled_then_applied_and_status_is_read(mut self) -> Self {
         for confirm in ["n", "y"] {
             let before = snapshot(&self.users[0].profile);
