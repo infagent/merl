@@ -191,7 +191,7 @@ impl Mailbox {
                     );
                     if pointer.len() > 2048 {
                         "pointer_limit"
-                    } else if enqueue(codex, socket, session, &pointer)? {
+                    } else if enqueue(codex, socket, session, &pointer, &self.home)? {
                         "enqueued"
                     } else {
                         "failed"
@@ -260,8 +260,17 @@ fn lock(path: &Path) -> Result<File, MailError> {
     })?;
     Ok(f)
 }
-fn enqueue(codex: &Path, socket: &str, session: &str, pointer: &str) -> Result<bool, MailError> {
+fn enqueue(
+    codex: &Path,
+    socket: &str,
+    session: &str,
+    pointer: &str,
+    home: &Path,
+) -> Result<bool, MailError> {
     let child = Command::new(codex)
+        // A dispatcher can outlive the development checkout that launched it.
+        // Codex loads configuration before connecting, so use stable runtime storage.
+        .current_dir(home)
         .args([
             "queue",
             "--remote",

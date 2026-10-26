@@ -3,6 +3,7 @@
 //! The CLI opens only an explicitly selected mailbox. Unknown or retired commands
 //! fail before touching runtime storage; it contains no old-product data adapter.
 
+mod lane;
 mod mail;
 
 use serde_json::{Value, json};
@@ -62,6 +63,8 @@ pub fn run_with_clock(
     let mut json_output = false;
     let result = if mail::handles(arguments) {
         mail::execute(arguments, &mut json_output, clock)
+    } else if lane::handles(arguments) {
+        lane::execute(arguments, &mut json_output, clock)
     } else {
         root(arguments, &mut json_output)
     };
@@ -94,16 +97,15 @@ fn root(arguments: &[String], json_output: &mut bool) -> Result<String, CliError
     if !words.is_empty() && words != ["help"] {
         return Err(CliError{code:"UNKNOWN_COMMAND",message:"Unknown command. Run merl help for the messaging interface. Retired product commands and runtime stores are not opened or migrated.".into()});
     }
-    let usage = "merl mail <operation> [options]";
-    let summary =
-        "Durable local agent messaging and wake-up of explicitly bound existing sessions.";
+    let usage = "merl <mail|lane> <operation> [options]";
+    let summary = "Durable local messaging, reviewer lanes and wake-up of explicitly bound existing sessions.";
     if *json_output {
         render_json(
-            &json!({"schema":"merl.help/v1","command":"","kind":"group","usage":usage,"summary":summary,"description":summary,"children":["mail"],"commands":["mail"],"arguments":[],"outcomes":[],"errors":[],"related":["mail"],"example":"merl help mail --json","examples":["merl help mail --json"]}),
+            &json!({"schema":"merl.help/v1","command":"","kind":"group","usage":usage,"summary":summary,"description":summary,"children":["mail","lane"],"commands":["mail","lane"],"arguments":[],"outcomes":[],"errors":[],"related":["mail","lane"],"example":"merl help mail --json","examples":["merl help mail --json"]}),
         )
     } else {
         Ok(format!(
-            "{usage}\n{summary}\nCommands: mail\nRun merl --version, merl help mail or merl help mail <operation> --json.\n"
+            "{usage}\n{summary}\nCommands: mail, lane\nRun merl --version, merl help mail or merl help lane <operation> --json.\n"
         ))
     }
 }

@@ -7,7 +7,7 @@ use product::Product;
 fn merl_exposes_one_messaging_product_with_complete_incremental_help() {
     Product::given_the_messaging_product()
         .when_the_public_help_tree_is_read()
-        .then_only_mail_commands_are_discoverable_with_matching_help();
+        .then_messaging_and_lane_commands_are_discoverable_with_matching_help();
 }
 
 #[test]

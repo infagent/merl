@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+merl-lane = { path = "../merl-lane" }
 merl-mail = { path = "../merl-mail" }
 serde_json.workspace = true
 

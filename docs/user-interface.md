@@ -1,6 +1,6 @@
 # Messaging interface and behavior
 
-The `merl` CLI is the public interface. `merl help` exposes the mail group; `merl help mail` lists operations; `merl help mail send --json` loads one command contract. A skill is optional. Detailed examples are in the [setup guide](agent-mail.md).
+The `merl` CLI is the public interface. `merl help` exposes mail and lane groups; `merl help mail` and `merl help lane` list operations; leaf help loads one contract. A skill is optional. Detailed examples are in [mail setup](agent-mail.md) and [reviewer lanes](reviewer-lanes.md).
 
 `merl --version` and `merl -V` print `merl VERSION` and exit successfully without selecting a mailbox. These standalone binary flags report the root package version used by the release archive; command JSON envelopes remain unchanged. See [installation](installation.md) for supported platforms and installation behavior.
 
@@ -26,6 +26,25 @@ All stateful commands require an explicit absolute `--home`. Identities and mess
 `send` labels are `assign`, `ready`, `review`, `blocked`, `question`, `reply` and `note`. The first five are coordination requests. A reply requires `--in-reply-to ID`, reverses the original endpoints and closes nothing by itself. Completion may link a matching reply. An exact send retry is `unchanged`; altered content under the same ID conflicts.
 
 Lists accept at most one of `--unread`, `--pending` or `--outstanding`. Without a filter they show all addressed headers. `--limit` is 1..100. Follow `next_after` with `--after`; a cursor from another recipient is invalid. Pending includes interrupted reads without receipt, and outstanding includes receipted unfinished requests. Read and receipt timestamps preserve their first values on retry.
+
+## Reviewer-lane commands
+
+All lane commands use the same explicit absolute `--home` and output-format options. Lane names use 1..32 key characters. Required labels are an AND selector; authors are never treated as lane identity.
+
+| Command | Observable behavior |
+| --- | --- |
+| `lane start --name NAME --repo OWNER/REPO --agent NAME --label LABEL ...` | Create a durable multi-PR subscription; exact active creation retries are unchanged |
+| `lane start --name NAME --expected-generation N` | Resume saved configuration without changing recipient binding |
+| `lane update --name NAME --expected-generation N --label LABEL ...` | Replace labels, restart membership discovery and retain prior intent/cursors |
+| `lane stop --name NAME --expected-generation N` | Pause scans and unclaimed publication; retain all state |
+| `lane status [--name NAME]` | Show bounded lane health, complete discovery time, partial work, delivery failures and source cooldown |
+| `lane queue --name NAME [--after PR_NUMBER] [--limit N]` | Page per-PR state/cursors/gaps, with `next_after` |
+| `lane scan --gh PATH [--max-requests N]` | Read bounded metadata and publish durable mail; no host dispatch |
+| `lane watch --gh PATH --codex PATH [--max-requests N]` | Run due scans and the existing dispatcher in one foreground process |
+
+Lane results use `merl.lane/v1` with `lane.OPERATION` actions. Help uses `merl.help/v1`; errors retain `merl.error/v1` and exit 2. Provider/rate/protocol/cursor errors are explicit and leave checkpoints intact. Status distinguishes a completed discovery sweep from pending PR baselines/pages, and a frozen batch from receipt/review completion. The foreground watcher reports changing failures without creating a mail acknowledgment loop and continues bounded retry/dispatch.
+
+Repository and recipient are immutable per lane. Fresh sessions use explicit `mail bind`; the lane never guesses one. Pause can race an already claimed send, which may finish. Published review-labelled mail remains outstanding until the recipient explicitly completes it. The [lane contract](reviewer-lanes.md) defines initial baselines, inline comment coverage, scope departure, cursor gaps and polling exclusions.
 
 ## Output and errors
 

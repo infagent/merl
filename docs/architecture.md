@@ -11,8 +11,21 @@ Merl has one product boundary: durable local agent messaging through the CLI. [A
 | Root `merl` binary | stdout/stderr and exit-code routing |
 | `merl-cli` | bounded argument parsing, incremental help, JSON envelopes and clock boundary |
 | `merl-mail` | message/handling rules, SQLite transactions, explicit host binding and dispatch |
+| `merl-lane` | read-only PR metadata, lane generations, fair checkpoints and frozen mail intent |
 
 Only `serde_json` and bundled `rusqlite` are workspace dependencies. Clocks, IDs and selected paths enter through explicit boundaries. A host executable is configured by an absolute path; synthetic executables replace it in tests. No runtime service is automatically installed.
+
+## Reviewer-lane source
+
+[ADR 0005](adr/0005-reviewer-lanes.md) adds one narrow GitHub source. `lane-v1/lanes.sqlite` stores named repository/label subscriptions, durable scheduling tickets, independent PR timeline/thread progress, thread-tail fingerprints, staged activity and immutable mail batches. It does not change the existing mail schema. Subscription identity is a Merl name, separate from its current host session.
+
+Source progress and staged intent commit together. A batch then freezes its ID, recipient and exact body before mail I/O. Mail publication uses the existing idempotent send API; a crash after publication retries the same bytes. Final acknowledgment affects only that batch. Configuration changes/pause can commit during I/O; generation checks fence stale content responses. Authenticated server retry deadlines survive that fence because they apply to the shared credential, not the old selector.
+
+One scan lock serializes source/publication passes. Durable tickets rotate discovery and per-PR pages under a bounded request budget. Incomplete/error responses retain progress and never infer absence. Initialization, scope exits and cursor resynchronization have visible state/gap records. [Reviewer lanes](reviewer-lanes.md) defines exact source coverage, backfill and limits.
+
+The configured authenticated gh runs fixed metadata-only GraphQL queries against github.com with response/time limits. No discussion bodies or authors are requested, and no GitHub mutation is available. Both gh and Codex subprocesses use canonical runtime storage as their working directory; a removed development checkout cannot break configuration loading. Credentials stay with the configured tools.
+
+`lane watch` combines scans with existing mail dispatch under the same watch lock as `mail watch`. It adds no second wake path, service framework or idle model call. Published mail remains governed by ordinary receipt/completion even after a lane pauses.
 
 ## Storage and publication
 

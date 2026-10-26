@@ -26,6 +26,8 @@ Host enqueue is not proof of reading or completion. Crashes and ambiguous result
 
 ## Scope and trust
 
+An optional [reviewer lane](reviewer-lanes.md) adds read-only GitHub activity for one repository and a required-label selector. A lane persists across PR closure and session replacement, discovers new matching work, and emits bounded pointers through existing mail. It keeps source progress, delivery, receipt and completed review separate. GitHub authors cannot identify lanes on a shared account. The daemon writes nothing to GitHub and creates no agents or assignments there. [ADR 0005](adr/0005-reviewer-lanes.md) defines this narrow addition and its visible polling/resynchronization limits.
+
 This release is one local mailbox, a Rust CLI and a verified Codex adapter. It provides no spawning, model-provider integration, generalized scheduler, remote authority, authenticated multi-user service or project-state engine. Another host requires a verified adapter before Merl claims it can wake that host.
 
 The mailbox retains bounded plaintext. Private file permissions protect ordinary local access, but unrestricted same-user processes can read or impersonate cooperating clients. There is no encryption, purge, retention scheduler or quota. Operators choose suitable content and manage backups under their own policy.

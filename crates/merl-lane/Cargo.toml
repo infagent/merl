@@ -1,0 +1,17 @@
+[package]
+name = "merl-lane"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Durable read-only PR activity subscriptions for reviewer lanes"
+publish = false
+
+[dependencies]
+serde_json.workspace = true
+rusqlite.workspace = true
+merl-mail = { path = "../merl-mail" }
+
+[lints]
+workspace = true
