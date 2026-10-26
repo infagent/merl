@@ -116,7 +116,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "merl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "merl-cli",
  "merl-lane",
@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "merl-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "merl-lane",
  "merl-mail",
@@ -135,7 +135,7 @@ dependencies = [
 
 [[package]]
 name = "merl-lane"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "merl-mail",
  "rusqlite",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "merl-mail"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rusqlite",
  "serde_json",
