@@ -28,6 +28,9 @@ jobs:
     name: Freeze existing draft source
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # Draft release visibility requires push-level access; this job performs GETs only.
+    permissions:
+      contents: write
     outputs:
       sha: ${{ steps.source.outputs.sha }}
     steps:

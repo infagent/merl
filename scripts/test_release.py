@@ -105,6 +105,10 @@ import json, os, pathlib, shutil, sys
 a=sys.argv[1:]; p=pathlib.Path(os.environ["MOCK_GITHUB"]); s=json.loads(p.read_text()); remote=p.parent/"remote"; remote.mkdir(exist_ok=True)
 if a[0]=="api":
     if "git/ref/tags/" in a[1]: print(json.dumps({"object":{"type":"commit","sha":s["tag_sha"]}}))
+    elif "/releases/tags/" in a[1] and s["draft"]:
+        print("HTTP 404: tag endpoint exposes published releases only", file=sys.stderr); sys.exit(1)
+    elif "/releases?per_page=100&page=" in a[1]:
+        print(json.dumps([{"id":i+100,"tag_name":"v0.0."+str(i),"draft":False} for i in range(100)] if a[1].endswith("page=1") else [s]))
     elif "--method" in a:
         s["draft"]=False; print(json.dumps(s))
     else: print(json.dumps(s))
@@ -125,6 +129,12 @@ p.write_text(json.dumps(s))
 
     def publish(self, assets):
         return self.release("publish", "--tag", "v0.1.0", "--sha", self.sha, "--assets", str(assets))
+
+    def test_existing_drafts_are_found_after_the_first_release_page_without_the_published_tag_endpoint(self):
+        self.mock_github()
+        result = self.release("check", "--tag", "v0.1.0", "--sha", self.sha, "--require-tag", "--draft")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads(self.state.read_text())["draft"], "validation must not publish")
 
     def test_only_a_complete_verified_draft_is_published_and_published_assets_are_immutable(self):
         assets = self.assembled_assets()

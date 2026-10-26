@@ -150,10 +150,27 @@ def github(*args):
     return json.loads(subprocess.check_output(["gh", "api", *args], text=True))
 
 
-def draft(tag, sha):
+def draft(tag, sha, release_id=None):
     repo = os.environ["GITHUB_REPOSITORY"]
     require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo), "invalid GitHub repository")
-    release = github(f"repos/{repo}/releases/tags/{tag}")
+    if release_id is None:
+        # The by-tag REST endpoint exposes published releases only. Enumerate
+        # authenticated pages for drafts, stopping before history grows unbounded.
+        release = None
+        for page in range(1, 101):
+            entries = github(f"repos/{repo}/releases?per_page=100&page={page}")
+            matches = [entry for entry in entries if entry["tag_name"] == tag]
+            require(len(matches) <= 1, "ambiguous releases for tag")
+            if matches:
+                release = matches[0]
+                break
+            if len(entries) < 100:
+                break
+        require(release is not None, "existing release not found in the first 100 pages; check draft visibility/tag")
+    else:
+        release = github(f"repos/{repo}/releases/{release_id}")
+    require(type(release["id"]) is int and release["id"] > 0, "invalid release ID")
+    require(release_id is None or release["id"] == release_id, "draft identity changed")
     require(release["draft"] is True, "refusing to mutate a published release; retry only existing drafts")
     require(release["tag_name"] == tag and release["target_commitish"] == sha and not release["prerelease"],
             "draft differs from frozen stable tag/revision")
@@ -178,7 +195,7 @@ def publish(args):
     subprocess.run(["gh", "release", "upload", args.tag, *[str(assets / n) for n in sorted(expected)],
                     "--repo", repo, "--clobber"], check=True)
     # Recheck remote names and bytes, not just successful upload process exits.
-    uploaded = draft(args.tag, args.sha)
+    uploaded = draft(args.tag, args.sha, release["id"])
     require(len(uploaded["assets"]) == len(expected) and {a["name"] for a in uploaded["assets"]} == expected,
             "remote release asset set is incomplete")
     with tempfile.TemporaryDirectory(prefix="merl-release-verify-") as temporary:
@@ -186,7 +203,7 @@ def publish(args):
         verify_assets(Path(temporary), args.tag, args.sha)
         require(all((assets / n).read_bytes() == (Path(temporary) / n).read_bytes() for n in expected),
                 "remote release bytes differ from built assets")
-    final = draft(args.tag, args.sha)
+    final = draft(args.tag, args.sha, release["id"])
     require(final["id"] == release["id"], "draft identity changed during publication")
     github(f"repos/{repo}/releases/{release['id']}", "--method", "PATCH", "-F", "draft=false", "-f", "make_latest=legacy")
 
