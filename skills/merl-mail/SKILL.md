@@ -3,7 +3,7 @@ name: merl-mail
 description: Handle durable Merl mail using an explicit identity; load CLI contracts as needed.
 ---
 
-Use the identity and absolute mailbox home explicitly supplied by the coordinator. Never infer or create a replacement host session.
+Use the coordinator-supplied identity and mailbox home. Use a saved home only when the coordinator confirms it; inspect `merl init --show --json`. Never infer or create a replacement host session.
 
 Load only the needed contract: `merl help`, `merl help mail OPERATION --json`, or `merl help lane OPERATION --json`. Setup and recovery: [mail guide](https://github.com/infagent/merl/blob/main/docs/agent-mail.md); configured subscriptions: [lane guide](https://github.com/infagent/merl/blob/main/docs/reviewer-lanes.md).
 

@@ -16,7 +16,7 @@ merl --version
 merl help
 ```
 
-The installer uses `~/.local/bin`, verifies the archive checksum and version before replacing a regular file, and prints PATH guidance. It changes no agent configuration or runtime state. Binary assets become available when the first binary release finishes; source-only releases have no installer. See [installation](docs/installation.md) for exact versions, supported Linux/macOS baselines, manual downloads, optional skill setup and uninstall.
+The installer uses `~/.local/bin`, verifies the archive checksum and version before replacing a regular file, and prints PATH guidance. It then offers reusable `merl init` setup through the controlling terminal: matching Codex/Claude skills, a durable mailbox default, and optional dispatcher start instructions. Use `--no-setup` for binary-only installation. Setup never starts a service or guesses a session. Guided setup requires a release containing #155; v0.2.0 and earlier installers are binary-only. See [installation](docs/installation.md) for exact versions, supported Linux/macOS baselines, manual downloads, optional skill setup and uninstall.
 
 To build from source, install the toolchain in `rust-toolchain.toml`:
 
@@ -43,7 +43,7 @@ Offline recipients keep their mail. To wake an existing Codex session, explicitl
 
 ## Product and limits
 
-The public interface is `merl mail` for registration, binding and message handling, plus `merl lane` for optional read-only GitHub PR activity. A named reviewer lane selects a repository and required labels, follows many PRs across sessions, and sends bounded pointers through the same mail transport. It makes no GitHub writes or idle model calls. See [reviewer lanes](docs/reviewer-lanes.md) for setup, pause/resume, independent cursors and polling limits.
+The public interface includes `merl init` for user setup, `merl mail` for registration, binding and message handling, plus `merl lane` for optional read-only GitHub PR activity. A named reviewer lane selects a repository and required labels, follows many PRs across sessions, and sends bounded pointers through the same mail transport. It makes no GitHub writes or idle model calls. See [reviewer lanes](docs/reviewer-lanes.md) for setup, pause/resume, independent cursors and polling limits.
 
 Results and incremental help are versioned JSON when requested. The [product contract](docs/product-description.md), [UI contract](docs/user-interface.md), [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md) describe this messaging product.
 

@@ -71,6 +71,7 @@ fn parse<'a>(args: &'a [String], json_output: &mut bool) -> Result<Arguments<'a>
             }
             "--help" | "-h" => result.help = true,
             "--home"
+            | "--config"
             | "--name"
             | "--repo"
             | "--agent"
@@ -115,14 +116,17 @@ pub(super) fn execute(
     if args
         .values
         .keys()
-        .any(|k| *k != "--home" && !flags.contains(k))
+        .any(|k| !matches!(*k, "--home" | "--config") && !flags.contains(k))
         || (!args.labels.is_empty() && !flags.contains(&"--label"))
     {
         return Err(input("option does not apply to this lane operation"));
     }
-    let home = Path::new(args.get("--home")?);
+    let home = merl_setup::resolve_home(
+        args.values.get("--home").copied(),
+        args.values.get("--config").copied(),
+    )?;
     let now = clock()?;
-    let mut store = Store::open(home)?;
+    let mut store = Store::open(&home)?;
     let value = match args.operation {
         "start" => start(&mut store, &args, now)?,
         "update" => store.update(
@@ -159,7 +163,7 @@ pub(super) fn execute(
         )?,
         "scan" | "watch" => {
             let mut github = Gh::new(Path::new(args.get("--gh")?), store.home())?;
-            let mut mailbox = Mailbox::open(home)?;
+            let mut mailbox = Mailbox::open(&home)?;
             let budget = args
                 .values
                 .get("--max-requests")
@@ -386,7 +390,7 @@ fn help(operation: &str, json_output: bool) -> Result<String, CliError> {
         .map(|flag| argument(operation, flag))
         .collect::<Vec<_>>();
     let usage = format!(
-        "merl {command}{} --home <absolute-path> [--format human|json] [--json]",
+        "merl {command}{} [--home <absolute-path>] [--config <absolute-path>] [--format human|json] [--json]",
         if operation.is_empty() {
             " <operation>".to_owned()
         } else {
@@ -434,7 +438,15 @@ fn argument(operation: &str, flag: &str) -> String {
     }
 }
 fn errors(operation: &str) -> Vec<&'static str> {
-    let mut errors = vec!["LANE_INPUT", "LANE_IO", "LANE_STORAGE", "LANE_SCHEMA"];
+    let mut errors = vec![
+        "LANE_INPUT",
+        "LANE_IO",
+        "LANE_STORAGE",
+        "LANE_SCHEMA",
+        "INIT_INPUT",
+        "INIT_CONFIG",
+        "INIT_CONFLICT",
+    ];
     match operation {
         "start" => errors.extend([
             "LANE_CONFLICT",

@@ -30,6 +30,8 @@ The release-policy check needs Node 20+ and npm for an isolated temporary depend
 
 `cargo test --locked --test mail --test product` runs the public messaging and product-boundary scenarios. A manual real-host smoke additionally needs consenting existing sessions and an explicit Codex executable/socket; it is separate from automated tests. Preserve the working application/dispatcher during a binary transition and identify both binaries in the evidence.
 
+`cargo test --locked --test init` checks setup with synthetic user directories, terminal input, cancellation and ownership through public CLI/API boundaries. Python is also required for its controlled-terminal driver; no real user setup occurs.
+
 `cargo test --locked --test install_version` checks the installed-binary version seam. Python discovery also runs synthetic installer and release-publication tests with local assets/Git repositories; no release is created. The Package workflow builds archives and verifies clean user-directory installs on all supported native platforms. See [release distribution](docs/release-distribution.md) for local package smoke and maintainer-only draft recovery. Do not publish a tag or release as a side effect of testing.
 
 ## Pull requests and review

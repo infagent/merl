@@ -10,7 +10,9 @@ merl --version
 merl help
 ```
 
-The installer writes `~/.local/bin/merl` without sudo. If that directory is outside your PATH, it prints guidance; add the directory to your shell configuration yourself. It does not edit profiles, configure agents, install a skill or service, start a dispatcher, or touch a mailbox. Install commands become available after the first binary release finishes; older source-only releases have no installer asset.
+The installer writes `~/.local/bin/merl` without sudo and prints PATH guidance if needed. After verifying and installing the binary, it offers `merl init` on the controlling terminal. That optional setup installs matching user skills, creates a chosen durable mailbox directory, saves a default and offers dispatcher start instructions. It edits no shell profiles or native host configuration and starts no process or service.
+
+Guided setup is implemented in source by #155. Use a binary release that includes it; v0.2.0 and earlier installers are binary-only and do not recognize setup flags. `merl help init` checks whether a binary supports the initializer.
 
 To select an exact version and destination, replace the example tag with a published binary release:
 
@@ -20,6 +22,62 @@ curl -fsSL https://github.com/infagent/merl/releases/download/v0.2.0/install.sh 
 ```
 
 Each published installer defaults to its own tag. The latest URL selects that installer once; every subsequent asset download uses the same immutable tag. The source copy of `install.sh` resolves latest once if no version is supplied. Only stable `vMAJOR.MINOR.PATCH` tags are supported.
+
+## Guided and unattended setup
+
+After a package-manager, Cargo or manual installation, the same setup is available directly:
+
+```sh
+merl init
+merl init --show --json
+```
+
+The guide detects Codex/Claude from executable or skill-directory presence without running a host. Select one, both or `none`; choose a durable absolute mailbox home, then optionally **show dispatcher start instructions**. Review concrete paths before accepting. `--global` means user-global scope, with no project config discovery.
+
+Prompts read `/dev/tty`, never the install script's stdin. Without a controlling terminal the installer defaults to binary-only and prints how to run setup later. `--unattended` also defaults to binary-only. To skip the offer explicitly, pipe to `sh -s -- --no-setup`. To request unattended setup, forward exact initializer arguments after `--`:
+
+```sh
+# Use an installer from a release containing guided setup.
+sh install.sh --unattended --setup -- \
+  --global --host codex --host claude --home /absolute/durable-mail \
+  --dispatcher foreground --yes --json
+```
+
+No argument string is evaluated. The unattended guard follows option/value boundaries: a path value spelled `--yes` is not consent. Unsupported argument grammar fails before invoking init. Explicit unattended setup requires `--yes` (or read-only `--dry-run`/`--show`). First setup also requires `--host` and `--home`; a known setup can reuse saved choices. JSON never prompts. `--setup` failure exits nonzero and says that the verified binary remains installed while setup is incomplete. Retry `merl init` with the same choices; binary download/checksum/version guarantees are unchanged.
+
+Preview and inspect without creating even directories or locks:
+
+```sh
+merl init --global --host codex --home /absolute/durable-mail --dry-run --json
+merl init --show --json
+```
+
+## Setup paths and defaults
+
+| Artifact | Default location |
+| --- | --- |
+| Codex user skill | `~/.agents/skills/merl-mail/SKILL.md` |
+| Claude user skill | `~/.claude/skills/merl-mail/SKILL.md` |
+| Linux settings | `$XDG_CONFIG_HOME/merl/config.json`, or `~/.config/merl/config.json` |
+| Linux suggested mailbox | `$XDG_DATA_HOME/merl/mail`, or `~/.local/share/merl/mail` |
+| macOS settings | `~/Library/Application Support/merl/config.json` |
+| macOS suggested mailbox | `~/Library/Application Support/merl/mail` |
+
+Host locations follow [Codex skills](https://learn.chatgpt.com/docs/build-skills) and [Claude local skills](https://code.claude.com/docs/en/skills). `CLAUDE_CONFIG_DIR` selects the Claude profile root; `--claude-skills-dir` or `--codex-skills-dir` explicitly chooses a personal skill root in another profile. Each receives `merl-mail/SKILL.md`. Setup uses the exact short skill embedded in that binary, offline, for either host; it never downloads a skill from main. AGENTS.md, CLAUDE.md, host settings, hooks and permissions are untouched.
+
+`--config /absolute/config.json` selects the settings file and anchors its receipt/lock. Mail and lane commands use `--home` first and skip every settings read when it is supplied. Otherwise they read only the selected config or known user location. Missing settings ask for explicit home or setup; malformed settings return `INIT_CONFIG` before opening mail. Help, version and unknown commands do not load settings. There is no default production `/tmp` home or project-directory search.
+
+The config schema is `merl.config/v1`, with `mail_home`, `skills` (host-to-absolute-SKILL.md paths), and `dispatcher` (`foreground` or `none`). Setup does not open an existing mailbox store, migrate data, register agents, infer a session, replace a binding or alter a running dispatcher.
+
+With foreground instructions selected, `merl init --show --json` returns `dispatcher.state=not_started` and a command using the current Merl and detected real Codex absolute paths. Run the listed register/status/bind steps with your supplied identity, existing UUID/socket and current generation, then run `start_command` from a stable directory. Stop only that foreground process with Ctrl-C. If Codex is absent, state is `missing_codex` and there is no start command. Claude skill setup still works; automatic Claude wake is not supported. See [mail setup](agent-mail.md) for binding and recovery.
+
+## Ownership and failed setup
+
+Unchanged reruns report `unchanged`. Upgrades replace only unchanged Merl-owned files; identical pre-existing skills remain borrowed, even through recovery. Changed/foreign content or symlink destinations produce `INIT_CONFLICT`, including under `--yes`. The whole conflict plan is checked before writes. To move a recorded host destination, uninstall that host before selecting a new skill root. Files and setup metadata must be outside the mailbox subtree.
+
+Beside `config.json`, `.config.json.merl-init.json` records generated expected bytes, ownership and pending publication identity; it contains no backups of host settings or unrelated content. A stable zero-byte `.config.json.merl-init.lock` serializes setup. Files and new directories are private on Unix. Different config filenames use the corresponding basename in these sibling names.
+
+An I/O failure or cancellation can leave recorded partial progress. `merl init --show --json` reports `incomplete`; retry the same options to finish it, or use scoped uninstall. Publication uses file identity to recognize interrupted writes without adopting foreign identical files. Unknown `.NAME.merl-stage-N` files are preserved; at most 32 staging slots are attempted per destination, and reads/receipts are bounded. If all slots are occupied, inspect that specific directory and preserve any unrecognized files before retrying. Filesystems must support hard links, atomic rename, Unix identity and sync; failures have no weaker fallback.
 
 ## Supported systems
 
@@ -53,7 +111,7 @@ tar -xzf "$asset"
 
 On macOS, select the matching target and use `shasum -a 256 --check` for verification. Stop if verification fails. Move the verified binary into a user-writable directory on PATH. Each archive also contains `LICENSE`, `VERSION`, `REVISION`, and `skills/merl-mail/SKILL.md` from that exact release commit.
 
-Skill setup is optional. After verifying and unpacking the archive, copy `merl/skills/merl-mail/SKILL.md` into a skill location supported by your coding host. For Codex, an explicit fresh-directory setup is:
+Skill setup is optional. With a supporting binary, prefer `merl init` for ownership-aware setup and upgrades. For older releases or manual ownership, after verifying and unpacking the archive, copy `merl/skills/merl-mail/SKILL.md` into a skill location supported by your coding host. For Codex, an explicit fresh-directory setup is:
 
 ```sh
 mkdir -p "$HOME/.agents/skills"
@@ -67,7 +125,16 @@ If the skill directory exists, inspect it before updating it; do not overwrite l
 
 Rerun the latest installer to upgrade, or use the pinned command for a chosen version. A running dispatcher keeps using its loaded executable; an install does not restart it. Stop and restart only your own foreground dispatcher when you choose to use the new binary.
 
-Remove the installed binary to uninstall, for example `rm "$HOME/.local/bin/merl"`. Remove an optional skill only after checking its location and any local edits. Mailboxes and their contents remain in place; uninstalling does not erase mail or stop a running process.
+For setup owned by a supporting initializer:
+
+```sh
+merl init --uninstall --host claude --yes --json  # only Claude; retain default and Codex
+merl init --uninstall --yes --json                # all unchanged owned skills/settings
+```
+
+Local edits conflict and survive. Borrowed skills and every mailbox directory/descendant survive, including empty mailboxes. Only recorded empty setup directories with matching identity may be removed. The zero-byte coordination lock and its containing directory remain to avoid racing another initializer's open lock. Uninstall never removes a binary or stops a process.
+
+Remove the installed binary separately, for example `rm "$HOME/.local/bin/merl"`. Manually copied skills remain manually owned: inspect them before removing anything. A running dispatcher keeps its loaded executable until you explicitly stop it.
 
 ## Build a tag with Cargo
 

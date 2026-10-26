@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/merl-mail", "crates/merl-cli", "crates/merl-lane"]
+members = ["crates/merl-mail", "crates/merl-cli", "crates/merl-lane", "crates/merl-setup"]
 
 [workspace.package]
 edition = "2024"
@@ -33,6 +33,7 @@ publish = false
 merl-cli = { path = "crates/merl-cli" }
 
 [dev-dependencies]
+merl-setup = { path = "crates/merl-setup" }
 merl-lane = { path = "crates/merl-lane" }
 merl-mail = { path = "crates/merl-mail" }
 serde_json.workspace = true

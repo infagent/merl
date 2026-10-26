@@ -4,6 +4,7 @@
 
 - [ADR 0004: Replace the former product with durable agent messaging](0004-messaging-product.md)
 - [ADR 0005: Durable read-only reviewer lanes](0005-reviewer-lanes.md)
+- [ADR 0006: Reusable user setup and opt-in mailbox defaults](0006-user-setup.md)
 
 ## Superseded historical records
 
