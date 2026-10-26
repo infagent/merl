@@ -58,3 +58,10 @@ fn interactive_setup_reads_host_choices_from_the_terminal_and_json_never_prompts
         .when_json_omits_choices_then_terminal_setup_selects_claude()
         .then_only_the_terminal_selected_host_is_installed();
 }
+
+#[test]
+fn custom_settings_can_share_a_parent_with_mail_and_uninstall_keeps_an_empty_home() {
+    SetupCase::given_an_unconfigured_user()
+        .when_custom_settings_and_an_empty_mail_home_are_created_then_removed()
+        .then_custom_setup_is_removed_but_the_empty_mail_home_is_retained();
+}

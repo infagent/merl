@@ -237,16 +237,10 @@ pub(super) fn validate(plan: &Plan<'_>) -> Result<(), SetupError> {
     }
     for (index, path) in paths.iter().enumerate() {
         check_path(path)?;
-        // No managed artifact or its containing setup directory may contain mail.
-        if path.starts_with(&plan.settings.mail_home)
-            || plan.settings.mail_home.starts_with(
-                path.parent()
-                    .ok_or_else(|| input("invalid file destination"))?,
-            )
-        {
-            return Err(input(
-                "setup files and mailbox home must use separate directories",
-            ));
+        // Setup files cannot contain or sit beneath the mailbox directory.
+        // A shared ancestor is safe: directory cleanup separately excludes mail.
+        if path.starts_with(&plan.settings.mail_home) || plan.settings.mail_home.starts_with(path) {
+            return Err(input("setup files and mailbox home must not overlap"));
         }
         for other in &paths[index + 1..] {
             if path.starts_with(other) || other.starts_with(path) {

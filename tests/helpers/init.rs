@@ -361,6 +361,38 @@ impl SetupCase {
         assert_eq!(fs::read(self.claude_skill()).unwrap(), SKILL);
         assert!(!self.codex_skill().exists());
     }
+    pub fn when_custom_settings_and_an_empty_mail_home_are_created_then_removed(mut self) -> Self {
+        let config = self
+            .profile
+            .join("custom/settings.json")
+            .display()
+            .to_string();
+        let home = self.profile.join("custom/mail").display().to_string();
+        self.run(&[
+            "init", "--global", "--host", "none", "--config", &config, "--home", &home, "--yes",
+            "--json",
+        ]);
+        self.run(&[
+            "init",
+            "--config",
+            &config,
+            "--uninstall",
+            "--yes",
+            "--json",
+        ]);
+        self
+    }
+    pub fn then_custom_setup_is_removed_but_the_empty_mail_home_is_retained(self) {
+        assert!(
+            self.outcomes.iter().all(|o| o.success),
+            "{:?}",
+            self.outcomes
+        );
+        assert!(!self.profile.join("custom/settings.json").exists());
+        let home = self.profile.join("custom/mail");
+        assert!(home.is_dir());
+        assert_eq!(fs::read_dir(home).unwrap().count(), 0);
+    }
     pub fn then_recovery_is_visible_and_uninstall_preserves_borrowed_skill_and_mail(self) {
         assert_eq!(self.captured_skills[0], b"INIT_IO");
         assert_eq!(self.outcomes[0].value["outcome"], "incomplete");
