@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.2.0](https://github.com/infagent/merl/compare/v0.1.0...v0.2.0) (2026-10-26)
+## [0.2.0](https://github.com/infagent/merl/commits/89b0480eb7bcb5a1c73c741208f059a3afd2b696) (2026-10-26)
 
 
 ### ⚠ BREAKING CHANGES
