@@ -2,6 +2,8 @@
 
 The current product is durable local agent messaging. [ADR 0004](adr/0004-messaging-product.md) replaces the former semantic-state/compiler/evaluation product and its active plans. Git history retains that work; its benchmark and corpus commitments are not gates for this product.
 
+This is the single active project roadmap. The coordinator owns scope and sequencing; each selected issue names its implementation owner and independent reviewer. Issues and PRs hold execution evidence. Role briefs and checkpoints link here rather than maintaining separate roadmaps; see [project roles](agent-roles.md).
+
 ## Current release
 
 The release provides explicitly named identities, immutable atomic messages, validated reply links, independent read/receipt/completion, bounded header paging, visible delivery status, and recoverable coalesced host notification. Its first verified adapter targets existing Codex sessions over a local Unix socket. A foreground dispatcher is explicitly started and stopped by the operator.

@@ -2,6 +2,8 @@
 
 Merl is durable local messaging for coding agents. Named agents exchange immutable messages, keep receipt separate from completed work, and receive notifications in their existing host sessions. A shell dispatcher waits for mail without asking a model to poll.
 
+Start with the [first-message walkthrough](docs/onboarding.md) for a disposable setup and optional project role/checkpoint guidance. Automatic wake is currently verified for Codex; other hosts can use the CLI without a verified automatic wake adapter.
+
 A coordinator can hand work to a developer, a developer can request a review, and a reviewer can return findings. The project decides roles and merge authority. Merl records the messages and handling facts; a receipt alone never completes an assignment.
 
 ## Install and try it
