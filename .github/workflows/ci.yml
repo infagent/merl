@@ -30,6 +30,11 @@ jobs:
       - name: Test convention checker
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
+      - name: Verify release version policy
+        run: |
+          npm install --prefix "$RUNNER_TEMP/release-policy" --ignore-scripts --no-audit --no-fund --save-exact release-please@17.6.0
+          node scripts/check_release_policy.cjs "$RUNNER_TEMP/release-policy/node_modules/release-please"
+
   rust:
     name: Rust checks
     runs-on: ubuntu-24.04

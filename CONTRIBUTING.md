@@ -17,11 +17,16 @@ Run the same complete checks as CI:
 ```sh
 python3 scripts/check_test_conventions.py
 python3 -m unittest discover -s scripts -p 'test_*.py'
+release_tools=$(mktemp -d)
+npm install --prefix "$release_tools" --ignore-scripts --no-audit --no-fund --save-exact release-please@17.6.0
+node scripts/check_release_policy.cjs "$release_tools/node_modules/release-please"
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
 ```
+
+The release-policy check needs Node 20+ and npm for an isolated temporary dependency install. Its synthetic source has no GitHub client or credentials. Node is a contributor check dependency, not a Merl build or installation requirement.
 
 `cargo test --locked --test mail --test product` runs the public messaging and product-boundary scenarios. A manual real-host smoke additionally needs consenting existing sessions and an explicit Codex executable/socket; it is separate from automated tests. Preserve the working application/dispatcher during a binary transition and identify both binaries in the evidence.
 
