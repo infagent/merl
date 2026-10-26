@@ -15,11 +15,12 @@ pub const MAX_REFS: usize = 16;
 /// Maximum bytes per inert pointer, bounding storage and roster detail reads.
 pub const MAX_REF_BYTES: usize = 2048;
 
-/// Validated shared scope and explicit coordinator convention.
+/// Validated shared scope with optional descriptive coordinator metadata.
 #[derive(Debug)]
 pub struct TeamSpec {
     name: Key,
-    coordinator: Key,
+    coordinator: Option<Key>,
+    project: Option<Key>,
     scope: String,
     refs: Vec<String>,
 }
@@ -30,7 +31,7 @@ impl TeamSpec {
     /// Returns `TEAM_INPUT` when a brief or reference exceeds its limits.
     pub fn new(
         name: Key,
-        coordinator: Key,
+        coordinator: Option<Key>,
         scope: String,
         refs: Vec<String>,
     ) -> Result<Self, MailError> {
@@ -39,9 +40,17 @@ impl TeamSpec {
         Ok(Self {
             name,
             coordinator,
+            project: None,
             scope,
             refs,
         })
+    }
+
+    /// Records an explicit navigation reference, checked for existence on creation.
+    #[must_use]
+    pub fn with_project(mut self, project: Key) -> Self {
+        self.project = Some(project);
+        self
     }
 }
 
@@ -142,6 +151,51 @@ fn refs_json(raw: &str) -> rusqlite::Result<Value> {
 }
 
 impl Mailbox {
+    /// Pages scope headers, optionally matching one explicit project reference.
+    ///
+    /// No role, inherited authority, recursive scope traversal or guidance read
+    /// participates in this discovery.
+    ///
+    /// # Errors
+    /// Returns `TEAM_INPUT` for invalid limits/cursors, or schema/storage errors.
+    /// A supplied project must name an existing scope.
+    pub fn teams(
+        &self,
+        project: Option<&Key>,
+        after: Option<&Key>,
+        limit: usize,
+    ) -> Result<Value, MailError> {
+        if !(1..=MAX_PAGE).contains(&limit) {
+            return Err(failure("TEAM_INPUT", "limit must be 1..100"));
+        }
+        if let Some(project) = project {
+            require_team(&self.db, project)?;
+        }
+        if !schema_present(&self.db)? {
+            return Ok(json!({"teams":[],"next_after":null}));
+        }
+        if let Some(after) = after {
+            let valid: bool = self.db.query_row("SELECT EXISTS(SELECT 1 FROM merl_teams WHERE name=?1 AND (?2 IS NULL OR project=?2))", params![after.as_str(),project.map(Key::as_str)], |r| r.get(0))?;
+            if !valid {
+                return Err(failure(
+                    "TEAM_INPUT",
+                    "cursor does not belong to selected scope list",
+                ));
+            }
+        }
+        let mut statement = self.db.prepare("SELECT name,project,coordinator,generation FROM merl_teams WHERE name>?1 AND (?2 IS NULL OR project=?2) ORDER BY name LIMIT ?3")?;
+        let count =
+            i64::try_from(limit + 1).map_err(|_| failure("TEAM_INPUT", "invalid page size"))?;
+        let mut teams = statement.query_map(params![after.map_or("",Key::as_str),project.map(Key::as_str),count], |r| Ok(json!({"team":r.get::<_,String>(0)?,"project":r.get::<_,Option<String>>(1)?,"coordinator":r.get::<_,Option<String>>(2)?,"generation":r.get::<_,i64>(3)?})))?.collect::<Result<Vec<_>,_>>()?;
+        let next_after = if teams.len() > limit {
+            teams.truncate(limit);
+            teams.last().map(|t| t["team"].clone())
+        } else {
+            None
+        };
+        Ok(json!({"teams":teams,"next_after":next_after}))
+    }
+
     /// Looks up a qualified display name without loading member guidance.
     ///
     /// # Errors
@@ -169,23 +223,31 @@ impl Mailbox {
     /// Creates shared scope, or recognizes an exact immutable creation retry.
     ///
     /// # Errors
-    /// Returns `TEAM_CONFLICT` for changed inputs and schema/storage failures.
+    /// Returns `TEAM_CONFLICT` for changed inputs, `TEAM_NOT_FOUND` for a missing
+    /// project reference, and schema/storage failures.
     pub fn create_team(&mut self, spec: &TeamSpec) -> Result<Value, MailError> {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         schema_present(&tx)?;
         tx.execute_batch(include_str!("team-schema.sql"))?;
-        let old: Option<(String, String, String)> = tx
+        let old: Option<(Option<String>, String, String, Option<String>)> = tx
             .query_row(
-                "SELECT coordinator,scope,refs FROM merl_teams WHERE name=?1",
+                "SELECT coordinator,scope,refs,project FROM merl_teams WHERE name=?1",
                 [spec.name.as_str()],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()?;
         let refs = json!(spec.refs).to_string();
         let outcome = if let Some(old) = old {
-            if old != (spec.coordinator.to_string(), spec.scope.clone(), refs) {
+            if old
+                != (
+                    spec.coordinator.as_ref().map(ToString::to_string),
+                    spec.scope.clone(),
+                    refs,
+                    spec.project.as_ref().map(ToString::to_string),
+                )
+            {
                 return Err(failure(
                     "TEAM_CONFLICT",
                     "team exists with different saved scope or guidance",
@@ -193,13 +255,17 @@ impl Mailbox {
             }
             "unchanged"
         } else {
+            if let Some(project) = &spec.project {
+                require_team(&tx, project)?;
+            }
             tx.execute(
-                "INSERT INTO merl_teams(name,coordinator,scope,refs) VALUES(?1,?2,?3,?4)",
+                "INSERT INTO merl_teams(name,coordinator,scope,refs,project) VALUES(?1,?2,?3,?4,?5)",
                 params![
                     spec.name.as_str(),
-                    spec.coordinator.as_str(),
+                    spec.coordinator.as_ref().map(Key::as_str),
                     spec.scope,
-                    refs
+                    refs,
+                    spec.project.as_ref().map(Key::as_str)
                 ],
             )?;
             "created"
@@ -271,7 +337,7 @@ impl Mailbox {
     /// Returns a missing-team, unsupported-schema or storage error.
     pub fn show_team(&self, team: &Key) -> Result<Value, MailError> {
         require_team(&self.db, team)?;
-        Ok(self.db.query_row("SELECT coordinator,scope,refs,generation FROM merl_teams WHERE name=?1", [team.as_str()], |r| Ok(json!({"team":team.as_str(),"coordinator":r.get::<_,String>(0)?,"scope":r.get::<_,String>(1)?,"guidance_refs":refs_json(&r.get::<_,String>(2)?)?,"generation":r.get::<_,i64>(3)?})))?)
+        Ok(self.db.query_row("SELECT coordinator,scope,refs,generation,project FROM merl_teams WHERE name=?1", [team.as_str()], |r| Ok(json!({"team":team.as_str(),"coordinator":r.get::<_,Option<String>>(0)?,"scope":r.get::<_,String>(1)?,"guidance_refs":refs_json(&r.get::<_,String>(2)?)?,"generation":r.get::<_,i64>(3)?,"project":r.get::<_,Option<String>>(4)?})))?)
     }
 
     /// Reads one member's durable starting guidance and stable identity.
@@ -340,7 +406,7 @@ mod tests {
     fn scope() -> TeamSpec {
         TeamSpec::new(
             "alpha".parse().unwrap(),
-            "planner".parse().unwrap(),
+            Some("planner".parse().unwrap()),
             "Synthetic scope".into(),
             vec![],
         )
@@ -384,9 +450,9 @@ mod tests {
                 "TEAM_INPUT"
             );
         }
-        assert!(TeamSpec::new(key(), key(), "é".repeat(4096), pointers).is_ok());
+        assert!(TeamSpec::new(key(), Some(key()), "é".repeat(4096), pointers).is_ok());
         assert_eq!(
-            TeamSpec::new(key(), key(), "é".repeat(4097), vec![])
+            TeamSpec::new(key(), Some(key()), "é".repeat(4097), vec![])
                 .unwrap_err()
                 .code,
             "TEAM_INPUT"

@@ -1,4 +1,4 @@
 CREATE TABLE IF NOT EXISTS merl_team_meta(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL);
 INSERT OR IGNORE INTO merl_team_meta(id,version) VALUES(1,1);
-CREATE TABLE IF NOT EXISTS merl_teams(name TEXT PRIMARY KEY,coordinator TEXT NOT NULL,scope TEXT NOT NULL,refs TEXT NOT NULL,generation INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS merl_teams(name TEXT PRIMARY KEY,coordinator TEXT,project TEXT REFERENCES merl_teams(name),scope TEXT NOT NULL,refs TEXT NOT NULL,generation INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS merl_team_members(team TEXT NOT NULL REFERENCES merl_teams(name),member TEXT NOT NULL,mail_key TEXT NOT NULL UNIQUE REFERENCES identities(name),role TEXT,description TEXT NOT NULL,refs TEXT NOT NULL,generation INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(team,member));

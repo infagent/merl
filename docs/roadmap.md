@@ -24,7 +24,7 @@ Release distribution provides version-bound Linux/macOS binaries and an optional
 
 ## Persistent team coordination
 
-[#161](https://github.com/infagent/merl/issues/161) adds shared scope, durable member guidance, paged roster discovery and explicit team-qualified individual mail. Atomic membership/fresh-identity creation preserves legacy mail compatibility and rejects foreign identity adoption. The CLI onboarding is usable without a skill. General edit/removal lifecycle is deferred.
+[#161](https://github.com/infagent/merl/issues/161) adds shared scope, durable member guidance, paged scope/roster discovery, optional project references and independently qualified individual mail. A project-wide member can coordinate several epic scopes without duplicate membership; roles and coordinator metadata stay optional. Atomic membership/fresh-identity creation preserves legacy mail compatibility and rejects foreign identity adoption. The CLI onboarding is usable without a skill. General edit/removal lifecycle is deferred.
 
 Follow serially with informational team notices using frozen recipient snapshots; explicit new team-targeted PR lanes while retaining immutable existing recipients; then `merl usage` and the short `/merl` / `$merl` startup skill with a separately scoped safe compatibility upgrade. These follow-ups remain product commitments, not automatic authorization for a release, global setup or runtime migration.
 

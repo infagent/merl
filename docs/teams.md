@@ -22,11 +22,40 @@ merl team members --home /tmp/example-mail --team alpha --limit 100
 merl team member --home /tmp/example-mail --team alpha --member dev-a
 ```
 
-The coordinator is an explicit local convention, not an authenticated administrator. Additional implementers, documenters and researchers join the same way. A member name does not imply a role. Joining saves the exact description and references and creates one fresh mail identity. It never binds or starts a host session.
+Coordinator metadata is optional and descriptive; omit `--coordinator` for a scope without that convention. No role or named organization is required. A supplied coordinator is not an authenticated administrator or routing rule. Additional implementers, documenters and researchers join the same way. A member name does not imply a role. Joining saves the exact description and references and creates one fresh mail identity. It never binds or starts a host session.
 
 Team and member names use 1..64 ASCII letters, digits, dot, underscore or hyphen. Scope and description files contain 1..8192 UTF-8 bytes. Optional role labels contain 1..128 bytes without control characters. Repeat `--guidance-ref` up to 16 times, each with 1..2048 bytes without control characters. Pointers are stored as supplied; Merl never opens, fetches or evaluates them. Keep detailed project lessons in those external documents.
 
 Human discovery shows qualified names such as `alpha/dev-a`. JSON detail also exposes the opaque `mail_key` used by the transport. `beta/dev-a` and unscoped `dev-a` are separate identities; neither inherits the other's messages or binding. `team members` pages headers in member-name order; follow `next_after` with `--after`. Full guidance loads only with `team show` or `team member`. Discovery of absent state creates nothing.
+
+## Discover several scopes
+
+Scope names remain globally unique within one mailbox home. An optional immutable `--project NAME` reference associates a scope with an already existing scope for navigation. It grants no inherited authority, role, shared membership or recursive hierarchy. `team list --project NAME` matches that exact reference; unfiltered `team list` discovers all scope headers. Both accept `--limit 1..100` and `--after` with the returned `next_after`. Headers contain only name, project reference, optional coordinator and generation.
+
+For example, one member can coordinate work across two epic scopes without joining either. The following names and responsibilities are illustrative; arbitrary or omitted roles work the same way:
+
+```sh
+merl team create --home /tmp/example-mail --name project --scope-file /tmp/project.txt
+merl team join --home /tmp/example-mail --team project --member manager \
+  --description-file /tmp/manager.txt
+merl team create --home /tmp/example-mail --name epic-a --project project --scope-file /tmp/epic-a.txt
+merl team create --home /tmp/example-mail --name epic-b --project project --scope-file /tmp/epic-b.txt
+merl team join --home /tmp/example-mail --team epic-a --member planner \
+  --description-file /tmp/planner-a.txt
+merl team join --home /tmp/example-mail --team epic-b --member planner \
+  --description-file /tmp/planner-b.txt
+merl team list --home /tmp/example-mail --project project
+merl mail send --home /tmp/example-mail --from project/manager --to epic-a/planner \
+  --id project-epic-a-work-1 --kind assign --body-file /tmp/work.txt
+merl mail send --home /tmp/example-mail --from epic-a/planner --to project/manager \
+  --id epic-a-project-reply-1 --kind reply --in-reply-to project-epic-a-work-1 \
+  --body-file /tmp/outcome.txt
+merl mail read --home /tmp/example-mail --agent project/manager --id epic-a-project-reply-1
+merl mail complete --home /tmp/example-mail --agent epic-a/planner \
+  --id project-epic-a-work-1 --reply epic-a-project-reply-1
+```
+
+Use the same `project/manager` identity for epic-b; its saved guidance lives in the genuine project-wide scope once. `--team epic-b --from project/manager --to planner` mixes an exact endpoint with shorthand. Cross-scope reply checks still require reversed original endpoints. Read, receipt and completion act only for the specified recipient. Hosts and models can differ; Merl does not infer them from roles or create an unverified wake adapter.
 
 ## Hand work to one member
 
@@ -46,7 +75,7 @@ merl mail complete --home /tmp/example-mail --team alpha --agent reviewer --id a
 merl mail complete --home /tmp/example-mail --team alpha --agent dev-a --id alpha-build-1
 ```
 
-`--team` resolves every identity flag through that roster. Unknown teams or members fail without falling back to unscoped names. Message IDs remain globally unique within the mailbox home. The `alpha-` prefix is a caller convention, not a separate ID namespace. Exact mail retries retain existing immutable-content checks.
+An explicit `scope/member` resolves each `--from`, `--to` or `--agent` independently. `--team` supplies the scope only for unqualified identity flags; an explicit qualified endpoint always keeps its own scope. Unqualified actors without `--team` retain legacy identity semantics. Unknown teams or members fail without falling back to unscoped names. Message IDs remain globally unique within the mailbox home. The `alpha-` prefix is a caller convention, not a separate ID namespace. Exact mail retries retain existing immutable-content checks.
 
 Receipt stops notification retries and does not complete work. A linked reply also completes nothing automatically. Review and build requests have different owners and require separate completion. Other members with the same role receive no implicit assignment. Follow every pending page before recording receipts. See [mail handling](agent-mail.md) for replies, filters and recovery.
 
@@ -63,7 +92,7 @@ merl mail list --home /tmp/example-mail --team alpha --agent dev-a --outstanding
 
 Membership survives process restart. An explicit `mail bind --team alpha --agent dev-a` still requires the existing session UUID, socket path and current **binding** generation. Team/member metadata generations do not authorize a rebind. A repeated join preserves the saved binding and work; a stale binding generation fails. The [mail guide](agent-mail.md) explains verification and foreground dispatch. Codex wake remains the only verified adapter; Claude can use the CLI without a claimed wake adapter.
 
-Identical create/join inputs return `unchanged`. Changed guidance, roles or references return `TEAM_CONFLICT` and preserve saved bytes. General edits, leave and removal are deferred. Joining commits membership and a strictly fresh identity in one transaction. A crash before commit publishes neither; a retry after commit recognizes the complete pair. A raw-key collision returns `TEAM_IDENTITY_CONFLICT`, even if the existing identity is unused and unbound.
+Identical create/join inputs return `unchanged`. Changed guidance, roles, optional coordinator/project metadata or references return `TEAM_CONFLICT` and preserve saved bytes. General edits, leave and removal are deferred. Joining commits membership and a strictly fresh identity in one transaction. A crash before commit publishes neither; a retry after commit recognizes the complete pair. A raw-key collision returns `TEAM_IDENTITY_CONFLICT`, even if the existing identity is unused and unbound.
 
 ## JSON and boundaries
 

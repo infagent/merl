@@ -18,7 +18,7 @@ The recipient can page through unreceipted messages, unread messages, or unfinis
 
 ## Shared organization
 
-[Teams](teams.md) persist user-chosen shared scope and a roster with optional free-form roles, saved starting guidance and inert document pointers. Explicitly qualified members have distinct stable mail identities across teams and host-session replacement. Handoffs keep one named recipient; receipt and replies never complete another member's request. The coordinator label follows local project convention and adds no authentication or merge authority. See [ADR 0007](adr/0007-persistent-teams.md).
+[Teams](teams.md) persist user-chosen shared scope and a roster with optional free-form roles, saved starting guidance and inert document pointers. Explicitly qualified members have distinct stable mail identities across teams and host-session replacement. Optional project references support multi-scope discovery; a project-wide member can contact epic members without joining those scopes. Coordinator and role metadata are optional, with no fixed role list or required organization. Handoffs keep one named recipient; receipt and replies never complete another member's request. The coordinator label follows local project convention and adds no authentication or merge authority. See [ADR 0007](adr/0007-persistent-teams.md).
 
 ## Notification
 

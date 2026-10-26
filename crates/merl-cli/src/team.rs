@@ -28,7 +28,7 @@ pub(super) fn missing() -> CliError {
 
 #[expect(
     clippy::too_many_lines,
-    reason = "one bounded parser validates the five team leaf contracts before I/O"
+    reason = "one bounded parser validates the team leaf contracts before I/O"
 )]
 pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, CliError> {
     let mut options = BTreeMap::new();
@@ -50,7 +50,7 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
             "--help" | "-h" => help = true,
             flag @ ("--home" | "--config" | "--name" | "--coordinator" | "--scope-file"
             | "--team" | "--member" | "--role" | "--description-file"
-            | "--guidance-ref" | "--after" | "--limit") => {
+            | "--guidance-ref" | "--after" | "--limit" | "--project") => {
                 i += 1;
                 let value = a.get(i).ok_or_else(|| input("option requires a value"))?;
                 if flag == "--guidance-ref" {
@@ -95,14 +95,25 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
             input("names require 1..64 ASCII letters, digits, dot, underscore or hyphen")
         })
     };
+    let project = options
+        .get("--project")
+        .map(|_| key("--project"))
+        .transpose()?;
     // Validate all supplied content before opening a mutating mailbox.
     let create = if operation == "create" {
-        Some(TeamSpec::new(
+        let mut spec = TeamSpec::new(
             key("--name")?,
-            key("--coordinator")?,
+            options
+                .get("--coordinator")
+                .map(|_| key("--coordinator"))
+                .transpose()?,
             read_brief(get("--scope-file")?)?,
             refs.clone(),
-        )?)
+        )?;
+        if let Some(project) = &project {
+            spec = spec.with_project(project.clone());
+        }
+        Some(spec)
     } else {
         None
     };
@@ -116,7 +127,7 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
     } else {
         None
     };
-    let team = if operation == "create" {
+    let team = if matches!(operation, "create" | "list") {
         None
     } else {
         Some(key("--team")?)
@@ -144,9 +155,19 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
     let mut store = if matches!(operation, "create" | "join") {
         Mailbox::open(&home)?
     } else {
-        Mailbox::open_existing(&home)?.ok_or_else(missing)?
+        match Mailbox::open_existing(&home)? {
+            Some(store) => store,
+            None if operation == "list" && project.is_none() => {
+                return output(
+                    json!({"teams":[],"next_after":null}),
+                    operation,
+                    *json_output,
+                );
+            }
+            None => return Err(missing()),
+        }
     };
-    let mut data = match operation {
+    let data = match operation {
         "create" => {
             store.create_team(create.as_ref().ok_or_else(|| input("missing team scope"))?)?
         }
@@ -156,6 +177,7 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
                 .ok_or_else(|| input("missing member guidance"))?,
             &fresh_key()?,
         )?,
+        "list" => store.teams(project.as_ref(), after.as_ref(), limit)?,
         "show" => store.show_team(team.as_ref().ok_or_else(missing)?)?,
         "member" => store.team_member(
             team.as_ref().ok_or_else(missing)?,
@@ -166,9 +188,13 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
         }
         _ => return Err(input("unknown team operation")),
     };
+    output(data, operation, *json_output)
+}
+
+fn output(mut data: Value, operation: &str, json_output: bool) -> Result<String, CliError> {
     data["schema"] = json!("merl.team/v1");
     data["action"] = json!(format!("team.{operation}"));
-    if *json_output {
+    if json_output {
         render_json(&data)
     } else {
         human(&data, operation)
@@ -206,7 +232,7 @@ fn human(data: &Value, operation: &str) -> Result<String, CliError> {
             "Team {} ({outcome}, generation {})\nCoordinator: {} (local convention)\nScope:\n{}\n",
             data["team"].as_str().unwrap_or(""),
             data["generation"],
-            data["coordinator"].as_str().unwrap_or(""),
+            data["coordinator"].as_str().unwrap_or("Unspecified"),
             data["scope"].as_str().unwrap_or("")
         ),
         "join" | "member" => format!(
@@ -218,6 +244,25 @@ fn human(data: &Value, operation: &str) -> Result<String, CliError> {
             data["team"].as_str().unwrap_or(""),
             data["member"].as_str().unwrap_or("")
         ),
+        "list" => {
+            let mut text = String::from("Scopes\n");
+            if let Some(teams) = data["teams"].as_array() {
+                for team in teams {
+                    writeln!(
+                        text,
+                        "  {}  project: {}",
+                        team["team"].as_str().unwrap_or(""),
+                        team["project"].as_str().unwrap_or("Unspecified")
+                    )
+                    .map_err(|_| input("cannot format scope"))?;
+                }
+            }
+            if let Some(after) = data["next_after"].as_str() {
+                writeln!(text, "More scopes: --after {after}")
+                    .map_err(|_| input("cannot format cursor"))?;
+            }
+            text
+        }
         "members" => {
             let mut text = format!("Team {}: members\n", data["team"].as_str().unwrap_or(""));
             if let Some(members) = data["members"].as_array() {
@@ -240,6 +285,10 @@ fn human(data: &Value, operation: &str) -> Result<String, CliError> {
         }
         _ => return Err(input("unknown team output")),
     };
+    if let Some(project) = data["project"].as_str() {
+        writeln!(text, "Project reference: {project}")
+            .map_err(|_| input("cannot format project reference"))?;
+    }
     if let Some(refs) = data["guidance_refs"].as_array() {
         for reference in refs {
             writeln!(
@@ -253,12 +302,18 @@ fn human(data: &Value, operation: &str) -> Result<String, CliError> {
     Ok(text)
 }
 
-const COMMANDS: &[&str] = &["create", "join", "show", "members", "member"];
+const COMMANDS: &[&str] = &["create", "join", "show", "members", "member", "list"];
 fn contract(op: &str) -> Option<(&'static str, &'static [&'static str], &'static str)> {
     Some(match op {
         "create" => (
-            "Save a shared team scope and coordinator convention; exact retries are unchanged.",
-            &["--name", "--coordinator", "--scope-file", "--guidance-ref"],
+            "Save shared scope with optional descriptive coordinator and existing project reference; no role or authority is inferred. Exact retries are unchanged.",
+            &[
+                "--name",
+                "--coordinator",
+                "--scope-file",
+                "--guidance-ref",
+                "--project",
+            ],
             "--name alpha --coordinator planner --scope-file /tmp/scope.txt",
         ),
         "join" => (
@@ -271,6 +326,11 @@ fn contract(op: &str) -> Option<(&'static str, &'static [&'static str], &'static
                 "--guidance-ref",
             ],
             "--team alpha --member dev-a --role implementation --description-file /tmp/dev.txt",
+        ),
+        "list" => (
+            "Page shared scope headers with an optional exact project reference filter; no inherited authority or roles.",
+            &["--project", "--after", "--limit"],
+            "--limit 100",
         ),
         "show" => (
             "Read shared scope and inert guidance references.",
@@ -308,7 +368,10 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
     let arguments = flags
         .iter()
         .map(|f| {
-            if matches!(*f, "--role" | "--guidance-ref" | "--after" | "--limit") {
+            if matches!(
+                *f,
+                "--role" | "--guidance-ref" | "--after" | "--limit" | "--project" | "--coordinator"
+            ) {
                 format!("[{f} <value>]")
             } else {
                 format!("{f} <value>")

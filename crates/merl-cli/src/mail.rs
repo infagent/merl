@@ -122,12 +122,27 @@ pub(super) fn execute(
     )?;
     let mut resolved = serde_json::Map::new();
     let mut identities = BTreeMap::new();
-    if let Some(team) = options.get("--team") {
-        let team: Key = team.parse()?;
+    let default_team: Option<Key> = options.get("--team").map(|s| s.parse()).transpose()?;
+    let scoped = default_team.is_some()
+        || (qualified_operation(operation)
+            && ["--agent", "--from", "--to"]
+                .iter()
+                .any(|flag| options.get(flag).is_some_and(|s| s.contains('/'))));
+    if scoped {
         let store = Mailbox::open_existing(&home)?.ok_or_else(crate::team::missing)?;
+        if let Some(team) = &default_team {
+            store.show_team(team)?;
+        }
         for name in ["--agent", "--from", "--to"] {
-            if let Some(member) = options.get(name) {
-                let member: Key = member.parse()?;
+            if let Some(value) = options.get(name) {
+                let (team, member) = if let Some((team, member)) = value.split_once('/') {
+                    (Some(team.parse::<Key>()?), member.parse::<Key>()?)
+                } else {
+                    (default_team.clone(), value.parse::<Key>()?)
+                };
+                let Some(team) = team else {
+                    continue;
+                };
                 let record = store.team_member(&team, &member)?;
                 let mail_key: Key = record["mail_key"]
                     .as_str()
@@ -420,6 +435,42 @@ fn contract(op: &str) -> Option<(&'static str, &'static [&'static str], &'static
         _ => return None,
     })
 }
+fn describe_actors(summary: &str, op: &str) -> String {
+    if qualified_operation(op) {
+        format!(
+            "{summary} Actors accept scope/member independently; --team supplies the scope only for bare names. Other bare actors use legacy identities. Unknown qualified actors never fall back or join implicitly."
+        )
+    } else {
+        summary.to_owned()
+    }
+}
+
+fn help_outcomes(op: &str) -> Vec<&'static str> {
+    match op {
+        "register" => vec!["registered"],
+        "bind" => vec!["bound"],
+        "unbind" => vec!["unbound"],
+        "send" => vec!["sent", "unchanged"],
+        "receipt" => vec!["received"],
+        "complete" => vec!["completed"],
+        "dispatch" => vec![
+            "pending",
+            "offline",
+            "failed",
+            "stale_binding",
+            "enqueued",
+            "pointer_limit",
+        ],
+        "watch" => vec![
+            "watching",
+            "waiting",
+            "resumed",
+            "recorded notification states",
+        ],
+        _ => vec!["mail headers, body or handling status"],
+    }
+}
+
 fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
     let command = if op.is_empty() {
         "mail".into()
@@ -435,6 +486,7 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
     } else {
         contract(op).ok_or_else(|| input("unknown mail help topic"))?
     };
+    let summary = describe_actors(summary, op);
     let mut arguments: Vec<String> = flags
         .iter()
         .map(|flag| {
@@ -483,29 +535,7 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
         Vec::new()
     };
     let errors = help_errors(op);
-    let outcomes = match op {
-        "register" => vec!["registered"],
-        "bind" => vec!["bound"],
-        "unbind" => vec!["unbound"],
-        "send" => vec!["sent", "unchanged"],
-        "receipt" => vec!["received"],
-        "complete" => vec!["completed"],
-        "dispatch" => vec![
-            "pending",
-            "offline",
-            "failed",
-            "stale_binding",
-            "enqueued",
-            "pointer_limit",
-        ],
-        "watch" => vec![
-            "watching",
-            "waiting",
-            "resumed",
-            "recorded notification states",
-        ],
-        _ => vec!["mail headers, body or handling status"],
-    };
+    let outcomes = help_outcomes(op);
     let related = vec!["mail list", "mail status"];
     if json_output {
         render_json(

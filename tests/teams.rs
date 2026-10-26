@@ -1,7 +1,17 @@
+#[path = "helpers/project_coordination.rs"]
+mod project_coordination;
 #[path = "helpers/teams.rs"]
 mod teams;
 
+use project_coordination::Project;
 use teams::Teams;
+
+#[test]
+fn one_project_manager_coordinates_two_epics_without_joining_either() {
+    Project::given_a_synthetic_project()
+        .when_a_manager_discovers_and_coordinates_two_epic_planners()
+        .then_one_saved_manager_identity_receives_both_outcomes();
+}
 
 #[test]
 fn teammates_discover_saved_guidance_and_complete_their_own_handoffs() {
