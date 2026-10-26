@@ -1,25 +1,42 @@
 # Merl
 
-Merl is infrastructure for running a persistent team of humans and agents around a shared project.
+Merl is durable local messaging for coding agents. Named agents exchange immutable messages, keep receipt separate from completed work, and receive notifications in their existing host sessions. A shell dispatcher waits for mail without asking a model to poll.
 
-Running a team of agents can mean copying findings between conversations, repeating instructions after a restart, and paying several models to reread the same history. Merl aims to cut that token spend and manual coordination. Each agent receives the current state relevant to its role and assignment, plus changes since it last participated. It can expand a decision or finding back to its evidence when it needs more detail.
+A coordinator can hand work to a developer, a developer can request a review, and a reviewer can return findings. The project decides roles and merge authority. Merl records the messages and handling facts; a receipt alone never completes an assignment.
 
-The team coordinates through shared project objects. A researcher records a finding; the engineer working on the affected task receives the change. A project manager accepts or defers work, and a reviewer sees current requirements and unresolved findings. Humans continue to discuss work through GitHub and decide who may act on the project's behalf.
+## Build and try it
 
-An agent keeps its logical identity across disposable model sessions. Its assignment, guidance, checkpoint, and inbox cursor survive a context reset. A fresh session resumes from current project state without loading the previous transcript. Teams can mix Codex, Claude Code, and other hosts, with different models, capabilities, and costs.
+Install the toolchain in `rust-toolchain.toml`, then build:
 
-The full product includes assignments and handoffs, isolated workspaces, agent selection and spawning, and resource limits. Humans approve templates and delegation boundaries; project managers staff and operate the team within them. Projects may span repositories and coordinate with other projects through permissioned requests.
+```sh
+cargo build --locked --bin merl
+./target/debug/merl help
+./target/debug/merl help mail send --json
+```
 
-Shared state must be trustworthy enough for agents to act on it. Merl separates model interpretations from accepted decisions, checks authority, and retains links to evidence. These mechanisms support the team's work and make errors inspectable.
+Run `target/debug/merl` directly or put it on your PATH as `merl`. Choose a dedicated absolute mailbox home and register both identities before sending:
 
-Merl is under development as a Rust CLI with a local SQLite authority. The first release tests one foundation of the team workflow: whether agents can use compact Issue state as accurately as raw history while spending fewer tokens over repeated reads. Phase 4 adds persistent team operations for manually started agents. Phase 5 adds delegated provisioning and control. The [roadmap](docs/roadmap.md) distinguishes those release scopes from the full product described here.
+```sh
+merl mail register --home /tmp/team-mail --agent alice --json
+merl mail register --home /tmp/team-mail --agent bob --json
+printf 'Please review the proposed change.\n' > /tmp/handoff.txt
+merl mail send --home /tmp/team-mail --from alice --to bob \
+  --id handoff-1 --kind assign --body-file /tmp/handoff.txt --json
+merl mail list --home /tmp/team-mail --agent bob --pending --json
+merl mail read --home /tmp/team-mail --agent bob --id handoff-1 --json
+merl mail receipt --home /tmp/team-mail --agent bob --id handoff-1 --json
+```
 
-Start with the [product description](docs/product-description.md), then read the [UI behavior contract](docs/user-interface.md), [architecture](docs/architecture.md), and [architecture decisions](docs/adr/).
+Offline recipients keep their mail. To wake an existing Codex session, explicitly bind its UUID and local control socket, then run `merl mail watch` in the foreground. Follow the [setup and recovery guide](docs/agent-mail.md) for binding, replies, completion, start and stop. The current adapter uses `codex queue`; it creates no substitute session and installs no system service.
 
-## Contributing
+## Product and limits
 
-Bug reports, design feedback, documentation fixes, and code contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
+The public interface is `merl mail`: registration, binding, send/read/receipt/completion, status and notification dispatch. Results and incremental help are versioned JSON when requested. The [product contract](docs/product-description.md), [UI contract](docs/user-interface.md), [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md) describe this messaging product.
 
-## License
+Mail is retained as plaintext in a private local SQLite store. Same-user identity flags are trusted claims, not authentication or an OS sandbox. Notification is at least once, so agents must handle duplicate wakes. There is no mail purge, encryption or storage quota yet. The [optional skill](skills/merl-mail/SKILL.md) is short transport guidance; [project role guidance](docs/agent-roles.md) stays separate.
 
-Merl is available under the [MIT License](LICENSE).
+The previous semantic-state/compiler/evaluation product has been removed from the working product. Git history retains it. Old runtime stores and external artifacts are not migrated, overwritten or deleted. [ADR 0004](docs/adr/0004-messaging-product.md) records the replacement and supersedes the old plans.
+
+## Contributing and license
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the complete checks and review process. Merl is available under the [MIT License](LICENSE).

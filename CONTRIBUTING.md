@@ -1,49 +1,18 @@
 # Contributing to Merl
 
-Thanks for taking the time to contribute. Merl is early in development, so bug reports, design feedback, documentation fixes, test cases, and code are all useful.
+Merl is a Rust CLI for durable local agent messaging. Start with the [README](README.md), [product description](docs/product-description.md), [UI contract](docs/user-interface.md), [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md). Architecture decisions are indexed in [docs/adr](docs/adr/README.md).
 
-## Before opening an issue
+## Issues and changes
 
-Read the [README](README.md) and search the [issue tracker](https://github.com/infagent/merl/issues) first. An existing issue may answer the question or provide a better place to add context.
+Search existing issues before opening one. Describe the concrete workflow, expected behavior and smallest reproducible example. Use synthetic content and remove credentials, private project information and runtime identifiers from public reports. Use GitHub's private reporting mechanism for sensitive security reports.
 
-Merl's current implementation scope lives in the [first release plan](docs/plans/first-release.md). The [product description](docs/product-description.md), [UI behavior contract](docs/user-interface.md), and [architecture](docs/architecture.md) describe the intended system beyond that release.
-
-## Ask a question
-
-Open an issue with a short, specific title. Include the document, command, or behavior that prompted the question and explain what remains unclear.
-
-Please do not include credentials, private repository content, customer data, or proprietary research in a public issue.
-
-## Report a bug
-
-A useful bug report gives another person enough information to reproduce the failure. Include:
-
-- the Merl version or commit;
-- your operating system and Rust version;
-- the command or sequence that failed;
-- the expected and actual behavior;
-- the smallest reproducible example you can provide;
-- relevant logs with secrets and private content removed.
-
-Search existing bug reports before filing a new one. If the problem involves a security vulnerability or sensitive data exposure, do not post the details in a public issue. Use GitHub's private vulnerability reporting for this repository when it is available.
-
-## Suggest a change
-
-Feature requests should start with the problem. Describe who encounters it, what they are trying to accomplish, and why the current behavior is insufficient. Include alternatives or prior art when they clarify the tradeoff.
-
-Changes to accepted-state semantics, provenance, revision rules, or the public CLI contract need design agreement before implementation. A maintainer may ask for an ADR or a narrower first step.
-
-## Contribute documentation
-
-Documentation fixes can be as small as a corrected command, a clearer example, or a repaired link. For larger edits, explain which reader was getting stuck and what the revision should help them do.
-
-Keep private project names and source material out of examples. Use neutral names such as Project A and Project B.
+Treat the assigned issue as the unit of work. Agree on changes to the public interface or persistence/dispatch guarantees before implementation. Record a governing decision when product scope changes. Do not infer authorization to migrate or delete old runtime data from a source-code replacement.
 
 ## Contribute code
 
-Pick an open issue or discuss the change before investing in a large patch. The issue should identify its dependencies and milestone. Work that crosses milestones may need to be split.
+Use the toolchain pinned in `rust-toolchain.toml`. Follow [AGENTS.md](AGENTS.md), including red-green public-boundary scenarios. Root acceptance scenarios use Given/When/Then steps; mechanics and assertions live under `tests/helpers`. Tests use synthetic local hosts, controllable clocks and explicit paths. Ordinary checks require no live model, account credentials or Codex installation. Unix-socket scenarios run on Unix hosts.
 
-Install the stable Rust toolchain with [rustup](https://rustup.rs/). The CI workflow is the source of truth for required components and checks. Once the Rust workspace is present, the usual commands are:
+Run the same complete checks as CI:
 
 ```sh
 python3 scripts/check_test_conventions.py
@@ -54,31 +23,16 @@ cargo test --locked --workspace --all-features
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
 ```
 
-If you are capturing GitHub fixtures, install and authenticate `gh` separately. See the [corpus capture instructions](docs/evaluation/evaluation-corpus.md#capture-dependency). Ordinary builds and tests do not require it.
+`cargo test --locked --test mail --test product` runs the public messaging and product-boundary scenarios. A manual real-host smoke additionally needs consenting existing sessions and an explicit Codex executable/socket; it is separate from automated tests. Preserve the working application/dispatcher during a binary transition and identify both binaries in the evidence.
 
-Repository-specific engineering rules live in [AGENTS.md](AGENTS.md). They apply to human- and agent-authored changes alike.
+## Pull requests and review
 
-## Open a pull request
+Explain the final user-visible behavior, linked issue, validation, data/compatibility effects and material limits. Keep unrelated changes out. Document which head an independent reviewer checked and whether a live smoke used the replacement binary. Include example human/JSON output when it changes. Source deletion does not authorize runtime deletion.
 
-Keep pull requests focused. Separate feature work from dependency updates, formatting sweeps, and unrelated cleanup.
+Use conventional commits such as `feat:`, `fix:` and `docs:`. Mark an incompatible product replacement with `!` so release automation can account for it. Release Please maintains the release PR and changelog; do not publish or merge a release as an incidental implementation step.
 
-In the pull request description:
-
-- link the issue the change addresses;
-- explain the user-visible result;
-- describe how you tested it;
-- call out schema, migration, compatibility, security, or token-cost effects;
-- include sample human and JSON CLI output when either changes.
-
-Use a conventional commit subject such as `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, or `chore:`. Release Please uses these prefixes to prepare release notes and versions.
-
-Both `Rust checks` and `Test conventions` must pass before a pull request can
-merge into `main`, including release pull requests. The branch must include the
-current `main`; update it and rerun CI if another change lands first. See the
-[release gates](docs/release-gates.md) for the ruleset and verification evidence.
-
-Maintainers may ask for revisions or split work before merging. Review focuses on observable behavior, compatibility, correctness, and fit with the current milestone.
+`Rust checks` and `Test conventions` must pass before a PR can merge, including release PRs. The branch must contain current `main`. See [release gates](docs/release-gates.md). Merge permission comes from the human's instructions for the task; this replacement is handed back as a reviewed PR, not merged automatically.
 
 ## License
 
-By contributing, you confirm that you have the right to submit the work and agree that it may be distributed under the repository's [MIT License](LICENSE).
+Contributions must be yours to submit and may be distributed under the repository's [MIT License](LICENSE). Verify source rights before copying third-party implementation. Role/worktree/merge policy belongs in [project guidance](docs/agent-roles.md), not reusable transport rules.
