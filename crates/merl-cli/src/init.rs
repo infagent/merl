@@ -288,6 +288,9 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
     } else {
         plan.apply(&mut |_| Ok(()))?
     };
+    if uninstall && !args.hosts.is_empty() {
+        settings.skills.retain(|host, _| !args.hosts.contains(host));
+    }
     report(
         Some(&settings),
         &config,

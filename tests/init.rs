@@ -65,3 +65,10 @@ fn custom_settings_can_share_a_parent_with_mail_and_uninstall_keeps_an_empty_hom
         .when_custom_settings_and_an_empty_mail_home_are_created_then_removed()
         .then_custom_setup_is_removed_but_the_empty_mail_home_is_retained();
 }
+
+#[test]
+fn a_host_can_move_after_scoped_uninstall_without_adopting_its_old_borrowed_skill() {
+    SetupCase::given_a_borrowed_matching_skill_and_existing_mail()
+        .when_a_host_is_uninstalled_then_installed_at_a_new_destination()
+        .then_only_the_new_owned_skill_is_removed_and_the_borrowed_skill_remains();
+}

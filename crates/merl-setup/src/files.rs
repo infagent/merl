@@ -216,6 +216,17 @@ fn desired(plan: &Plan<'_>) -> BTreeMap<PathBuf, String> {
     }
     desired
 }
+fn comparison_path(path: &Path) -> Result<PathBuf, SetupError> {
+    let ancestor = path
+        .ancestors()
+        .find(|p| p.exists())
+        .ok_or_else(|| input("path has no existing filesystem root"))?;
+    Ok(ancestor.canonicalize()?.join(
+        path.strip_prefix(ancestor)
+            .map_err(|_| input("invalid path ancestry"))?,
+    ))
+}
+
 pub(super) fn validate(plan: &Plan<'_>) -> Result<(), SetupError> {
     absolute(&plan.settings.mail_home)?;
     check_path(&plan.settings.mail_home)?;
@@ -235,15 +246,18 @@ pub(super) fn validate(plan: &Plan<'_>) -> Result<(), SetupError> {
         }
         paths.push(path.clone());
     }
+    let mail = comparison_path(&plan.settings.mail_home)?;
     for (index, path) in paths.iter().enumerate() {
         check_path(path)?;
+        let resolved = comparison_path(path)?;
         // Setup files cannot contain or sit beneath the mailbox directory.
         // A shared ancestor is safe: directory cleanup separately excludes mail.
-        if path.starts_with(&plan.settings.mail_home) || plan.settings.mail_home.starts_with(path) {
+        if resolved.starts_with(&mail) || mail.starts_with(&resolved) {
             return Err(input("setup files and mailbox home must not overlap"));
         }
         for other in &paths[index + 1..] {
-            if path.starts_with(other) || other.starts_with(path) {
+            let other = comparison_path(other)?;
+            if resolved.starts_with(&other) || other.starts_with(&resolved) {
                 return Err(input("managed setup destinations overlap"));
             }
         }
@@ -251,11 +265,13 @@ pub(super) fn validate(plan: &Plan<'_>) -> Result<(), SetupError> {
     let receipt = load(plan)?;
     // Retained entries also participate in overlap and content checks.
     for path in receipt.entries.keys() {
-        if path.starts_with(&plan.settings.mail_home) {
+        let resolved = comparison_path(path)?;
+        if resolved.starts_with(&mail) || mail.starts_with(&resolved) {
             return Err(input("recorded setup path overlaps mailbox home"));
         }
         for target in &paths {
-            if path != target && (path.starts_with(target) || target.starts_with(path)) {
+            let other = comparison_path(target)?;
+            if path != target && (resolved.starts_with(&other) || other.starts_with(&resolved)) {
                 return Err(input("recorded setup destinations overlap"));
             }
         }
@@ -588,7 +604,7 @@ pub(super) fn uninstall(
         }
     }
     if !all {
-        publish(
+        changed |= publish(
             plan,
             &mut receipt,
             &plan.config,
@@ -596,13 +612,21 @@ pub(super) fn uninstall(
             published,
         )?;
         receipt.complete = true;
-        save(plan, &receipt)?;
+        let remaining_plan = Plan {
+            config: plan.config.clone(),
+            settings: remaining,
+            bundle: plan.bundle,
+            removing: true,
+        };
+        save(&remaining_plan, &receipt)?;
     }
     if all && receipt.entries.is_empty() {
         fs::remove_file(receipt_path(plan))?;
     }
+    let mail = comparison_path(&plan.settings.mail_home)?;
     for (dir, id) in receipt.directories.iter().rev() {
-        if !dir.starts_with(&plan.settings.mail_home) && !plan.settings.mail_home.starts_with(dir) {
+        let resolved = comparison_path(dir)?;
+        if !resolved.starts_with(&mail) && !mail.starts_with(&resolved) {
             check_path(dir)?;
             if identity(dir)?.as_ref() != Some(id) {
                 continue;

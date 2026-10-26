@@ -393,6 +393,38 @@ impl SetupCase {
         assert!(home.is_dir());
         assert_eq!(fs::read_dir(home).unwrap().count(), 0);
     }
+    pub fn when_a_host_is_uninstalled_then_installed_at_a_new_destination(mut self) -> Self {
+        self.setup(&[]);
+        self.run(&["init", "--uninstall", "--host", "codex", "--yes", "--json"]);
+        let root = self.profile.join("new codex skills").display().to_string();
+        self.run(&[
+            "init",
+            "--host",
+            "codex",
+            "--codex-skills-dir",
+            &root,
+            "--yes",
+            "--json",
+        ]);
+        self.run(&["init", "--uninstall", "--yes", "--json"]);
+        self
+    }
+    pub fn then_only_the_new_owned_skill_is_removed_and_the_borrowed_skill_remains(self) {
+        assert!(
+            self.outcomes.iter().all(|o| o.success),
+            "{:?}",
+            self.outcomes
+        );
+        assert_eq!(fs::read(self.codex_skill()).unwrap(), SKILL);
+        assert!(
+            !self
+                .profile
+                .join("new codex skills/merl-mail/SKILL.md")
+                .exists()
+        );
+        assert!(!self.claude_skill().exists());
+        assert!(!self.config().exists());
+    }
     pub fn then_recovery_is_visible_and_uninstall_preserves_borrowed_skill_and_mail(self) {
         assert_eq!(self.captured_skills[0], b"INIT_IO");
         assert_eq!(self.outcomes[0].value["outcome"], "incomplete");
