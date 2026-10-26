@@ -1,62 +1,23 @@
-# Roadmap
+# Messaging roadmap
 
-Status: draft
+The current product is durable local agent messaging. [ADR 0004](adr/0004-messaging-product.md) replaces the former semantic-state/compiler/evaluation product and its active plans. Git history retains that work; its benchmark and corpus commitments are not gates for this product.
 
-Merl's goal is a persistent team of humans and heterogeneous agents that can coordinate without repeated context copying and excessive token spend. The releases test the foundations before putting them together in a working team.
+## Current release
 
-The first release tests whether agents can rely on compact shared state and spend fewer tokens over repeated reads. It uses deliberate Issue-by-Issue capture to measure that proposition. Phase 4 is the first operational release: a human starts the agents, and Merl maintains their assignments, isolated workspaces, and context across sessions while keeping repository state current. Phase 5 lets an authorized manager staff and control the team within human-approved limits.
+The release provides explicitly named identities, immutable atomic messages, validated reply links, independent read/receipt/completion, bounded header paging, visible delivery status, and recoverable coalesced host notification. Its first verified adapter targets existing Codex sessions over a local Unix socket. A foreground dispatcher is explicitly started and stopped by the operator.
 
-The [product description](product-description.md) defines the full product. The [architecture](architecture.md) and [UI behavior contract](user-interface.md) define its semantics. The shorter plans below choose what to build and what evidence closes each phase.
+Readiness requires:
 
-## Authorized immediate slice
+- public regressions for messaging, concurrent publication, incorrect recipient/reply handling and changed retries;
+- recovery tests for offline delivery, interrupted reads, duplicate wakes, stale bindings, temporary contention and batch changes during host I/O;
+- a messaging-only command/help surface and rejection of retired commands without changing old runtime data;
+- coherent current contracts, dependency/CI cleanup, explicit historical ADR supersession and preservation of external files;
+- a relevant three-agent smoke using the replacement application binary, with the dispatch binary and session boundary recorded accurately;
+- formatting, Clippy, the complete reduced workspace tests, rustdoc and Python checks passing;
+- independent review of the final head and a reviewed PR handed to the human before any merge.
 
-The maintainer has advanced [durable local agent mail](agent-mail.md), tracked by [#145](https://github.com/infagent/merl/issues/145), ahead of the sequence below. This is a bounded product-direction change, documented in [ADR 0003](adr/0003-durable-agent-mail.md), rather than evidence that the earlier evaluation gates passed. General team operations and provisioning retain their separate scope; existing semantic code and evaluation records are preserved.
+## Later decisions
 
-## Release sequence
+Evidence from daily coordination should guide retention/erasure policy, storage quotas, authenticated multi-user operation, remote delivery and additional host adapters. Each requires a separate design and verified boundary. Agent spawning, scheduling, workspace management and model-provider integration are not part of the current release.
 
-| Phase | Outcome | Plan |
-| --- | --- | --- |
-| 0 | Build, release, schema, and corpus foundations | [First release plan](plans/first-release.md) |
-| 1 | One GitHub Issue reaches accepted state, views, and a pollable delta | [First release plan](plans/first-release.md) |
-| 2 | Complete the public workflow and freeze the benchmark contract | [First release plan](plans/first-release.md) |
-| 3 | Run held-out evaluation against the frozen candidate and make the release decision | [First release plan](plans/first-release.md) |
-| 4 | Maintain one project and operate several manually started agents inside it | [Single-project agent operations](plans/single-project-agent-operations.md) |
-| 5 | Let an authorized manager provision and control agents within human-approved limits | [Delegated agent management](plans/delegated-agent-management.md) |
-
-Phases 0 through 3 form the first-release track. Phase 4 is the first multi-agent release and the first release intended for daily project use.
-
-## Why Phase 4 comes before spawning
-
-Phase 4 establishes the work an agent must be able to resume after launch. It should enter a safe worktree, learn its assignment, receive a bounded view, and continue after a restart without rereading the project. Merl must also keep the active repository state current without asking a human to refresh every Issue. A human can start the process while we test those coordination and continuity guarantees.
-
-This order tests Merl's multi-agent value before host provisioning complicates the result. It also gives Phase 5 one stable path to call after a host starts an agent.
-
-```text
-human selects logical agent
-  -> assign accepted task
-  -> prepare isolated workspace
-  -> human starts process in that workspace
-  -> attach session and resume bounded context
-  -> receive compact deltas
-  -> checkpoint and close
-```
-
-Phase 5 replaces the human launch with an authorized spawn request. Assignment, workspace setup, context assembly, delivery, and recovery stay the same.
-
-## Evidence across releases
-
-The first release measures repeated reading of Issue history. Phase 4 measures a working team. Its report should count context rendered for each assignment, expansions and source reads, restart cost, and repeated material shared across agents.
-
-Phase 5 adds staffing evidence: provisioned runtime, declared capability and cost, reserved resources, measured usage, and task outcome. This history should help a manager choose agents from evidence instead of model branding.
-
-## Work after Phase 5
-
-The full product still includes work outside one local project authority:
-
-- portable node setup and verified project authority transfer;
-- shared or remote authorities;
-- cross-project requests, contracts, exports, and authenticated transport;
-- richer research and artifact integrations;
-- optional graphical clients.
-
-These areas need their own release plans once Phase 5 is working. The architecture describes them now so early schemas do not close off the later product.
+Project roles, worktree ownership, review and merge policy stay in project documentation rather than the reusable transport skill. No old runtime data is migrated merely because the product direction changed.

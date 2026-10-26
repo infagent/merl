@@ -1,36 +1,38 @@
-# Agent-mail validation
+# Messaging validation
 
-This slice implements [#145](https://github.com/infagent/merl/issues/145). It was exercised through the public CLI and its clock-controlled public Rust entry point. Synthetic host executables and Unix sockets keep automated checks independent of models, credentials and the developer's home.
+[#145](https://github.com/infagent/merl/issues/145) and [PR #146](https://github.com/infagent/merl/pull/146) replace the former product with durable agent messaging. The current validation suite covers this product; removed semantic/compiler/evaluation behavior is retained in Git history, not maintained as active code or release gates.
 
 ## Automated behavior
 
-`cargo test --locked --test mail --test help_contract` verifies these distinct risks:
+`cargo test --locked --test mail --test product` exercises twelve public scenarios. Synthetic executables, explicit local paths, Unix-socket handshakes and a caller-controlled clock avoid model/account dependencies.
 
-- A wrong recipient cannot read or complete another delivery; a receipt and a linked reply do not complete its request.
-- Concurrent publishers commit complete messages; exact retries remain unchanged and altered retries conflict.
-- Offline dispatch survives reopening the store, coalesces messages into one pointer and stops retrying after application receipt.
-- An outdated binding generation or replaced socket cannot silently select another session.
-- Read-but-unreceipted notes and requests stay recoverable; receipted unfinished requests remain in the outstanding folder; duplicate handling preserves original timestamps.
-- A foreground watcher reports temporary dispatch-lock contention and resumes without restarting.
-- Successful host enqueue has a receipt grace period rather than rapidly queuing duplicate model turns.
-- Output-format precedence matches the existing CLI contract for help and errors.
-- A socket-gated concurrent scenario proves that an older in-flight enqueue cannot overwrite the due time of a new batch after receipt.
-- New mail joins the pending batch's notification window, while a fully receipted batch does not delay genuinely new work.
+The ten mail scenarios protect these distinct risks:
 
-The initial scenarios failed because the interface did not exist. Interrupted read recovery, watcher contention, receipt grace, and new-message coalescing each had a failing regression before its fix. Root scenarios contain Given/When/Then steps; mechanics and assertions live in `tests/helpers/mail.rs`. Existing help-tree traversal discovers each new operation and checks both formats.
+- Wrong recipient/reply handling; receipt and linked reply do not complete a request.
+- Concurrent complete publication and immutable idempotent send retries.
+- Offline recovery, coalesced bounded pointers and stopping retries on receipt.
+- Stale generation and replaced-socket binding rejection.
+- Interrupted reads without receipt; outstanding work after receipt; idempotent timestamps.
+- Foreground watcher contention followed by resumption without restart.
+- Receipt grace after successful host enqueue, while missing receipts stay retryable.
+- New messages joining a pending batch; immediately due work after full receipt.
+- Last output-format option controlling help and errors.
+- Old in-flight host finalization preserving a new batch published during its I/O.
 
-## Live host and three-role evidence
+Two product scenarios protect the replacement boundary: root/help exposes only the twelve mail operations, with matching human/JSON help; retired command groups reject before modifying an opaque old runtime file or creating any replacement store there. Both failed on the additive implementation before the replacement. The ten messaging scenarios remain unchanged in meaning.
 
-With installed Codex CLI 0.164.0, bounded shell-originated host probes first verified that `codex queue` could wake two existing idle sessions. Those bootstrap probes are separate from Merl delivery.
+Root scenarios use Given/When/Then steps and helpers hold mechanics/assertions. Run the full workspace checks and Python convention checks from [Contributing](../CONTRIBUTING.md). There is no evaluator runtime, paid provider or live Codex call in the automated suite.
 
-A dedicated local test mailbox then registered and explicitly bound three existing coordinator/developer/reviewer sessions. The foreground dispatcher was started and stopped. Two synthetic requests were published while it was stopped and remained pending. Restarting that same dispatcher enqueued bounded pointers; both idle recipients read the durable messages, recorded receipt, returned linked nonce replies through Merl and explicitly completed the original requests. A Merl reply woke the existing developer session after its turn ended. No human prompt, native-message nudge, fresh exec replacement or provider API integration drove those deliveries. Subsequent coordination used Merl.
+## Live evidence and binary provenance
 
-The first live run also exposed repeated empty wake turns: short retry delays had queued duplicate notifications before normal receipt. That observation was retained as a finding, not hidden as successful exactly-once delivery. Two deterministic regressions drove the receipt-grace and pending-batch coalescing fixes. Application receipt still stops retries; a missing receipt remains recoverable. The final head requires independent exact-head review and green CI before handoff. The user has not authorized a merge.
+The initial host feasibility gate used the installed Codex queue interface to wake existing idle sessions. That native/bootstrap evidence is separate from Merl application delivery.
 
-Runtime thread IDs, socket paths, mailbox bodies, nonces and host receipts remain local rather than entering this public record. This is functional integration evidence, not a token-cost benchmark or proof of OS isolation. Host enqueue is not application receipt, and neither implies completion.
+The additive implementation then completed a three-role Merl roundtrip: synthetic requests persisted while the scoped foreground dispatcher was stopped, reached existing idle recipients after restart, and received linked replies and explicit completion. A reply woke the ended developer session. That run also exposed queued duplicate wakes before receipt, which drove deterministic receipt-grace/coalescing regressions. Independent review drove the socket-gated finalization-race regression. These findings were retained rather than counted as exactly-once success.
 
-## Reproduce locally
+The product replacement additionally requires a relevant three-agent smoke using the replacement application binary. Its local record identifies the exact head/hash, each send/read/receipt/reply/complete binary, the binary owning host dispatch, existing session bindings, and any deliberate scoped dispatcher transition. A pass using only the former binary cannot establish the replacement application boundary. No old runtime store is migrated or deleted during smoke.
 
-Run the checks in `CONTRIBUTING.md`, including formatting, workspace Clippy/tests and rustdoc with warnings denied. Unix-socket and existing bubblewrap isolation checks require an environment that permits those OS primitives; they do not have an unrestricted runtime fallback.
+Runtime IDs, socket paths, message bodies, nonces and raw host receipts remain local. Public evidence reports the boundary and result without disclosing them. Live functional evidence is not a token-cost benchmark, OS-isolation proof or exactly-once execution guarantee. Final readiness requires the replacement smoke, complete reduced checks, green CI and independent review of the final head. The human has not authorized a merge.
 
-For a real host test, follow [agent-mail setup](agent-mail.md): choose an isolated absolute mailbox home, explicitly bind consenting existing sessions, end recipient turns, publish synthetic mail while the foreground dispatcher is stopped, then restart it. Observe durable read/receipt/completion and matching replies through Merl. Stop only the foreground process you started. Keep private runtime evidence out of public commits and PR comments.
+## Reproduce safely
+
+Follow [setup and recovery](agent-mail.md). Select a dedicated mailbox home and explicitly bind consenting existing sessions. Identify the application/dispatch binary revisions, end recipient turns, publish synthetic mail while the owned dispatcher is stopped, and restart only that dispatcher. Observe durable read/receipt/completion and matching replies through Merl. Preserve external data and keep a working binary available throughout transition. Stop only the foreground process you started.

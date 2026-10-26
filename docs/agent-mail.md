@@ -1,6 +1,6 @@
 # Durable agent mail
 
-`merl mail` delivers bounded coordination messages to explicitly named local agents. It can notify existing Codex sessions with `codex queue`. It does not compile messages, accept project state or launch substitute sessions. This [authorized direction change](adr/0003-durable-agent-mail.md) is tracked in [#145](https://github.com/infagent/merl/issues/145).
+`merl mail` delivers bounded coordination messages to explicitly named local agents. It can notify existing Codex sessions with `codex queue`. This is Merl's primary interface, tracked in [#145](https://github.com/infagent/merl/issues/145). The [product replacement decision](adr/0004-messaging-product.md) defines its scope.
 
 ## Start and bind
 
@@ -49,17 +49,17 @@ merl mail complete --home /tmp/team-mail --agent bob \
   --id handoff-1 --reply response-1 --json
 ```
 
-The reply must return to the original sender from the original recipient. It does not close anything automatically. Completion can target only an addressed request (`assign`, `ready`, `review`, `blocked`, `question`); `note` and `reply` are informational. Completion changes no project semantic object. A receipt never means agreement or task completion. Use stable IDs for interrupted send retries: identical bytes and metadata return `unchanged`; changed content under the same ID returns `MAIL_ID_CONFLICT`.
+The reply must return to the original sender from the original recipient. It does not close anything automatically. Completion can target only an addressed request (`assign`, `ready`, `review`, `blocked`, `question`); `note` and `reply` are informational. A receipt never means agreement or task completion. Use stable IDs for interrupted send retries: identical bytes and metadata return `unchanged`; changed content under the same ID returns `MAIL_ID_CONFLICT`.
 
 ## Status and recovery
 
-Every result has `schema: merl.mail/v1` and an action such as `mail.status`. Errors use the existing `merl.error/v1` envelope. `merl help mail` lists operations; `merl help mail send --json` loads one contract. `--format human` formats the same fields for inspection.
+Every result has `schema: merl.mail/v1` and an action such as `mail.status`. Errors use `merl.error/v1`. `merl help mail` lists operations; `merl help mail send --json` loads one contract. `--format human` formats the same fields for inspection.
 
 Status distinguishes `unread`, `unreceipted`, `outstanding`, the explicit binding generation and the last host notification. Delivery states include `pending`, `dispatching`, `offline`, `failed`, `stale_binding`, `pointer_limit` and `enqueued`. These are transport facts, never task outcomes. `MAIL_BUSY` means another dispatcher or binding action holds the scoped lock. The foreground watcher reports `waiting` on transient dispatch-lock contention and `resumed` when it can dispatch again, rather than exiting. Unknown agents must be registered; stale generations must be inspected rather than retried blindly.
 
 The dispatcher visits at most 100 due recipients per pass and coalesces all unreceipted mail into one pointer per recipient. It reserves a 30-second crash-recovery lease and uses exponential failed-host retry delays capped at 60 seconds. A successful enqueue gets a 60-second application-receipt grace period before another wake; the foreground watcher checks every 500 milliseconds. One host enqueue is limited to ten seconds, then its own child process is stopped and reaped. Timeout is an ambiguous enqueue failure and can cause a duplicate wake on retry. Messages arriving during an existing unreceipted batch join its notification window instead of queuing another immediate wake. Once that batch is fully receipted, genuinely new mail becomes due immediately. Host finalization is conditional on its original dispatch claim: if a fully receipted batch is replaced during host I/O, the old attempt reports its host outcome but preserves the new batch as immediately pending. Application receipt stops retries; unreceipted messages remain durable across process restarts. Source bodies never appear in wake pointers.
 
-This is local same-user cooperation, not a sandbox or authenticated multi-user service. Read-only Codex policy does not hide mail from unrestricted same-user processes. Mail is retained as immutable plaintext in `HOME/mail-v1/mail.sqlite`, independently of project stores. No mail purge or storage quota exists yet. Existing mailboxes, installed skills, semantic stores and frozen evaluation artifacts are untouched. No legacy migration or semantic erasure guarantee is implied. See [ADR 0003](adr/0003-durable-agent-mail.md) for retention and compatibility limits.
+This is local same-user cooperation, not a sandbox or authenticated multi-user service. Read-only Codex policy does not hide mail from unrestricted same-user processes. Mail is retained as immutable plaintext in `HOME/mail-v1/mail.sqlite`. No mail purge or storage quota exists yet. Old runtime files, external artifacts, existing mailboxes and installed skills are not migrated or removed. See [ADR 0004](adr/0004-messaging-product.md) for the replacement and data boundary.
 
 The optional [Merl mail skill](../skills/merl-mail/SKILL.md) gives agents a short startup/recovery routine. Project roles and merge policy belong in [project collaboration guidance](agent-roles.md).
 

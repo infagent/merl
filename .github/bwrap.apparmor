@@ -1,9 +1,0 @@
-abi <abi/4.0>,
-include <tunables/global>
-
-# Ubuntu's default unprivileged-userns profile denies the capabilities bwrap
-# needs to configure its private loopback interface. Permit only this launcher;
-# the harness disables further user namespaces before executing the worker.
-profile merl-ci-bwrap /usr/bin/bwrap flags=(unconfined) {
-  userns,
-}

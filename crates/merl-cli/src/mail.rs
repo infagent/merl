@@ -1,4 +1,4 @@
-//! Agent-mail CLI, intentionally separate from project semantic commands.
+//! The public agent-mail command vocabulary and bounded help contracts.
 
 use crate::{CliError, render_json};
 use merl_mail::{Binding, Draft, Folder, Key, MAX_BODY_BYTES, MailError, Mailbox};
@@ -323,7 +323,7 @@ fn contract(op: &str) -> Option<(&'static str, &'static [&'static str], &'static
             "--agent bob --id handoff-1",
         ),
         "complete" => (
-            "Explicitly complete one addressed request; an optional reply must match this conversation. No project semantic state changes.",
+            "Explicitly complete one addressed coordination request; an optional reply must match this conversation.",
             &["--agent", "--id", "--reply"],
             "--agent bob --id handoff-1 --reply response-1",
         ),

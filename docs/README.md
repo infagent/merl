@@ -1,17 +1,15 @@
 # Documentation
 
-Start with the [product description](product-description.md): persistent teams of humans and heterogeneous agents, with less manual context copying and repeated token spend. It covers shared project understanding, agent continuity, and the operations needed to run the team.
+Merl is durable local messaging with wake-up of explicitly bound existing agent sessions.
 
-The [roadmap](roadmap.md) shows the release sequence. Each plan owns the scope and acceptance criteria for its release:
+- [Product description](product-description.md): users, workflow, scope and limits.
+- [Setup and recovery](agent-mail.md): register, bind, send, receipt, reply, complete, start and stop.
+- [UI contract](user-interface.md): public commands, envelopes and error behavior.
+- [Architecture](architecture.md): storage, concurrency, dispatch and trust boundaries.
+- [Roadmap](roadmap.md): current release gates and later decisions.
+- [Validation](agent-mail-validation.md): automated regressions and live smoke boundaries.
+- [Project roles](agent-roles.md): ownership, review and merge policy.
+- [Architecture decisions](adr/README.md): the current decision and superseded historical records.
+- [Release gates](release-gates.md): build, branch protection and release infrastructure.
 
-- [First release](plans/first-release.md): test whether agents can use compact shared Issue state without losing correctness, and measure when repeated reads recover its preparation cost.
-- [Phase 4](plans/single-project-agent-operations.md): maintain an existing repository and operate manually started agents with assignments, worktrees, continuity, and pull request review.
-- [Phase 5](plans/delegated-agent-management.md): let an authorized manager provision and control agents within human-approved limits.
-
-Use the [UI behavior contract](user-interface.md) for observable commands and outcomes. The [architecture](architecture.md) defines the state model, authority boundaries, and transaction rules.
-
-Supporting material lives in:
-
-- [`evaluation/`](evaluation/) for the corpus and benchmark harness;
-- [`reference/`](reference/) for wire formats and protocol details;
-- [`adr/`](adr/) for decisions that constrain implementation.
+The former semantic/compiler/evaluation product and its active plans have been removed. Historical source is retained in Git; runtime data and external artifacts are untouched. The current product has no legacy data importer.

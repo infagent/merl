@@ -1,4 +1,4 @@
-//! Durable local coordination mail, separate from accepted project semantics.
+//! Durable local coordination mail with independent handling and notification state.
 //!
 //! The deliberately versioned JSON records are the CLI's data contract. Local
 //! identity claims are audit labels, not authentication against same-user code.
