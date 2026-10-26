@@ -60,6 +60,7 @@ pub(super) fn execute(
             "--help" | "-h" => help = true,
             "--home"
             | "--config"
+            | "--team"
             | "--agent"
             | "--from"
             | "--to"
@@ -95,8 +96,9 @@ pub(super) fn execute(
     let contract =
         contract(operation).ok_or_else(|| input("unknown mail operation; run merl help mail"))?;
     for key in options.keys() {
-        if !matches!(*key, "--home" | "--config" | "--json" | "--format")
-            && !contract.1.contains(key)
+        if !(matches!(*key, "--home" | "--config" | "--json" | "--format")
+            || (*key == "--team" && qualified_operation(operation))
+            || contract.1.contains(key))
         {
             return Err(input("option does not apply to this mail operation"));
         }
@@ -118,17 +120,56 @@ pub(super) fn execute(
         options.get("--home").copied(),
         options.get("--config").copied(),
     )?;
+    let mut resolved = serde_json::Map::new();
+    let mut identities = BTreeMap::new();
+    let default_team: Option<Key> = options.get("--team").map(|s| s.parse()).transpose()?;
+    let scoped = default_team.is_some()
+        || (qualified_operation(operation)
+            && ["--agent", "--from", "--to"]
+                .iter()
+                .any(|flag| options.get(flag).is_some_and(|s| s.contains('/'))));
+    if scoped {
+        let store = Mailbox::open_existing(&home)?.ok_or_else(crate::team::missing)?;
+        if let Some(team) = &default_team {
+            store.show_team(team)?;
+        }
+        for name in ["--agent", "--from", "--to"] {
+            if let Some(value) = options.get(name) {
+                let (team, member) = if let Some((team, member)) = value.split_once('/') {
+                    (Some(team.parse::<Key>()?), member.parse::<Key>()?)
+                } else {
+                    (default_team.clone(), value.parse::<Key>()?)
+                };
+                let Some(team) = team else {
+                    continue;
+                };
+                let record = store.team_member(&team, &member)?;
+                let mail_key: Key = record["mail_key"]
+                    .as_str()
+                    .ok_or_else(|| input("member identity is missing"))?
+                    .parse()?;
+                resolved.insert(name.into(), json!({"team":team.as_str(),"member":member.as_str(),"qualified":format!("{team}/{member}"),"mail_key":mail_key.as_str()}));
+                identities.insert(name, mail_key);
+            }
+        }
+    }
+    let actor = |name: &str| -> Result<Key, CliError> {
+        identities.get(name).cloned().map_or_else(|| key(name), Ok)
+    };
     let mut store = Mailbox::open(&home)?;
     let now = clock()?;
     let result = match operation {
         "register" => store.register(&key("--agent")?)?,
         "bind" => store.bind(
-            &key("--agent")?,
+            &actor("--agent")?,
             &Binding::new(get("--session")?, Path::new(get("--socket")?))?,
             generation(get("--expected-generation")?)?,
             now,
         )?,
-        "unbind" => store.unbind(&key("--agent")?, generation(get("--expected-generation")?)?)?,
+        "unbind" => store.unbind(
+            &actor("--agent")?,
+            generation(get("--expected-generation")?)?,
+        )?,
         "send" => {
             let mut body = Vec::new();
             File::open(get("--body-file")?)
@@ -139,8 +180,8 @@ pub(super) fn execute(
             let body = String::from_utf8(body).map_err(|_| input("body must be UTF-8"))?;
             let draft = Draft::new(
                 key("--id")?,
-                key("--from")?,
-                key("--to")?,
+                actor("--from")?,
+                actor("--to")?,
                 get("--kind")?,
                 body,
                 opt_key("--in-reply-to")?,
@@ -148,7 +189,7 @@ pub(super) fn execute(
             store.send(&draft, now)?
         }
         "list" => store.list(
-            &key("--agent")?,
+            &actor("--agent")?,
             opt_key("--after")?.as_ref(),
             options
                 .get("--limit")
@@ -170,15 +211,17 @@ pub(super) fn execute(
                 chosen.first().map_or(Folder::All, |(_, folder)| *folder)
             },
         )?,
-        "show" | "read" => store.show(&key("--agent")?, &key("--id")?, operation == "read", now)?,
-        "receipt" => store.receipt(&key("--agent")?, &key("--id")?, now)?,
+        "show" | "read" => {
+            store.show(&actor("--agent")?, &key("--id")?, operation == "read", now)?
+        }
+        "receipt" => store.receipt(&actor("--agent")?, &key("--id")?, now)?,
         "complete" => store.complete(
-            &key("--agent")?,
+            &actor("--agent")?,
             &key("--id")?,
             opt_key("--reply")?.as_ref(),
             now,
         )?,
-        "status" => store.status(&key("--agent")?)?,
+        "status" => store.status(&actor("--agent")?)?,
         "dispatch" => store.dispatch(
             Path::new(get("--codex")?),
             &std::env::current_exe().map_err(MailError::from)?,
@@ -242,7 +285,47 @@ pub(super) fn execute(
         }
         _ => return Err(input("unknown operation")),
     };
+    let mut result = result;
+    if !resolved.is_empty() {
+        if *json_output {
+            result["resolved"] = Value::Object(resolved);
+        } else {
+            qualify_human(&mut result, &store)?;
+        }
+    }
     render(result, operation, *json_output)
+}
+
+fn qualified_operation(op: &str) -> bool {
+    matches!(
+        op,
+        "bind" | "unbind" | "send" | "list" | "show" | "read" | "receipt" | "complete" | "status"
+    )
+}
+
+fn qualify_human(value: &mut Value, store: &Mailbox) -> Result<(), CliError> {
+    match value {
+        Value::Object(object) => {
+            for (field, value) in object {
+                if matches!(field.as_str(), "agent" | "from" | "to") {
+                    if let Some(key) = value.as_str()
+                        && let Some(qualified) = store.qualified_member(&key.parse()?)?
+                    {
+                        *value = json!(qualified);
+                    }
+                } else if matches!(field.as_str(), "messages" | "message") {
+                    qualify_human(value, store)?;
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                qualify_human(value, store)?;
+            }
+        }
+        _ => (),
+    }
+    Ok(())
 }
 
 fn input(s: &str) -> CliError {
@@ -352,6 +435,42 @@ fn contract(op: &str) -> Option<(&'static str, &'static [&'static str], &'static
         _ => return None,
     })
 }
+fn describe_actors(summary: &str, op: &str) -> String {
+    if qualified_operation(op) {
+        format!(
+            "{summary} Actors accept scope/member independently; --team supplies the scope only for bare names. Other bare actors use legacy identities. Unknown qualified actors never fall back or join implicitly."
+        )
+    } else {
+        summary.to_owned()
+    }
+}
+
+fn help_outcomes(op: &str) -> Vec<&'static str> {
+    match op {
+        "register" => vec!["registered"],
+        "bind" => vec!["bound"],
+        "unbind" => vec!["unbound"],
+        "send" => vec!["sent", "unchanged"],
+        "receipt" => vec!["received"],
+        "complete" => vec!["completed"],
+        "dispatch" => vec![
+            "pending",
+            "offline",
+            "failed",
+            "stale_binding",
+            "enqueued",
+            "pointer_limit",
+        ],
+        "watch" => vec![
+            "watching",
+            "waiting",
+            "resumed",
+            "recorded notification states",
+        ],
+        _ => vec!["mail headers, body or handling status"],
+    }
+}
+
 fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
     let command = if op.is_empty() {
         "mail".into()
@@ -367,7 +486,8 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
     } else {
         contract(op).ok_or_else(|| input("unknown mail help topic"))?
     };
-    let arguments: Vec<String> = flags
+    let summary = describe_actors(summary, op);
+    let mut arguments: Vec<String> = flags
         .iter()
         .map(|flag| {
             let value = match *flag {
@@ -393,6 +513,9 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
             }
         })
         .collect();
+    if qualified_operation(op) {
+        arguments.push("[--team <name>]".into());
+    }
     let usage = format!(
         "merl {command}{} [--home <absolute-path>] [--config <absolute-path>] [--format human|json] [--json]",
         if op.is_empty() {
@@ -412,29 +535,7 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
         Vec::new()
     };
     let errors = help_errors(op);
-    let outcomes = match op {
-        "register" => vec!["registered"],
-        "bind" => vec!["bound"],
-        "unbind" => vec!["unbound"],
-        "send" => vec!["sent", "unchanged"],
-        "receipt" => vec!["received"],
-        "complete" => vec!["completed"],
-        "dispatch" => vec![
-            "pending",
-            "offline",
-            "failed",
-            "stale_binding",
-            "enqueued",
-            "pointer_limit",
-        ],
-        "watch" => vec![
-            "watching",
-            "waiting",
-            "resumed",
-            "recorded notification states",
-        ],
-        _ => vec!["mail headers, body or handling status"],
-    };
+    let outcomes = help_outcomes(op);
     let related = vec!["mail list", "mail status"];
     if json_output {
         render_json(
@@ -462,6 +563,9 @@ fn help_errors(op: &str) -> Vec<&'static str> {
         "INIT_CONFIG",
         "INIT_CONFLICT",
     ];
+    if qualified_operation(op) {
+        errors.extend(["TEAM_NOT_FOUND", "TEAM_MEMBER_MISSING", "TEAM_SCHEMA"]);
+    }
     match op {
         "bind" => errors.extend([
             "MAIL_BUSY",

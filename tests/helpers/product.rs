@@ -47,12 +47,12 @@ impl Product {
         let root = &self.help.iter().find(|(t, _, _)| t.is_empty()).unwrap().1;
         assert_eq!(
             root["children"],
-            serde_json::json!(["mail", "lane", "init", "status"])
+            serde_json::json!(["mail", "lane", "init", "status", "team"])
         );
         assert_eq!(
             self.help.len(),
-            24,
-            "root, mail and lane groups, nineteen operations, init, and status"
+            31,
+            "root, three groups, twenty-five operations, init, and status"
         );
         for (topic, value, human) in &self.help {
             assert_eq!(value["schema"], "merl.help/v1");
@@ -65,6 +65,8 @@ impl Product {
                     || topic.starts_with("mail ")
                     || topic == "lane"
                     || topic.starts_with("lane ")
+                    || topic == "team"
+                    || topic.starts_with("team ")
             );
             for field in ["usage", "summary"] {
                 assert!(human.contains(value[field].as_str().unwrap()));

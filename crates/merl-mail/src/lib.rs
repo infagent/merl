@@ -5,6 +5,7 @@
 //! Message bytes commit atomically with notification intent; host I/O is separate.
 
 mod delivery;
+pub mod team;
 
 pub use delivery::Binding;
 
@@ -164,6 +165,34 @@ pub struct Mailbox {
     directory: PathBuf,
 }
 impl Mailbox {
+    /// Opens an existing mailbox read-only, without creating runtime paths.
+    ///
+    /// # Errors
+    /// Returns an input, I/O, storage or schema error for an invalid existing store.
+    pub fn open_existing(home: &Path) -> Result<Option<Self>, MailError> {
+        if !home.is_absolute() {
+            return Err(failure("MAIL_INPUT", "home must be absolute"));
+        }
+        let directory = home.join("mail-v1");
+        let file = directory.join("mail.sqlite");
+        match fs::metadata(&file) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+            Ok(_) => (),
+        }
+        let db = Connection::open_with_flags(&file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        db.busy_timeout(Duration::from_secs(5))?;
+        let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version != 1 {
+            return Err(failure("MAIL_SCHEMA", "unsupported mailbox schema"));
+        }
+        Ok(Some(Self {
+            db,
+            home: home.to_owned(),
+            directory,
+        }))
+    }
+
     /// Opens only the dedicated `mail-v1` store beneath the selected home.
     ///
     /// # Errors
