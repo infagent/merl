@@ -25,6 +25,8 @@ RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-de
 
 `cargo test --locked --test mail --test product` runs the public messaging and product-boundary scenarios. A manual real-host smoke additionally needs consenting existing sessions and an explicit Codex executable/socket; it is separate from automated tests. Preserve the working application/dispatcher during a binary transition and identify both binaries in the evidence.
 
+`cargo test --locked --test install_version` checks the installed-binary version seam. Python discovery also runs synthetic installer and release-publication tests with local assets/Git repositories; no release is created. The Package workflow builds archives and verifies clean user-directory installs on all supported native platforms. See [release distribution](docs/release-distribution.md) for local package smoke and maintainer-only draft recovery. Do not publish a tag or release as a side effect of testing.
+
 ## Pull requests and review
 
 Explain the final user-visible behavior, linked issue, validation, data/compatibility effects and material limits. Keep unrelated changes out. Document which head an independent reviewer checked and whether a live smoke used the replacement binary. Include example human/JSON output when it changes. Source deletion does not authorize runtime deletion.

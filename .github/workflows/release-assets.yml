@@ -1,0 +1,98 @@
+name: Release assets
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      sha:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing draft stable tag to recover (never moving main)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-assets-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    name: Freeze existing draft source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Draft release visibility requires push-level access; this job performs GETs only.
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - name: Validate tag input
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: '[[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]'
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - name: Check draft, tag, revision and package version
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXPECTED_SHA: ${{ inputs.sha }}
+        run: |
+          release_sha=$(git rev-parse HEAD)
+          if [[ -n "$EXPECTED_SHA" && "$release_sha" != "$EXPECTED_SHA" ]]; then
+            echo 'Release Please revision differs from actual tag' >&2
+            exit 1
+          fi
+          python3 scripts/release.py check --tag "$RELEASE_TAG" --sha "$release_sha" --require-tag --draft
+          printf 'sha=%s\n' "$release_sha" >> "$GITHUB_OUTPUT"
+
+  package:
+    needs: source
+    uses: ./.github/workflows/package.yml
+    with:
+      tag: ${{ inputs.tag }}
+      sha: ${{ needs.source.outputs.sha }}
+
+  publish:
+    name: Verify all assets and publish draft
+    needs: [source, package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_SHA: ${{ needs.source.outputs.sha }}
+    steps:
+      - name: Check out frozen source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+      - name: Collect this run's native archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: merl-*
+          merge-multiple: true
+          path: packages
+      - name: Assemble exact asset set and checksums
+        run: |
+          python3 scripts/release.py assemble --tag "$RELEASE_TAG" --sha "$RELEASE_SHA" \
+            --artifacts packages --output release-assets
+      - name: Upload, download-verify and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/release.py publish --tag "$RELEASE_TAG" --sha "$RELEASE_SHA" --assets release-assets

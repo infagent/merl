@@ -103,7 +103,7 @@ fn root(arguments: &[String], json_output: &mut bool) -> Result<String, CliError
         )
     } else {
         Ok(format!(
-            "{usage}\n{summary}\nCommands: mail\nRun merl help mail or merl help mail <operation> --json.\n"
+            "{usage}\n{summary}\nCommands: mail\nRun merl --version, merl help mail or merl help mail <operation> --json.\n"
         ))
     }
 }

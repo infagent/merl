@@ -3,6 +3,8 @@
 Merl is durable local messaging with wake-up of explicitly bound existing agent sessions.
 
 - [Product description](product-description.md): users, workflow, scope and limits.
+- [Installation](installation.md): binary releases, supported systems, version selection and optional skill setup.
+- [Release distribution](release-distribution.md): frozen source, draft publication, checks and recovery.
 - [Setup and recovery](agent-mail.md): register, bind, send, receipt, reply, complete, start and stop.
 - [UI contract](user-interface.md): public commands, envelopes and error behavior.
 - [Architecture](architecture.md): storage, concurrency, dispatch and trust boundaries.

@@ -16,6 +16,8 @@ Readiness requires:
 - formatting, Clippy, the complete reduced workspace tests, rustdoc and Python checks passing;
 - independent review of the final head and a reviewed PR handed to the human before any merge.
 
+Release distribution provides version-bound Linux/macOS binaries and an optional matching skill through the [installation contract](installation.md). Draft publication, verification and recovery follow [release distribution](release-distribution.md). Installation changes no agent configuration, dispatcher lifecycle or mailbox. Durable service setup and GitHub subscriptions require later work.
+
 ## Later decisions
 
 Evidence from daily coordination should guide retention/erasure policy, storage quotas, authenticated multi-user operation, remote delivery and additional host adapters. Each requires a separate design and verified boundary. Agent spawning, scheduling, workspace management and model-provider integration are not part of the current release.
