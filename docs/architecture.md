@@ -47,6 +47,12 @@ A short write transaction validates identities and reply endpoints, then commits
 
 Mail labels identify coordination requests or information. They do not confer project authority. Only the addressed recipient can read or handle a delivery through the API. Local identity flags are trusted claims; the API does not authenticate a hostile same-user process.
 
+## Shared teams
+
+[ADR 0007](adr/0007-persistent-teams.md) adds shared scope and roster tables to mail-v1 without changing its schema version or existing mail records. A strict fresh identity insert and membership commit in one immediate transaction. An existing raw key conflicts; idempotent mail registration is never ownership proof. Matching committed membership recognizes a retry. Team schema metadata is independently versioned; unsupported versions fail closed.
+
+Qualified mail resolves all identity flags through one explicit team. The opaque mail key remains stable across session replacement; local names from other teams or legacy mail are never adopted. IDs remain global per mailbox home. Scope/member guidance is bounded and references are inert. Existing discovery opens read-only and absent discovery creates nothing. Role/coordinator labels confer no permissions; host bindings and completion stay separate. See [teams](teams.md) for the first workflow and deferred lifecycle.
+
 ## Handling and pagination
 
 Reading sets an idempotent timestamp. Receipt records application handling and stops notification retries for that ID, without creating reply mail. Completion is an explicit operation on an addressed request; a supplied completion reply must match that delivery. Reply linkage alone completes nothing.

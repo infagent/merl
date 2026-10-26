@@ -1,6 +1,6 @@
 # Messaging interface and behavior
 
-The `merl` CLI is the public interface. `merl help` exposes init, status and the mail/lane groups; group help lists operations, and leaf help loads one contract. A skill is optional. Detailed examples are in [installation](installation.md), [mail setup](agent-mail.md) and [reviewer lanes](reviewer-lanes.md).
+The `merl` CLI is the public interface. `merl help` exposes init, status and the team/mail/lane groups; group help lists operations, and leaf help loads one contract. A skill is optional. Detailed examples are in [installation](installation.md), [mail setup](agent-mail.md) and [reviewer lanes](reviewer-lanes.md).
 
 `merl --version` and `merl -V` print `merl VERSION` and exit successfully without selecting a mailbox. These standalone binary flags report the root package version used by the release archive; command JSON envelopes remain unchanged. See [installation](installation.md) for supported platforms and installation behavior.
 
@@ -26,6 +26,12 @@ Mail and lane commands require an absolute mailbox home, supplied with `--home` 
 `send` labels are `assign`, `ready`, `review`, `blocked`, `question`, `reply` and `note`. The first five are coordination requests. A reply requires `--in-reply-to ID`, reverses the original endpoints and closes nothing by itself. Completion may link a matching reply. An exact send retry is `unchanged`; altered content under the same ID conflicts.
 
 Lists accept at most one of `--unread`, `--pending` or `--outstanding`. Without a filter they show all addressed headers. `--limit` is 1..100. Follow `next_after` with `--after`; a cursor from another recipient is invalid. Pending includes interrupted reads without receipt, and outstanding includes receipted unfinished requests. Read and receipt timestamps preserve their first values on retry.
+
+## Teams
+
+`team create --name NAME --coordinator NAME --scope-file PATH` saves bounded shared scope. `team join --team NAME --member NAME --description-file PATH` saves starting guidance and creates an individual identity atomically. Optional free-form `--role` and repeatable inert `--guidance-ref` values persist. Exact retries are unchanged; changed inputs conflict. `team show --team NAME`, paged `team members --team NAME`, and `team member --team NAME --member NAME` inspect existing state without creation or binding. No edit/leave/removal lifecycle is included.
+
+Team results use `merl.team/v1`. Existing mail identity/handling/binding commands accept explicit `--team`, resolve each identity only within that roster, and add `resolved` metadata while retaining `merl.mail/v1`. Mail registration and mailbox-wide dispatch/watch do not accept the qualifier. Unqualified shapes remain unchanged. Message IDs stay global per home; qualified names do not authenticate users or replace bindings. The [team guide](teams.md) defines limits, errors, JSON fields and complete CLI onboarding.
 
 ## User setup
 

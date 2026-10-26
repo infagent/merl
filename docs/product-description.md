@@ -16,6 +16,10 @@ Four independent facts describe handling: unread/read, application receipt, expl
 
 The recipient can page through unreceipted messages, unread messages, or unfinished requests. Wake pointers select unreceipted messages so an interrupted read does not strand its receipt. Already receipted requests remain outstanding until explicitly completed.
 
+## Shared organization
+
+[Teams](teams.md) persist user-chosen shared scope and a roster with optional free-form roles, saved starting guidance and inert document pointers. Explicitly qualified members have distinct stable mail identities across teams and host-session replacement. Handoffs keep one named recipient; receipt and replies never complete another member's request. The coordinator label follows local project convention and adds no authentication or merge authority. See [ADR 0007](adr/0007-persistent-teams.md).
+
 ## Notification
 
 The operator supplies an existing Codex session UUID and local Unix control socket. A generation guard rejects stale binding changes, and a socket fingerprint prevents a replaced host endpoint from silently inheriting a registration. Only the configured exact session is targeted.

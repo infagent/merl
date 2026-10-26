@@ -22,6 +22,12 @@ Release distribution provides version-bound Linux/macOS binaries and an optional
 
 [Reviewer lanes](reviewer-lanes.md) add durable read-only repository/required-label subscriptions through [ADR 0005](adr/0005-reviewer-lanes.md). Readiness requires synthetic multi-PR/paging/generation/outbox/deadline regressions and an actual watcher-originated wake to an idle reviewer, with exact application/dispatch provenance. This is distinct from recovered manual-mail delivery. Scope/backfill/edit/resynchronization limitations remain explicit; no GitHub writes, actor spawning or merge authority are added. Durable service setup remains later work.
 
+## Persistent team coordination
+
+[#161](https://github.com/infagent/merl/issues/161) adds shared scope, durable member guidance, paged roster discovery and explicit team-qualified individual mail. Atomic membership/fresh-identity creation preserves legacy mail compatibility and rejects foreign identity adoption. The CLI onboarding is usable without a skill. General edit/removal lifecycle is deferred.
+
+Follow serially with informational team notices using frozen recipient snapshots; explicit new team-targeted PR lanes while retaining immutable existing recipients; then `merl usage` and the short `/merl` / `$merl` startup skill with a separately scoped safe compatibility upgrade. These follow-ups remain product commitments, not automatic authorization for a release, global setup or runtime migration.
+
 ## Later decisions
 
 Evidence from daily coordination should guide retention/erasure policy, storage quotas, authenticated multi-user operation, remote delivery and additional host adapters. Each requires a separate design and verified boundary. Agent spawning, scheduling, workspace management and model-provider integration are not part of the current release.
