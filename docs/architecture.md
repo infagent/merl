@@ -92,7 +92,9 @@ message retry, receipt, completion and dispatch semantics remain unchanged.
 
 Reading sets an idempotent timestamp. Receipt records application handling and stops notification retries for that ID, without creating reply mail. Completion is an explicit operation on an addressed request; a supplied completion reply must match that delivery. Reply linkage alone completes nothing.
 
-Lists return at most 100 headers in commit order with a continuation cursor. Bodies are loaded individually and limited to 8192 UTF-8 bytes. `--pending` includes read-but-unreceipted mail; `--outstanding` includes receipted unfinished requests. A wake instructs the agent to drain all pending pages and persist its own work checkpoints before relying on receipt.
+Lists return at most 100 headers in commit order with a continuation cursor. Bodies are limited to 8192 UTF-8 bytes. `--pending` includes read-but-unreceipted mail; `--outstanding` includes receipted unfinished requests. A supported Codex wake carries a bounded inline snapshot under [ADR 0012](adr/0012-bounded-inline-mail.md): use complete bodies directly, fetch omitted/overflow references, then checkpoint before explicit handling. Existing list/show/read commands remain available for recovery.
+
+`mail handle` atomically records independent explicit read/receipt/completion intents for 1..100 selected unique IDs. All ownership/kind/reply validation precedes effects; retries preserve first timestamps and completion reply identity. Reply publication remains separate. Results contain handling facts rather than bodies. The notice's suggested command excludes omitted bodies; transport never handles mail.
 
 ## Binding and dispatch
 
@@ -100,7 +102,7 @@ A name must be registered before it is bound. Binding uses an exact UUID, an exp
 
 A scoped dispatch file lock serializes host calls and binding changes. A separate watch lock prevents two foreground watchers for one mailbox. Neither lock stops unrelated processes or mailboxes. Send/receipt remain available during host I/O.
 
-A pass visits at most 100 due recipients, commits a 30-second recovery lease before I/O, and uses `codex queue --remote unix://PATH --thread UUID --message POINTER`. The pointer contains a bounded read command and no message body or mailbox history. There is no `resume`, fork or fresh-session fallback.
+A pass visits at most 100 due recipients and rechecks each pending selection before committing a 30-second recovery lease. An empty selection returns `obsolete` without a host call or claim mutation. The adapter uses `codex queue --remote unix://PATH --thread UUID --message JSON`. A bounded immediate transaction covers snapshot reads and lease creation, building at most eight messages and a 16 KiB serialized `merl.notification/v1` notice, including metadata, instructions and exact fetch/continuation argv references. It commits before host I/O so publication cannot replace a batch between selection and claiming it. Bodies are complete or omitted; retries may select a fresh pending snapshot. There is no `resume`, fork or fresh-session fallback. Inline bodies intentionally enter the explicitly bound host's context and retention.
 
 One host call has a ten-second deadline. Failed calls use exponential retry delays capped at 60 seconds. Successful enqueue allows a 60-second receipt grace period. New mail joins an existing unreceipted batch's notification window; after full receipt, a new batch becomes due immediately.
 
@@ -111,6 +113,8 @@ The foreground watcher checks every 500 milliseconds. Transient dispatch-lock co
 ## Guarantees and limits
 
 Host success means enqueued, not read or complete. A crash after host acceptance, an ambiguous timeout, or a late receipt may cause duplicate wakes. Delivery is at least once; application work must use durable IDs/checkpoints. Exactly-once host or application execution is not claimed.
+
+Already accepted host events can remain queued after full receipt; the supported queue interface supplies no cancellation/deduplication key. A stale queued notice differs from a new dispatch, and historical notification state may outlive pending work. Reconcile inline IDs with checkpoints without mandatory duplicate inbox fetches. Routine acknowledgment generates neither reply mail nor user-facing narration unless actionable. The 60-second receipt grace remains unchanged; attempts are not a count of successful host acceptances.
 
 Mail remains immutable plaintext through this API, with no erasure, encryption or storage quota. Same-user filesystem access is trusted; an operator requiring isolation must enforce it outside Merl. Host diagnostic output is discarded rather than persisted with possible secrets. Status keeps bounded failure labels and handling counts.
 

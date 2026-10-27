@@ -65,7 +65,7 @@ In a dedicated terminal, set `merl_bin`, `mail_home` and `codex_bin` to the same
 "$merl_bin" mail watch --home "$mail_home" --codex "$codex_bin" --json
 ```
 
-From the original shell, send a new ID such as `wake-1` using the same `mail send` command/body. The bound recipient drains pending pages, reads each ID, saves its checkpoint and receipts it. Enqueued means only that the host accepted a pointer; receipt and completed work are separate. The recipient must be able to execute the absolute Merl path in that pointer.
+From the original shell, send a new ID such as `wake-1` using the same `mail send` command/body. A release containing #172 delivers bounded complete inline bodies and exact overflow references. The recipient uses complete content directly, fetches omitted content, saves its checkpoint and explicitly uses `mail handle --agent NAME --ids ID,ID --read --receipt`. Without inline content (including v0.5.0), drain pending pages and read each ID first. Enqueued means only host acceptance; read, receipt and completed work remain separate. Keep the absolute Merl executable in notification references available. Duplicate already-handled notices need no routine acknowledgment mail or narration.
 
 ## Stop, restart and recover
 

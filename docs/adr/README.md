@@ -10,6 +10,7 @@
 - [ADR 0009: Atomic informational team announcements](0009-atomic-team-announcements.md)
 - [ADR 0010: Qualified recipients for new PR subscriptions](0010-qualified-subscription-recipients.md)
 - [ADR 0011: Reuse setup and retire owned legacy aliases](0011-reuse-setup-and-retire-owned-aliases.md)
+- [ADR 0012: Bounded inline mail and explicit compact handling](0012-bounded-inline-mail.md)
 
 ## Superseded historical records
 

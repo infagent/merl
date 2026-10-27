@@ -14,7 +14,7 @@ Messages have caller-supplied unique IDs, explicit sender and recipient, a bound
 
 Four independent facts describe handling: unread/read, application receipt, explicit coordination-request completion, and host notification state. A linked reply preserves the conversation. It completes no request automatically. Receipt creates no acknowledgment message and therefore no notification loop.
 
-The recipient can page through unreceipted messages, unread messages, or unfinished requests. Wake pointers select unreceipted messages so an interrupted read does not strand its receipt. Already receipted requests remain outstanding until explicitly completed.
+The recipient can page through unreceipted messages, unread messages, or unfinished requests. Supported Codex notifications carry bounded complete inline bodies with explicit overflow references; no mandatory inbox fetch is needed for a short handoff. `mail handle` records independently selected read/receipt/completion facts atomically for consumed IDs. An interrupted read never strands receipt, and already receipted requests remain outstanding until explicitly completed.
 
 ## Shared organization
 
@@ -30,7 +30,7 @@ See [announcements](teams.md#informational-announcements).
 
 The operator supplies an existing Codex session UUID and local Unix control socket. A generation guard rejects stale binding changes, and a socket fingerprint prevents a replaced host endpoint from silently inheriting a registration. Only the configured exact session is targeted.
 
-An opt-in foreground dispatcher coalesces notification by recipient, persists a recovery lease, and invokes the supported `codex queue` command with a bounded pointer. Waiting itself makes no model calls. Successful host enqueue grants time for application receipt; failed calls retry with bounded backoff. New messages join a pending batch, while a fully receipted batch does not delay genuinely new work. An old host result cannot overwrite a new batch created during its I/O.
+An opt-in foreground dispatcher coalesces notification by recipient, persists a recovery lease, and invokes supported `codex queue` with an eight-message/16 KiB inline JSON notice. Inline content intentionally reaches the bound host's context and retention. Waiting itself makes no model calls. Successful host enqueue grants time for application receipt; failed calls retry with bounded backoff. New messages join a pending batch, while a fully receipted batch does not delay genuinely new work. An old host result cannot overwrite a new batch created during its I/O. Empty selections are skipped before enqueue; already accepted events can remain queued after receipt. [ADR 0012](adr/0012-bounded-inline-mail.md) records this deliberate change to body-free wakes and preserves at-least-once recovery.
 
 Host enqueue is not proof of reading or completion. Crashes and ambiguous results can duplicate notifications. Agents must inspect durable IDs and handling state before repeating work.
 

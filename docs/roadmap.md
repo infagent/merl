@@ -33,3 +33,7 @@ Merged [#163](https://github.com/infagent/merl/issues/163) adds pure `merl usage
 Evidence from daily coordination should guide retention/erasure policy, storage quotas, authenticated multi-user operation, remote delivery and additional host adapters. Each requires a separate design and verified boundary. Agent spawning, scheduling, workspace management and model-provider integration are not part of the current release.
 
 Project roles, worktree ownership, review and merge policy stay in project documentation rather than the reusable transport skill. No old runtime data is migrated merely because the product direction changed.
+
+## Bounded inline mail
+
+[#172](https://github.com/infagent/merl/issues/172) is the selected follow-up: supported Codex inline notifications (eight messages/16 KiB including serialized overhead), explicit atomic handling of selected consumed IDs, and controlled reconciliation of obsolete selections versus already accepted stale events. [ADR 0012](adr/0012-bounded-inline-mail.md) supersedes the body-free wake rule while preserving receipt/completion and at-least-once recovery. Acceptance includes public Unicode/escaping/overflow, handling rollback/retry and delivery-race examples plus a complete synthetic exchange comparison. Command/byte counts are not measured model tokens or savings. No unconditional Claude support, additional live experiment, memory subsystem, release or merge is part of this issue.

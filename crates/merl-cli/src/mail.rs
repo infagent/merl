@@ -1,7 +1,9 @@
 //! The public agent-mail command vocabulary and bounded help contracts.
 
 use crate::{CliError, render_json};
-use merl_mail::{Binding, Draft, Folder, Key, MAX_BODY_BYTES, MailError, Mailbox};
+use merl_mail::{
+    Binding, Draft, Folder, Handling, Key, MAX_BODY_BYTES, MAX_PAGE, MailError, Mailbox,
+};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -52,7 +54,7 @@ pub(super) fn execute(
                     _ => return Err(input("format must be human or json")),
                 }
             }
-            "--unread" | "--pending" | "--outstanding" => {
+            "--unread" | "--pending" | "--outstanding" | "--read" | "--receipt" | "--complete" => {
                 if options.insert(arg, "true").is_some() {
                     return Err(input("duplicate option"));
                 }
@@ -65,6 +67,7 @@ pub(super) fn execute(
             | "--from"
             | "--to"
             | "--id"
+            | "--ids"
             | "--kind"
             | "--body-file"
             | "--in-reply-to"
@@ -215,6 +218,20 @@ pub(super) fn execute(
             store.show(&actor("--agent")?, &key("--id")?, operation == "read", now)?
         }
         "receipt" => store.receipt(&actor("--agent")?, &key("--id")?, now)?,
+        "handle" => {
+            let ids = get("--ids")?
+                .split(',')
+                .take(MAX_PAGE + 1)
+                .map(str::parse::<Key>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let handling = Handling::new(
+                options.contains_key("--read"),
+                options.contains_key("--receipt"),
+                options.contains_key("--complete"),
+                opt_key("--reply")?,
+            )?;
+            store.handle(&actor("--agent")?, &ids, &handling, now)?
+        }
         "complete" => store.complete(
             &actor("--agent")?,
             &key("--id")?,
@@ -299,7 +316,16 @@ pub(super) fn execute(
 fn qualified_operation(op: &str) -> bool {
     matches!(
         op,
-        "bind" | "unbind" | "send" | "list" | "show" | "read" | "receipt" | "complete" | "status"
+        "bind"
+            | "unbind"
+            | "send"
+            | "list"
+            | "show"
+            | "read"
+            | "receipt"
+            | "handle"
+            | "complete"
+            | "status"
     )
 }
 
@@ -353,8 +379,8 @@ fn render(mut data: Value, operation: &str, json_output: bool) -> Result<String,
 }
 
 const COMMANDS: &[&str] = &[
-    "register", "bind", "unbind", "send", "list", "show", "read", "receipt", "complete", "status",
-    "dispatch", "watch",
+    "register", "bind", "unbind", "send", "list", "show", "read", "receipt", "handle", "complete",
+    "status", "dispatch", "watch",
 ];
 fn contract(op: &str) -> Option<(&'static str, &'static [&'static str], &'static str)> {
     Some(match op {
@@ -417,6 +443,18 @@ fn contract(op: &str) -> Option<(&'static str, &'static [&'static str], &'static
             &["--agent", "--id", "--reply"],
             "--agent bob --id handoff-1 --reply response-1",
         ),
+        "handle" => (
+            "Atomically record selected facts for 1..100 unique comma-separated IDs already consumed and checkpointed. Choose --read, --receipt and/or --complete explicitly; receipt never implies completion. --reply links one completed ID to an existing matching reply. No bodies or acknowledgment mail.",
+            &[
+                "--agent",
+                "--ids",
+                "--read",
+                "--receipt",
+                "--complete",
+                "--reply",
+            ],
+            "--agent bob --ids handoff-1,handoff-2 --read --receipt",
+        ),
         "status" => (
             "Inspect binding generation, unread, unreceipted, outstanding and last notification independently.",
             &["--agent"],
@@ -453,6 +491,7 @@ fn help_outcomes(op: &str) -> Vec<&'static str> {
         "send" => vec!["sent", "unchanged"],
         "receipt" => vec!["received"],
         "complete" => vec!["completed"],
+        "handle" => vec!["handled"],
         "dispatch" => vec![
             "pending",
             "offline",
@@ -460,6 +499,7 @@ fn help_outcomes(op: &str) -> Vec<&'static str> {
             "stale_binding",
             "enqueued",
             "pointer_limit",
+            "obsolete",
         ],
         "watch" => vec![
             "watching",
@@ -491,7 +531,8 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
         .iter()
         .map(|flag| {
             let value = match *flag {
-                "--unread" | "--pending" | "--outstanding" => "",
+                "--unread" | "--pending" | "--outstanding" | "--read" | "--receipt"
+                | "--complete" => "",
                 "--body-file" | "--codex" | "--socket" => " <path>",
                 "--limit" | "--expected-generation" => " <integer>",
                 _ => " <value>",
@@ -503,6 +544,9 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
                     | "--unread"
                     | "--pending"
                     | "--outstanding"
+                    | "--read"
+                    | "--receipt"
+                    | "--complete"
                     | "--reply"
                     | "--in-reply-to"
             );
@@ -585,7 +629,7 @@ fn help_errors(op: &str) -> Vec<&'static str> {
         ]),
         "list" | "status" => errors.push("MAIL_IDENTITY_MISSING"),
         "show" | "read" | "receipt" => errors.extend(["MAIL_NOT_FOUND", "MAIL_NOT_RECIPIENT"]),
-        "complete" => errors.extend([
+        "complete" | "handle" => errors.extend([
             "MAIL_NOT_FOUND",
             "MAIL_NOT_RECIPIENT",
             "MAIL_REPLY_MISMATCH",

@@ -10,6 +10,8 @@ Informational [team announcements](docs/teams.md#informational-announcements), a
 
 A coordinator can hand work to a developer, a developer can request a review, and a reviewer can return findings. The project decides roles and merge authority. Merl records the messages and handling facts; a receipt alone never completes an assignment.
 
+A release containing [#172](https://github.com/infagent/merl/issues/172) pushes bounded complete mail into supported Codex notifications, with explicit overflow fetches. After consuming and checkpointing it, `mail handle --agent NAME --ids ID,ID --read --receipt` records selected facts in one transaction; completion stays explicit. Already queued duplicates may be stale. See [inline mail](docs/user-interface.md#inline-host-mail) for bounds and the changed plaintext exposure. V0.5.0 still sends body-free pointers.
+
 ## Install and try it
 
 Install a binary release without Rust:

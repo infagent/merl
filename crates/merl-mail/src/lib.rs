@@ -6,9 +6,12 @@
 
 pub mod announcement;
 mod delivery;
+mod handling;
+mod notification;
 pub mod team;
 
 pub use delivery::Binding;
+pub use handling::Handling;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde_json::{Value, json};
@@ -24,6 +27,11 @@ use std::{
 pub const MAX_BODY_BYTES: usize = 8192;
 /// Maximum headers per read, keeping notification-driven inbox draining bounded.
 pub const MAX_PAGE: usize = 100;
+/// Maximum serialized host notice: one full-size handoff plus bounded metadata.
+/// Larger messages remain durable and carry an explicit fetch reference.
+pub const MAX_NOTIFICATION_BYTES: usize = 16 * 1024;
+/// Maximum messages in one inline notice, bounding host context and database work.
+pub const MAX_NOTIFICATION_MESSAGES: usize = 8;
 
 /// A stable mailbox failure without message contents or host diagnostic output.
 #[derive(Debug)]
@@ -368,43 +376,7 @@ impl Mailbox {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        require_recipient(&tx, agent, id)?;
-        let kind: String = tx.query_row(
-            "SELECT kind FROM messages WHERE id=?1",
-            [id.as_str()],
-            |r| r.get(0),
-        )?;
-        if !is_request(&kind) {
-            return Err(failure(
-                "MAIL_INPUT",
-                "only an explicit request can be completed",
-            ));
-        }
-        if let Some(reply) = reply {
-            let valid:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM messages r JOIN messages m ON m.id=r.reply WHERE r.id=?1 AND m.id=?2 AND r.sender=m.recipient AND r.recipient=m.sender)",params![reply.as_str(),id.as_str()],|r|r.get(0))?;
-            if !valid {
-                return Err(failure(
-                    "MAIL_REPLY_MISMATCH",
-                    "completion reply belongs to another conversation",
-                ));
-            }
-        }
-        let prior: Option<String> = tx.query_row(
-            "SELECT completion_reply FROM handling WHERE message=?1",
-            [id.as_str()],
-            |r| r.get(0),
-        )?;
-        let completed: Option<i64> = tx.query_row(
-            "SELECT completed_at FROM handling WHERE message=?1",
-            [id.as_str()],
-            |r| r.get(0),
-        )?;
-        if completed.is_some() && prior.as_deref() != reply.map(Key::as_str) {
-            return Err(failure(
-                "MAIL_ID_CONFLICT",
-                "completion retry changed its reply",
-            ));
-        }
+        validate_completion(&tx, agent, id, reply)?;
         tx.execute("UPDATE handling SET completed_at=coalesce(completed_at,?2),completion_reply=?3 WHERE message=?1",params![id.as_str(),now,reply.map(Key::as_str)])?;
         tx.commit()?;
         Ok(json!({"outcome":"completed","id":id.as_str()}))
@@ -423,6 +395,41 @@ impl Mailbox {
             json!({"agent":agent.as_str(),"unread":counts.0,"unreceipted":counts.1,"outstanding":counts.2,"binding":binding,"notification":notification}),
         )
     }
+}
+
+fn validate_completion(
+    db: &Connection,
+    agent: &Key,
+    id: &Key,
+    reply: Option<&Key>,
+) -> Result<(), MailError> {
+    require_recipient(db, agent, id)?;
+    let (kind, completed, prior): (String, Option<i64>, Option<String>) = db.query_row(
+        "SELECT m.kind,h.completed_at,h.completion_reply FROM messages m JOIN handling h ON h.message=m.id WHERE m.id=?1",
+        [id.as_str()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )?;
+    if !is_request(&kind) {
+        return Err(failure(
+            "MAIL_INPUT",
+            "only an explicit request can be completed",
+        ));
+    }
+    if let Some(reply) = reply {
+        let valid:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM messages r JOIN messages m ON m.id=r.reply WHERE r.id=?1 AND m.id=?2 AND r.sender=m.recipient AND r.recipient=m.sender)",params![reply.as_str(),id.as_str()],|r|r.get(0))?;
+        if !valid {
+            return Err(failure(
+                "MAIL_REPLY_MISMATCH",
+                "completion reply belongs to another conversation",
+            ));
+        }
+    }
+    if completed.is_some() && prior.as_deref() != reply.map(Key::as_str) {
+        return Err(failure(
+            "MAIL_ID_CONFLICT",
+            "completion retry changed its reply",
+        ));
+    }
+    Ok(())
 }
 
 fn is_request(kind: &str) -> bool {

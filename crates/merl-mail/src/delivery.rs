@@ -1,7 +1,8 @@
 //! Serialized dispatch and explicit host binding; no model calls while idle.
 
+use super::notification::Notification;
 use super::{Key, MailError, Mailbox, failure, require_identity};
-use rusqlite::params;
+use rusqlite::{Transaction, TransactionBehavior, params};
 use serde_json::{Value, json};
 use std::{
     fs::{self, File},
@@ -122,7 +123,7 @@ impl Mailbox {
         lock(&self.directory.join("dispatch.lock"))
     }
 
-    /// Attempts at most 100 due recipients, with one bounded pointer per recipient.
+    /// Attempts at most 100 due recipients, with one bounded inline notice each.
     ///
     /// Binding changes serialize with dispatch; host I/O holds no SQLite transaction.
     /// A crash after enqueue may cause a duplicate notification after the lease expires.
@@ -150,6 +151,10 @@ impl Mailbox {
     }
 
     fn notify(&self, agent: &str, codex: &Path, merl: &Path, now: i64) -> Result<Value, MailError> {
+        // Snapshot and lease share the writer transaction. Publication cannot
+        // replace the selected batch between its body reads and claim creation.
+        // Commit before host I/O, where send/receipt must remain available.
+        let tx = Transaction::new_unchecked(&self.db, TransactionBehavior::Immediate)?;
         let binding = self.db.query_row(
             "SELECT generation,session,socket,socket_identity FROM identities WHERE name=?1",
             [agent],
@@ -168,35 +173,34 @@ impl Mailbox {
             |r| r.get(0),
         )?;
         let attempts = prior.saturating_add(1);
+        let notice = match self.notification(&agent.parse()?, merl, binding.0)? {
+            Notification::Empty => {
+                tx.commit()?;
+                return Ok(json!({"agent":agent,"state":"obsolete","attempts":prior,
+                    "binding_generation":binding.0,"reason":"no_unreceipted_mail"}));
+            }
+            notice => notice,
+        };
         // This persisted lease bounds crash recovery without holding a database lock
         // while the host command runs. Enqueue itself has no idempotency guarantee.
-        self.db.execute("UPDATE notifications SET state='dispatching',next_at=?2,attempts=?3,generation=?4 WHERE agent=?1",params![agent,now.saturating_add(DISPATCH_LEASE_MILLIS),attempts,binding.0])?;
+        tx.execute("UPDATE notifications SET state='dispatching',next_at=?2,attempts=?3,generation=?4 WHERE agent=?1",params![agent,now.saturating_add(DISPATCH_LEASE_MILLIS),attempts,binding.0])?;
+        tx.commit()?;
         let state = if let (Some(session), Some(socket), Some(recorded)) =
             (&binding.1, &binding.2, &binding.3)
         {
             match fingerprint(Path::new(socket)) {
-                Ok(current) if current == *recorded => {
-                    let pointer = format!(
-                        "New Merl mail. Run {} mail list --home {} --agent {} --pending --json; drain all pages, read each ID, then record mail receipt. Receipt does not complete work. Duplicate notifications are safe.",
-                        quote(
-                            merl.to_str()
-                                .ok_or_else(|| failure("MAIL_INPUT", "executable must be UTF-8"))?
-                        ),
-                        quote(
-                            self.home
-                                .to_str()
-                                .ok_or_else(|| failure("MAIL_INPUT", "home must be UTF-8"))?
-                        ),
-                        agent
-                    );
-                    if pointer.len() > 2048 {
-                        "pointer_limit"
-                    } else if enqueue(codex, socket, session, &pointer, &self.home)? {
+                Ok(current) if current == *recorded => match notice {
+                    Notification::Content(ref text)
+                        if enqueue(codex, socket, session, text, &self.home)? =>
+                    {
                         "enqueued"
-                    } else {
-                        "failed"
                     }
-                }
+                    Notification::Content(_) => "failed",
+                    Notification::Limit => "pointer_limit",
+                    Notification::Empty => {
+                        unreachable!("empty snapshots return before claiming dispatch")
+                    }
+                },
                 _ => "stale_binding",
             }
         } else {
@@ -240,9 +244,6 @@ impl Mailbox {
     }
 }
 
-fn quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\"'\"'"))
-}
 fn lock(path: &Path) -> Result<File, MailError> {
     let mut o = fs::OpenOptions::new();
     o.read(true).write(true).create(true).truncate(false);
