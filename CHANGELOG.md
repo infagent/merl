@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/infagent/merl/compare/v0.4.0...v0.5.0) (2026-10-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* consented setup now retires unchanged owned legacy skill aliases previously retained by ADR 0008. Borrowed, unmanaged and edited content remains protected.
+
+### Bug Fixes
+
+* reuse saved setup and retire owned legacy aliases ([#170](https://github.com/infagent/merl/issues/170)) ([cc000dd](https://github.com/infagent/merl/commit/cc000dd53844b6bec4acf892f499709fecfdef32)), closes [#169](https://github.com/infagent/merl/issues/169)
+
 ## [0.4.0](https://github.com/infagent/merl/compare/v0.3.0...v0.4.0) (2026-10-27)
 
 
