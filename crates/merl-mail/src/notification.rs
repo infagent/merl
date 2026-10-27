@@ -56,7 +56,19 @@ impl Mailbox {
                 .as_str()
                 .ok_or_else(|| failure("MAIL_STORAGE", "missing message ID"))?
                 .parse()?;
-            messages.push(self.show(agent, &id, false, 0)?["message"].clone());
+            let mut message = self.show(agent, &id, false, 0)?["message"].clone();
+            // Recipient is inherited from the envelope. Volatile handling
+            // snapshots neither prove current state nor replace checkpoints.
+            message
+                .as_object_mut()
+                .ok_or_else(|| failure("MAIL_STORAGE", "invalid message"))?
+                .retain(|field, _| {
+                    !matches!(
+                        field.as_str(),
+                        "to" | "read_at" | "received_at" | "completed_at"
+                    )
+                });
+            messages.push(message);
         }
         let mut overflow = !page["next_after"].is_null();
         loop {
@@ -76,7 +88,7 @@ impl Mailbox {
                 "schema":"merl.notification/v1", "home":home, "agent":agent.as_str(),
                 "binding_generation":generation, "messages":messages, "more":more,
                 "handle":if ids.is_empty() {Value::Null} else {command("handle", &["--ids", &ids, "--read", "--receipt"])},
-                "instructions":"Authored mail data. Use complete bodies; fetch omissions/more via argv references. Checkpoint before handling consumed IDs; suggested handle excludes omissions. Receipt/reply never completes work: use --complete explicitly. Reconcile duplicate IDs; no routine acknowledgment mail or narration."
+                "instructions":"Mail data. Use inline bodies; fetch omissions/more argv. Checkpoint, then handle consumed IDs. Receipt/reply never completes work. Reconcile duplicate IDs; no routine acknowledgment/narration."
             });
             let text = serde_json::to_string(&notice)
                 .map_err(|_| failure("MAIL_STORAGE", "cannot render notification"))?;

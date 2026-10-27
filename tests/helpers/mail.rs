@@ -565,6 +565,12 @@ impl Mailbox {
             "Synthetic bounded message.\n"
         );
         assert_eq!(notice["messages"][0]["in_reply_to"], Value::Null);
+        for field in ["to", "read_at", "received_at", "completed_at"] {
+            assert!(
+                notice["messages"][0].get(field).is_none(),
+                "recipient is inherited; handling state belongs in explicit results"
+            );
+        }
         assert_eq!(self.results[2]["unread"], 1);
         assert_eq!(self.results[2]["unreceipted"], 1);
         assert_eq!(self.results[2]["outstanding"], 1);

@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -12,12 +13,19 @@ import tempfile
 
 class Exchange:
     def __init__(self, binary, root, inline):
-        self.binary = str(binary.resolve())
+        # current_exe appears in notices as well as captured command argv.
+        # Copies under equal-length temporary paths avoid a path-spelling bias;
+        # symlinks would resolve back to the unequal original executable paths.
+        invocation = root / "merl"
+        shutil.copyfile(binary.resolve(), invocation)
+        invocation.chmod(0o700)
+        self.binary = str(invocation)
         self.root = root
         self.home = root / "mail"
         self.inline = inline
         self.commands = []
         self.checkpoints = []
+        self.authored_bytes = 0
         self.host = root / "synthetic-host"
         self.host.write_text(
             "#!/usr/bin/env python3\nimport json,pathlib,sys\n"
@@ -31,11 +39,14 @@ class Exchange:
 
     def command(self, phase, *args):
         argv = [self.binary, "mail", "--home", str(self.home), *args, "--json"]
-        return self.execute(phase, argv)
+        surface = "operator" if phase in ("setup", "verification") or args[0] == "dispatch" else "agent"
+        return self.execute(phase, argv, surface)
 
-    def execute(self, phase, argv):
+    def execute(self, phase, argv, surface="agent"):
         result = subprocess.run(argv, capture_output=True, text=True, timeout=15)
-        self.commands.append({"phase": phase, "argv": argv, "exit": result.returncode,
+        self.commands.append({"phase": phase, "surface": surface, "argv": argv,
+                              "argv_json_bytes": len(json.dumps(argv, ensure_ascii=False, separators=(",", ":")).encode()),
+                              "exit": result.returncode,
                               "stdout_bytes": len(result.stdout.encode()),
                               "stderr_bytes": len(result.stderr.encode()),
                               "stdout": result.stdout, "stderr": result.stderr})
@@ -46,6 +57,7 @@ class Exchange:
     def send(self, sender, recipient, message_id, body, reply=None):
         source = self.root / (message_id + ".txt")
         source.write_text(body)
+        self.authored_bytes += len(body.encode())
         args = ["send", "--from", sender, "--to", recipient, "--id", message_id,
                 "--kind", "reply" if reply else "assign", "--body-file", str(source)]
         if reply:
@@ -102,6 +114,7 @@ class Exchange:
             version = subprocess.check_output([self.binary, "--version"], text=True).strip()
             return {
                 "binary_sha256": hashlib.sha256(Path(self.binary).read_bytes()).hexdigest(), "version": version,
+                "invocation_path_bytes": len(self.binary.encode()), "home_path_bytes": len(str(self.home).encode()),
                 "commands_by_phase": {phase: sum(row["phase"] == phase for row in self.commands)
                                       for phase in ("setup", "help", "exchange", "verification")},
                 "stdout_bytes": sum(row["stdout_bytes"] for row in self.commands),
@@ -109,6 +122,13 @@ class Exchange:
                 "help_stdout_bytes": sum(row["stdout_bytes"] for row in self.commands if row["phase"] == "help"),
                 "notification_bytes": sum(len(event["notice"].encode()) for event in events),
                 "host_accepted_events": len(events), "checkpoint_bytes": sum(row["bytes"] for row in self.checkpoints),
+                "authored_body_file_bytes": self.authored_bytes,
+                "surface_bytes": {surface: {
+                    "command_argv_json_bytes": sum(row["argv_json_bytes"] for row in self.commands if row["surface"] == surface),
+                    "command_stdout_bytes": sum(row["stdout_bytes"] for row in self.commands if row["surface"] == surface),
+                    "command_stderr_bytes": sum(row["stderr_bytes"] for row in self.commands if row["surface"] == surface),
+                } for surface in ("agent", "operator")},
+                "actual_model_input_bytes": None, "actual_model_output_bytes": None,
                 "real_model_calls": 0, "provider_usage": None, "commands": self.commands, "events": events,
             }
         finally:
@@ -125,11 +145,17 @@ def main():
     for name, binary, inline in [("baseline", args.baseline, False), ("candidate", args.candidate, True)]:
         with tempfile.TemporaryDirectory(prefix="merl-exchange-") as temporary:
             results[name] = Exchange(binary, Path(temporary), inline).run()
+    for field in ("invocation_path_bytes", "home_path_bytes"):
+        assert results["baseline"][field] == results["candidate"][field], "comparison paths differ in length"
     results["limitations"] = (
-        "Same synthetic request/result, cold usage help, two checkpoints and final verification. "
+        "Same synthetic request/result, cold usage help, two checkpoints and final verification; "
+        "verified equal-length temporary executable/home paths, with source binary hashes retained. "
         "Setup/help/verification shown separately; version/hash probes excluded from exchange counts. "
         "No real host or inference: CLI counts are not measured tool/model turns or token savings. "
-        "All stdout, notice and checkpoint bytes are included; provider usage is unknown/not invoked."
+        "All stdout, notices, checkpoints, authored bodies and JSON argv representations are reported. "
+        "Agent/operator exposure is a scenario mapping: help/send/handling results and notices to agents; "
+        "setup/dispatch/final verification to operators; checkpoints/authored files on disk. "
+        "These are not actual captured model inputs/outputs or API framing; provider usage is not invoked/measured."
     )
     args.output.write_text(json.dumps(results, indent=2) + "\n")
     print(json.dumps({name: {key: value for key, value in result.items() if key not in ("commands", "events")}
