@@ -37,8 +37,9 @@ checkpoints and frozen batches are never repointed or adopted after joins.
 Resume uses only `--name` and `--expected-generation`. `--team` is valid only with
 full creation inputs; other lane operations gain no team default. Missing actors
 return existing `TEAM_NOT_FOUND` or `TEAM_MEMBER_MISSING`; malformed names, missing
-identities and schema failures retain their existing typed errors. Invalid forms
-reject before runtime access and preserve requested JSON/human error routing.
+identities and schema failures retain their existing typed errors. Incomplete actor/default forms reject before creating runtime state and preserve
+requested JSON/human error routing. Selected actor lookup uses existing mail
+state read-only.
 
 Human `lane status` optionally adds `qualified_agent` to each mapped record and
 keeps raw `agent` visible. This is a best-effort read-only lookup of at most 16
