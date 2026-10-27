@@ -6,10 +6,7 @@ use std::{
     process::Command,
 };
 
-const SKILL: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/skills/merl-mail/SKILL.md"
-));
+const SKILL: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/skills/merl/SKILL.md"));
 
 #[derive(Debug)]
 struct Outcome {
@@ -98,7 +95,7 @@ impl SetupCase {
         let parent = case.profile.join("symlink skills");
         fs::create_dir(&parent).unwrap();
         #[cfg(unix)]
-        std::os::unix::fs::symlink(target, parent.join("merl-mail")).unwrap();
+        std::os::unix::fs::symlink(target, parent.join("merl")).unwrap();
         case.before = snapshot(&case.profile);
         case
     }
@@ -132,10 +129,10 @@ impl SetupCase {
         }
     }
     fn codex_skill(&self) -> PathBuf {
-        self.profile.join(".agents/skills/merl-mail/SKILL.md")
+        self.profile.join(".agents/skills/merl/SKILL.md")
     }
     fn claude_skill(&self) -> PathBuf {
-        self.profile.join(".claude/skills/merl-mail/SKILL.md")
+        self.profile.join(".claude/skills/merl/SKILL.md")
     }
     fn command(&self, args: &[String]) -> Outcome {
         let out = Command::new(env!("CARGO_BIN_EXE_merl"))
@@ -416,12 +413,7 @@ impl SetupCase {
             self.outcomes
         );
         assert_eq!(fs::read(self.codex_skill()).unwrap(), SKILL);
-        assert!(
-            !self
-                .profile
-                .join("new codex skills/merl-mail/SKILL.md")
-                .exists()
-        );
+        assert!(!self.profile.join("new codex skills/merl/SKILL.md").exists());
         assert!(!self.claude_skill().exists());
         assert!(!self.config().exists());
     }

@@ -47,6 +47,10 @@ A short write transaction validates identities and reply endpoints, then commits
 
 Mail labels identify coordination requests or information. They do not confer project authority. Only the addressed recipient can read or handle a delivery through the API. Local identity flags are trusted claims; the API does not authenticate a hostile same-user process.
 
+## Usage and canonical startup
+
+[ADR 0008](adr/0008-usage-and-startup.md) adds pure usage documentation and a short canonical skill. Both route to existing CLI contracts; no startup action infers roles, scope or sessions. Canonical publication reuses the settings lock and file journal, with receipt v2 adding a bounded retained-legacy association. Intent commits before canonical files and config last. Unmanaged legacy content is not journaled; unchanged owned/borrowed legacy entries keep their ownership and bytes. Config v1 remains readable by old mail tools, while old initializers reject v2. Incomplete v1 migration fails before writes; safe v1 uninstall keeps its version. Shared status rendering distinguishes both skill paths without runtime probes.
+
 ## Shared teams
 
 [ADR 0007](adr/0007-persistent-teams.md) adds shared scope and roster tables to mail-v1 without changing its schema version or existing mail records. A strict fresh identity insert and membership commit in one immediate transaction. An existing raw key conflicts; idempotent mail registration is never ownership proof. Matching committed membership recognizes a retry. Team schema metadata is independently versioned; unsupported versions fail closed.

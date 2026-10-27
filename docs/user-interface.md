@@ -1,8 +1,12 @@
 # Messaging interface and behavior
 
-The `merl` CLI is the public interface. `merl help` exposes init, status and the team/mail/lane groups; group help lists operations, and leaf help loads one contract. A skill is optional. Detailed examples are in [installation](installation.md), [mail setup](agent-mail.md) and [reviewer lanes](reviewer-lanes.md).
+The `merl` CLI is the public interface. `merl help` exposes usage, init, status and the team/mail/lane groups; group help lists operations, and leaf help loads one contract. A skill is optional. Detailed examples are in [installation](installation.md), [mail setup](agent-mail.md) and [reviewer lanes](reviewer-lanes.md).
 
 `merl --version` and `merl -V` print `merl VERSION` and exit successfully without selecting a mailbox. These standalone binary flags report the root package version used by the release archive; command JSON envelopes remain unchanged. See [installation](installation.md) for supported platforms and installation behavior.
+
+## Usage primer
+
+`merl usage` returns concise setup, explicit scope/identity, join/resume and individual handoff guidance. It reads no user settings, receipts, databases, project documents, processes or sockets and creates nothing. `--json` / `--format json` returns `merl.usage/v1` with `action`, `text` and related leaf topics; the last output flag wins. `merl help usage` loads `merl.help/v1`. Unknown options return `USAGE_INPUT`, exit 2, with no runtime access.
 
 ## Commands
 
@@ -41,6 +45,8 @@ Team results use `merl.team/v1`. Existing mail identity/handling/binding command
 
 Human init preview/results/show and top-level status share one summary layout: setup state, selected host skills, mailbox, settings and dispatcher. Preview says **will install/create/save/remove**; it does not present proposed files as already installed. Unchanged/borrowed files and retained mail are explicit. Apply confirmation remains separate; cancellation creates nothing. Paths beneath the user home display with `~`, while Enter keeps the underlying absolute default. The short next step loads relevant help instead of printing unresolved binding templates. Explicit `init --json` preserves its full existing record and remains noninteractive.
 
+Canonical setup uses receipt v2 and retains the known legacy skill association without rewriting its bytes; config v1 and explicit `merl.init/v1` output remain compatible. Incomplete v1 setup rejects migration without writes and offers safe new-binary uninstall/retry. Retained legacy status has `retained_legacy=true`; content/ownership/matches_bundle remain independent. See [canonical startup and recovery](installation.md#canonical-startup-and-legacy-recovery).
+
 Results use `merl.init/v1`; errors use the common envelope with `INIT_INPUT`, `INIT_CONFIG`, `INIT_CONFLICT`, `INIT_BUSY` or `INIT_IO`. Dispatcher state is `not_requested`, `not_started` or `missing_codex`. A start command is shown only for a detected real absolute Codex executable. Claude skill installation does not enable automatic Claude wake. See [installation](installation.md) for ownership, recovery and installer pipeline behavior.
 
 ## Setup status
@@ -55,7 +61,7 @@ Results use `merl.init/v1`; errors use the common envelope with `INIT_INPUT`, `I
 | `setup.pending`, `setup.issues` | Unfinished receipt intent and bounded local problem metadata |
 | `config.path`, `source`, `state` | Selected settings and its observation; source is `user_default`, `explicit`, or `bypassed` |
 | `mailbox.path`, `source`, `state` | Path and directory type only; source is `saved_default`, `receipt`, `explicit`, or `none` |
-| `skills[]` | Host, path, content state, receipt ownership and `matches_bundle`; no file contents |
+| `skills[]` | Host, path, content state, receipt ownership, `matches_bundle` and `retained_legacy`; no file contents |
 | `dispatcher.guidance`, `runtime` | Saved foreground/none/unknown guidance; runtime is always `not_checked` |
 | `next_step` | One relevant CLI/help command |
 

@@ -49,7 +49,10 @@ fn input(message: &str) -> SetupError {
 fn conflict(path: &Path) -> SetupError {
     failure(
         "INIT_CONFLICT",
-        &format!("Preserved conflicting setup path: {}", path.display()),
+        &format!(
+            "Preserved conflicting setup path: {}. Keep local edits and resolve this path before retrying; run merl help init for recovery guidance.",
+            path.display()
+        ),
     )
 }
 
@@ -266,6 +269,12 @@ pub struct FileChange {
     pub path: PathBuf,
     /// Proposed publication or retention.
     pub action: Change,
+    /// Selected host, or `None` for settings.
+    pub host: Option<String>,
+    /// True when retaining the known legacy skill beside the primary skill.
+    pub retained_legacy: bool,
+    /// Existing ownership, independent of the proposed action.
+    pub ownership: Ownership,
 }
 /// A validated setup plan's file effect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,7 +289,7 @@ pub enum Change {
     Borrowed,
     /// Remove unchanged owned bytes.
     Remove,
-    /// Preserve an unowned file during uninstall.
+    /// Keep a file without publishing new bytes.
     Retain,
 }
 impl<'a> Plan<'a> {

@@ -59,14 +59,14 @@ The shared summary/status update is implemented by #158 and requires a release c
 
 | Artifact | Default location |
 | --- | --- |
-| Codex user skill | `~/.agents/skills/merl-mail/SKILL.md` |
-| Claude user skill | `~/.claude/skills/merl-mail/SKILL.md` |
+| Codex user skill | `~/.agents/skills/merl/SKILL.md` |
+| Claude user skill | `~/.claude/skills/merl/SKILL.md` |
 | Linux settings | `$XDG_CONFIG_HOME/merl/config.json`, or `~/.config/merl/config.json` |
 | Linux suggested mailbox | `$XDG_DATA_HOME/merl/mail`, or `~/.local/share/merl/mail` |
 | macOS settings | `~/Library/Application Support/merl/config.json` |
 | macOS suggested mailbox | `~/Library/Application Support/merl/mail` |
 
-Host locations follow [Codex skills](https://learn.chatgpt.com/docs/build-skills) and [Claude local skills](https://code.claude.com/docs/en/skills). `CLAUDE_CONFIG_DIR` selects the Claude profile root; `--claude-skills-dir` or `--codex-skills-dir` explicitly chooses a personal skill root in another profile. Each receives `merl-mail/SKILL.md`. Setup uses the exact short skill embedded in that binary, offline, for either host; it never downloads a skill from main. AGENTS.md, CLAUDE.md, host settings, hooks and permissions are untouched.
+Host locations follow [Codex skills](https://learn.chatgpt.com/docs/build-skills) and [Claude local skills](https://code.claude.com/docs/en/skills). `CLAUDE_CONFIG_DIR` selects the Claude profile root; `--claude-skills-dir` or `--codex-skills-dir` explicitly chooses a personal skill root in another profile. New setup receives `merl/SKILL.md`. These canonical paths require a release containing #163; v0.3.0 installs `merl-mail/SKILL.md`. An upgrade retains that legacy file and ownership instead of rewriting it. Setup uses the exact short skill embedded in that binary, offline, for either host; it never downloads a skill from main. AGENTS.md, CLAUDE.md, host settings, hooks and permissions are untouched.
 
 `--config /absolute/config.json` selects the settings file and anchors its receipt/lock. Mail and lane commands use `--home` first and skip every settings read when it is supplied. Otherwise they read only the selected config or known user location. Missing settings ask for explicit home or setup; malformed settings return `INIT_CONFIG` before opening mail. Help, version and unknown commands do not load settings. There is no default production `/tmp` home or project-directory search.
 
@@ -76,11 +76,26 @@ With foreground instructions selected, `merl init --show --json` returns `dispat
 
 ## Ownership and failed setup
 
-Unchanged reruns report `unchanged`. Upgrades replace only unchanged Merl-owned files; identical pre-existing skills remain borrowed, even through recovery. Changed/foreign content or symlink destinations produce `INIT_CONFLICT`, including under `--yes`. The whole conflict plan is checked before writes. To move a recorded host destination, uninstall that host before selecting a new skill root. Files and setup metadata must be outside the mailbox subtree.
+Unchanged reruns report `unchanged`. Upgrades replace only unchanged Merl-owned files; identical pre-existing skills remain borrowed, even through recovery. Changed/foreign content or symlink destinations produce `INIT_CONFLICT`, including under `--yes`. The whole conflict plan is checked before writes. The known sibling transition from `ROOT/merl-mail/SKILL.md` to `ROOT/merl/SKILL.md` preserves the selected custom root and legacy ownership. Other destination moves still require uninstalling that host first. Borrowed or edited settings that would need different bytes also conflict before canonical publication. Files and setup metadata must be outside the mailbox subtree.
 
-Beside `config.json`, `.config.json.merl-init.json` records generated expected bytes, ownership and pending publication identity; it contains no backups of host settings or unrelated content. A stable zero-byte `.config.json.merl-init.lock` serializes setup. Files and new directories are private on Unix. Different config filenames use the corresponding basename in these sibling names.
+Beside `config.json`, `.config.json.merl-init.json` records generated expected bytes, ownership and pending publication identity. New canonical setup uses `merl.init-receipt/v2`, adding at most one retained legacy path per host while keeping configuration v1. V2 intent precedes canonical publication and settings come last; it contains no backups of host settings or unrelated content. A stable zero-byte `.config.json.merl-init.lock` serializes setup. Files and new directories are private on Unix. Different config filenames use the corresponding basename in these sibling names.
 
 An I/O failure or cancellation can leave recorded partial progress. `merl init --show --json` reports `incomplete`; retry the same options to finish it, or use scoped uninstall. Publication uses file identity to recognize interrupted writes without adopting foreign identical files. Unknown `.NAME.merl-stage-N` files are preserved; at most 32 staging slots are attempted per destination, and reads/receipts are bounded. If all slots are occupied, inspect that specific directory and preserve any unrecognized files before retrying. Filesystems must support hard links, atomic rename, Unix identity and sync; failures have no weaker fallback.
+
+## Canonical startup and legacy recovery
+
+After supporting setup, invoke `$merl scope/member starting guidance` in Codex or `/merl scope/member starting guidance` in Claude. The short skill reads `merl usage` and only needed leaf help. It asks for missing mailbox access, scope/identity and guidance only for a fresh member; resume reuses saved values. Role labels and example names imply no fixed organization. Startup neither replaces a binding nor starts a dispatcher.
+
+Preview/status distinguishes the canonical skill from retained legacy files, with ownership separate from matching the canonical bundle. Deliberately retained old bytes need not match that bundle. Scoped uninstall handles the selected host's canonical and retained legacy entries, removing only unchanged owned files; borrowed/unmanaged files and all mail survive. Modified recorded files remain conflicts, including during uninstall: preserve edits and reconcile the reported selected file before retrying. There is no force overwrite or detach mode.
+
+An incomplete v1 receipt cannot be migrated, and rejection writes nothing. With the selected config, the new binary can perform existing safe legacy uninstall and then retry setup:
+
+```sh
+merl init --config /absolute/config.json --uninstall --yes --json
+merl init --config /absolute/config.json --host codex --home /absolute/durable-mail --yes --json
+```
+
+Choose the required hosts/home explicitly after full removal. The diagnostic includes the actual selected config. Resuming with the original compatible initializer is another option. Legacy uninstall keeps v1 rather than promoting unfinished intent; interrupted v2 canonical setup instead resumes with the same current options. Older initializers reject v2 before writing, while their unqualified mail commands still read the saved v1 configuration. No running dispatcher is restarted by any upgrade.
 
 ## Supported systems
 
@@ -112,14 +127,14 @@ tar -xzf "$asset"
 ./merl/merl help
 ```
 
-On macOS, select the matching target and use `shasum -a 256 --check` for verification. Stop if verification fails. Move the verified binary into a user-writable directory on PATH. Each archive also contains `LICENSE`, `VERSION`, `REVISION`, and `skills/merl-mail/SKILL.md` from that exact release commit.
+On macOS, select the matching target and use `shasum -a 256 --check` for verification. Stop if verification fails. Move the verified binary into a user-writable directory on PATH. Each supporting archive also contains `LICENSE`, `VERSION`, `REVISION`, canonical `skills/merl/SKILL.md`, and unchanged compatibility `skills/merl-mail/SKILL.md` from that exact release commit. Releases through v0.3.0 contain only the legacy skill.
 
-Skill setup is optional. With a supporting binary, prefer `merl init` for ownership-aware setup and upgrades. For older releases or manual ownership, after verifying and unpacking the archive, copy `merl/skills/merl-mail/SKILL.md` into a skill location supported by your coding host. For Codex, an explicit fresh-directory setup is:
+Skill setup is optional. With a supporting binary, prefer `merl init` for ownership-aware setup and upgrades. For older releases or manual ownership, after verifying and unpacking the archive, copy the matching packaged skill (canonical `merl/skills/merl/SKILL.md` in a release containing #163) into a skill location supported by your coding host. For Codex with a canonical-skill archive, an explicit fresh-directory setup is:
 
 ```sh
 mkdir -p "$HOME/.agents/skills"
-mkdir "$HOME/.agents/skills/merl-mail"
-cp merl/skills/merl-mail/SKILL.md "$HOME/.agents/skills/merl-mail/SKILL.md"
+mkdir "$HOME/.agents/skills/merl"
+cp merl/skills/merl/SKILL.md "$HOME/.agents/skills/merl/SKILL.md"
 ```
 
 If the skill directory exists, inspect it before updating it; do not overwrite local guidance by accident. The archive's `VERSION` records which binary release the skill accompanies. Registration, binding and dispatcher startup remain explicit steps in the [mail setup guide](agent-mail.md).

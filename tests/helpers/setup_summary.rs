@@ -7,10 +7,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-const SKILL: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/skills/merl-mail/SKILL.md"
-));
+const SKILL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/skills/merl/SKILL.md"));
 
 #[derive(Debug)]
 struct Output {
@@ -144,7 +141,7 @@ impl SummaryCase {
         fs::write(
             case.users[modified]
                 .profile
-                .join(".agents/skills/merl-mail/SKILL.md"),
+                .join(".agents/skills/merl/SKILL.md"),
             "synthetic user edit preserved\n",
         )
         .unwrap();
@@ -154,7 +151,7 @@ impl SummaryCase {
             mail_home: user.profile.join("mail"),
             skills: BTreeMap::from([(
                 "codex".into(),
-                user.profile.join(".agents/skills/merl-mail/SKILL.md"),
+                user.profile.join(".agents/skills/merl/SKILL.md"),
             )]),
             foreground: true,
         };
@@ -176,7 +173,7 @@ impl SummaryCase {
         let borrowed = case.user("borrowed");
         let skill = case.users[borrowed]
             .profile
-            .join(".agents/skills/merl-mail/SKILL.md");
+            .join(".agents/skills/merl/SKILL.md");
         fs::create_dir_all(skill.parent().unwrap()).unwrap();
         fs::write(skill, SKILL).unwrap();
         case.setup(borrowed);
@@ -185,7 +182,7 @@ impl SummaryCase {
         fs::remove_file(
             case.users[missing]
                 .profile
-                .join(".claude/skills/merl-mail/SKILL.md"),
+                .join(".claude/skills/merl/SKILL.md"),
         )
         .unwrap();
         let outdated = case.user("outdated");
@@ -196,7 +193,7 @@ impl SummaryCase {
                 mail_home: user.profile.join("mail"),
                 skills: BTreeMap::from([(
                     "codex".into(),
-                    user.profile.join(".agents/skills/merl-mail/SKILL.md"),
+                    user.profile.join(".agents/skills/merl/SKILL.md"),
                 )]),
                 foreground: true,
             },
@@ -212,7 +209,7 @@ impl SummaryCase {
         case.setup(linked);
         let path = case.users[linked]
             .profile
-            .join(".agents/skills/merl-mail/SKILL.md");
+            .join(".agents/skills/merl/SKILL.md");
         fs::remove_file(&path).unwrap();
         let unrelated = case.users[linked].profile.join("unrelated-secret");
         fs::write(&unrelated, "unrelated synthetic secret").unwrap();
@@ -232,7 +229,7 @@ impl SummaryCase {
         let index = case.user("configured");
         let borrowed = case.users[index]
             .profile
-            .join(".agents/skills/merl-mail/SKILL.md");
+            .join(".agents/skills/merl/SKILL.md");
         fs::create_dir_all(borrowed.parent().unwrap()).unwrap();
         fs::write(borrowed, SKILL).unwrap();
         case.setup(index);
@@ -242,8 +239,8 @@ impl SummaryCase {
         let mut case = Self::new();
         let index = case.user("borrowed settings");
         let user = &case.users[index];
-        let codex = user.profile.join(".agents/skills/merl-mail/SKILL.md");
-        let claude = user.profile.join(".claude/skills/merl-mail/SKILL.md");
+        let codex = user.profile.join(".agents/skills/merl/SKILL.md");
+        let claude = user.profile.join(".claude/skills/merl/SKILL.md");
         fs::create_dir_all(codex.parent().unwrap()).unwrap();
         fs::write(&codex, SKILL).unwrap();
         fs::create_dir_all(user.config.parent().unwrap()).unwrap();

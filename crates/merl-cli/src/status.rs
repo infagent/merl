@@ -90,7 +90,7 @@ pub(super) fn observe(config: &Path, source: &str) -> Result<Value, CliError> {
     } else {
         json!({"path":null,"source":"none","state":"not_selected"})
     };
-    let skills=observed.skills.iter().map(|skill|json!({"host":skill.host,"path":skill.path,"state":file_name(skill.state),"ownership":match skill.ownership {Ownership::Owned=>"owned",Ownership::Borrowed=>"borrowed",Ownership::Unmanaged=>"unmanaged",Ownership::Pending=>"pending"},"matches_bundle":skill.matches_bundle})).collect::<Vec<_>>();
+    let skills=observed.skills.iter().map(|skill|json!({"host":skill.host,"path":skill.path,"state":file_name(skill.state),"ownership":ownership_name(skill.ownership),"matches_bundle":skill.matches_bundle,"retained_legacy":skill.retained_legacy})).collect::<Vec<_>>();
     let guidance = observed.settings.as_ref().map_or("unknown", |s| {
         if s.foreground { "foreground" } else { "none" }
     });
@@ -115,7 +115,11 @@ pub(super) fn observe(config: &Path, source: &str) -> Result<Value, CliError> {
         );
     }
     for skill in &observed.skills {
-        if !matches!(skill.state, FileState::Installed | FileState::Outdated) {
+        if !(matches!(skill.state, FileState::Installed | FileState::Outdated)
+            || (skill.retained_legacy
+                && skill.ownership == Ownership::Unmanaged
+                && matches!(skill.state, FileState::Different | FileState::Missing)))
+        {
             issues.push(json!({"kind":"skill","host":skill.host,"state":file_name(skill.state),"path":skill.path}));
         }
     }
@@ -128,6 +132,15 @@ pub(super) fn observe(config: &Path, source: &str) -> Result<Value, CliError> {
     Ok(
         json!({"schema":"merl.status/v1","setup":{"state":state,"pending":observed.pending,"issues":issues},"config":{"path":config,"source":source,"state":file_name(observed.config_state)},"mailbox":mailbox,"skills":skills,"dispatcher":{"runtime":"not_checked","guidance":guidance},"next_step":next}),
     )
+}
+
+fn ownership_name(ownership: Ownership) -> &'static str {
+    match ownership {
+        Ownership::Owned => "owned",
+        Ownership::Borrowed => "borrowed",
+        Ownership::Unmanaged => "unmanaged",
+        Ownership::Pending => "pending",
+    }
 }
 
 fn file_name(state: FileState) -> &'static str {
@@ -157,10 +170,7 @@ pub(super) fn preview(
     removing: bool,
 ) -> Result<Value, CliError> {
     let changes = plan.changes(hosts)?;
-    let skills=settings.skills.iter().map(|(host,path)| {
-        let action=changes.iter().find(|change|&change.path==path).map(|change|change.action);
-        json!({"host":host,"path":path,"state":"proposed","action":action.map_or("unchanged",|action|action_name(action,false))})
-    }).collect::<Vec<_>>();
+    let skills = changes.iter().filter_map(|change|change.host.as_ref().map(|host|json!({"host":host,"path":change.path,"state":"proposed","action":action_name(change.action,false),"retained_legacy":change.retained_legacy,"ownership":ownership_name(change.ownership)}))).collect::<Vec<_>>();
     let config_action = changes
         .iter()
         .find(|change| change.path == config)
@@ -183,7 +193,7 @@ fn action_name(action: Change, config: bool) -> &'static str {
         Change::Unchanged => "unchanged",
         Change::Borrowed => "unchanged; borrowed",
         Change::Remove => "will remove",
-        Change::Retain => "will retain; borrowed",
+        Change::Retain => "will retain",
     }
 }
 
@@ -195,14 +205,15 @@ pub(super) fn removal_result(
 ) -> Result<Value, CliError> {
     let mut record = observe(config, "selected")?;
     let mut skills = record["skills"].as_array().cloned().unwrap_or_default();
-    for (host, path) in &settings.skills {
+    for change in changes {
+        let Some(host) = &change.host else {
+            continue;
+        };
         if !hosts.is_empty() && !hosts.contains(host) {
             continue;
         }
-        if let Some(change) = changes.iter().find(|change| &change.path == path) {
-            skills.retain(|skill| skill["host"] != *host);
-            skills.push(json!({"host":host,"path":path,"state":if change.action==Change::Remove {"removed"} else {"retained"},"ownership":if change.action==Change::Retain {"borrowed"} else {"owned"}}));
-        }
+        skills.retain(|skill| skill["path"] != change.path.to_string_lossy().as_ref());
+        skills.push(json!({"host":host,"path":change.path,"state":if change.action==Change::Remove {"removed"} else {"retained"},"ownership":ownership_name(change.ownership),"retained_legacy":change.retained_legacy}));
     }
     record["skills"] = json!(skills);
     if record["mailbox"]["path"].is_null() {
@@ -332,11 +343,22 @@ fn skill_rows(record: &Value) -> Vec<String> {
                         state => state,
                     })
                     .to_owned();
-                if skill["action"].is_null() && skill["ownership"] == "borrowed" {
+                let legacy = skill["retained_legacy"] == true;
+                if legacy {
+                    if skill["action"].is_null()
+                        && matches!(text(&skill["state"]), "installed" | "different")
+                    {
+                        observed = "retained".into();
+                    }
+                    observed.push_str("; ");
+                    observed.push_str(text(&skill["ownership"]));
+                }
+                if !legacy && skill["action"].is_null() && skill["ownership"] == "borrowed" {
                     observed.push_str("; borrowed; preserved");
                 }
                 lines.push(format!(
-                    "  {label} skill: {observed} ({})",
+                    "  {label}{} skill: {observed} ({})",
+                    if legacy { " legacy" } else { "" },
                     path_label(&skill["path"])
                 ));
             }

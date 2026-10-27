@@ -29,6 +29,9 @@ class Release(unittest.TestCase):
         skill = self.root / "skills/merl-mail/SKILL.md"
         skill.parent.mkdir(parents=True)
         skill.write_text("synthetic skill")
+        canonical = self.root / "skills/merl/SKILL.md"
+        canonical.parent.mkdir(parents=True)
+        canonical.write_text("synthetic canonical skill")
         shutil.copyfile(INSTALLER, self.root / "install.sh")
         self.git("add", ".")
         self.git("-c", "user.name=Installer Test", "-c", "user.email=synthetic@example.invalid",
@@ -70,6 +73,7 @@ class Release(unittest.TestCase):
             self.assertEqual(contents.extractfile("merl/VERSION").read(), b"0.1.0\n")
             self.assertEqual(contents.extractfile("merl/REVISION").read(), (self.sha + "\n").encode())
             self.assertEqual(contents.extractfile("merl/skills/merl-mail/SKILL.md").read(), b"synthetic skill")
+            self.assertEqual(contents.extractfile("merl/skills/merl/SKILL.md").read(), b"synthetic canonical skill")
             self.assertEqual(contents.extractfile("merl/LICENSE").read(), b"synthetic license")
         result = self.package()
         self.assertEqual(result.returncode, 0, result.stderr)

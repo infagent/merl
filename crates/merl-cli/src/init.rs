@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const SKILL: &str = include_str!("../../../skills/merl-mail/SKILL.md");
+const SKILL: &str = include_str!("../../../skills/merl/SKILL.md");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(super) const BUNDLE: Bundle<'_> = Bundle {
     version: VERSION,
@@ -208,11 +208,14 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
                         .skills
                         .get(host)
                         .cloned()
-                        .unwrap_or_else(|| root.join("merl-mail/SKILL.md"))
+                        .unwrap_or_else(|| root.join("merl/SKILL.md"))
                 },
-                |_| root.join("merl-mail/SKILL.md"),
+                |_| root.join("merl/SKILL.md"),
             );
             settings.skills.insert(host.clone(), path);
+        }
+        for path in settings.skills.values_mut() {
+            *path = canonical_path(path);
         }
         if let Some(home) = args.values.get("--home") {
             settings.mail_home = home.into();
@@ -458,8 +461,22 @@ fn report(
     render_json(&value)
 }
 
+fn canonical_path(path: &std::path::Path) -> PathBuf {
+    if path
+        .parent()
+        .and_then(std::path::Path::file_name)
+        .is_some_and(|name| name == "merl-mail")
+    {
+        path.parent()
+            .and_then(std::path::Path::parent)
+            .map_or_else(|| path.to_owned(), |root| root.join("merl/SKILL.md"))
+    } else {
+        path.to_owned()
+    }
+}
+
 fn help(json_output: bool) -> Result<String, CliError> {
-    let value = json!({"schema":"merl.help/v1","command":"init","kind":"command","usage":"merl init [--global] [--host codex|claude|none] [--home <absolute-path>] [--config <absolute-path>] [--dispatcher foreground|none] [--codex-skills-dir <absolute-path>] [--claude-skills-dir <absolute-path>] [--yes] [--dry-run|--show|--uninstall] [--format human|json] [--json]","summary":"Set up matching user skills and a durable mailbox default; optionally show dispatcher start instructions.","description":"Interactive input uses the controlling terminal. JSON never prompts. Setup never binds sessions, starts services, or migrates mail. Uninstall preserves all mail and borrowed/modified files.","children":[],"arguments":["--host (repeatable)","--home","--config","--dispatcher","--codex-skills-dir","--claude-skills-dir","--global","--yes","--dry-run","--show","--uninstall"],"outcomes":["preview","configured","not_configured","unchanged","uninstalled"],"errors":["INIT_INPUT","INIT_CONFIG","INIT_CONFLICT","INIT_BUSY","INIT_IO"],"related":["mail bind","mail watch"],"example":"merl init --global --host codex --home /absolute/durable-mail --dispatcher foreground --yes --json","examples":["merl init","merl init --show --json","merl init --uninstall --yes"]});
+    let value = json!({"schema":"merl.help/v1","command":"init","kind":"command","usage":"merl init [--global] [--host codex|claude|none] [--home <absolute-path>] [--config <absolute-path>] [--dispatcher foreground|none] [--codex-skills-dir <absolute-path>] [--claude-skills-dir <absolute-path>] [--yes] [--dry-run|--show|--uninstall] [--format human|json] [--json]","summary":"Set up matching user skills and a durable mailbox default; optionally show dispatcher start instructions.","description":"Interactive input uses the controlling terminal. JSON never prompts. Setup never binds sessions, starts services, or migrates mail. Canonical merl setup retains legacy bytes/ownership and custom roots. Changed files or settings that cannot be rewritten conflict before publication; preserve edits and reconcile the reported path before retrying. Incomplete legacy setup can be safely uninstalled using the selected config and then retried. Uninstall preserves all mail and borrowed/modified files.","children":[],"arguments":["--host (repeatable)","--home","--config","--dispatcher","--codex-skills-dir","--claude-skills-dir","--global","--yes","--dry-run","--show","--uninstall"],"outcomes":["preview","configured","not_configured","unchanged","uninstalled"],"errors":["INIT_INPUT","INIT_CONFIG","INIT_CONFLICT","INIT_BUSY","INIT_IO"],"related":["mail bind","mail watch"],"example":"merl init --global --host codex --home /absolute/durable-mail --dispatcher foreground --yes --json","examples":["merl init","merl init --show --json","merl init --uninstall --yes"]});
     if json_output {
         render_json(&value)
     } else {
