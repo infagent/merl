@@ -9,7 +9,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-// Two short skills plus settings and interrupted intent fit well below this bound.
+// Primary skills, retained legacy entries, settings and interrupted intent
+// are bounded independently; ordinary short skills fit well below this limit.
 const MAX_FILE: u64 = 128 * 1024;
 const MAX_RECEIPT: u64 = 1024 * 1024;
 // Bounded collision slots preserve unrecognized files left before identity commit.
@@ -21,11 +22,111 @@ struct Entry {
     owned: bool,
     pending: Option<Value>,
 }
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Receipt {
+    version: u8,
+    legacy_skills: BTreeMap<String, PathBuf>,
     entries: BTreeMap<PathBuf, Entry>,
     directories: Vec<(PathBuf, Value)>,
     complete: bool,
+}
+impl Default for Receipt {
+    fn default() -> Self {
+        Self {
+            version: 2,
+            legacy_skills: BTreeMap::new(),
+            entries: BTreeMap::new(),
+            directories: Vec::new(),
+            complete: false,
+        }
+    }
+}
+
+fn receipt_version(value: &Value, path: &Path) -> Result<u8, SetupError> {
+    match value["schema"].as_str() {
+        Some("merl.init-receipt/v1") => Ok(1),
+        Some("merl.init-receipt/v2") => Ok(2),
+        _ => Err(conflict(path)),
+    }
+}
+
+fn known_transition(old: &Path, new: &Path) -> bool {
+    old.file_name().is_some_and(|n| n == "SKILL.md")
+        && old
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|n| n == "merl-mail")
+        && old
+            .parent()
+            .and_then(Path::parent)
+            .is_some_and(|root| root.join("merl/SKILL.md") == new)
+}
+
+pub(super) fn legacy_paths(
+    value: &Value,
+    config: &Path,
+) -> Result<BTreeMap<String, PathBuf>, SetupError> {
+    if receipt_version(value, config)? == 1 {
+        return Ok(BTreeMap::new());
+    }
+    let settings = super::Settings::parse(&value["settings"])?;
+    let entries = value["legacy_skills"]
+        .as_object()
+        .ok_or_else(|| conflict(config))?;
+    if entries.len() > 2 {
+        return Err(conflict(config));
+    }
+    entries
+        .iter()
+        .map(|(host, value)| {
+            let path = PathBuf::from(value.as_str().ok_or_else(|| conflict(config))?);
+            absolute(&path)?;
+            if !matches!(host.as_str(), "codex" | "claude")
+                || settings
+                    .skills
+                    .get(host)
+                    .is_none_or(|primary| !known_transition(&path, primary))
+            {
+                return Err(conflict(config));
+            }
+            Ok((host.clone(), path))
+        })
+        .collect()
+}
+
+fn retained(plan: &Plan<'_>, receipt: &Receipt) -> Result<BTreeMap<String, PathBuf>, SetupError> {
+    let mut paths = receipt.legacy_skills.clone();
+    let recorded = recorded_settings(&plan.config)?;
+    for (host, primary) in &plan.settings.skills {
+        if primary
+            .parent()
+            .and_then(Path::file_name)
+            .is_none_or(|n| n != "merl")
+        {
+            continue;
+        }
+        let root = primary
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| input("skill path needs a root"))?;
+        let legacy = root.join("merl-mail/SKILL.md");
+        check_path(&legacy)?;
+        let exists = match fs::symlink_metadata(&legacy) {
+            Ok(m) if m.is_file() => true,
+            Ok(_) => return Err(conflict(&legacy)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e.into()),
+        };
+        if exists
+            || receipt.entries.contains_key(&legacy)
+            || recorded
+                .as_ref()
+                .is_some_and(|s| s.skills.get(host) == Some(&legacy))
+        {
+            paths.insert(host.clone(), legacy);
+        }
+    }
+    Ok(paths)
 }
 
 pub(super) fn read(path: &Path) -> Result<Option<String>, SetupError> {
@@ -86,9 +187,7 @@ pub(super) fn is_complete(config: &Path) -> Result<bool, SetupError> {
         return Ok(read(config)?.is_some());
     };
     let value: Value = serde_json::from_str(&text).map_err(|_| conflict(&path))?;
-    if value["schema"] != "merl.init-receipt/v1" {
-        return Err(conflict(&path));
-    }
+    receipt_version(&value, &path)?;
     if value["complete"] != true {
         return Ok(false);
     }
@@ -105,9 +204,7 @@ pub(super) fn recorded_settings(config: &Path) -> Result<Option<super::Settings>
     read_limit(&path, MAX_RECEIPT)?
         .map(|s| {
             let value: Value = serde_json::from_str(&s).map_err(|_| conflict(&path))?;
-            if value["schema"] != "merl.init-receipt/v1" {
-                return Err(conflict(&path));
-            }
+            receipt_version(&value, &path)?;
             super::Settings::parse(&value["settings"])
         })
         .transpose()
@@ -125,9 +222,7 @@ pub(super) fn receipt_value(config: &Path) -> Result<Option<Value>, SetupError> 
     read_limit(&path, MAX_RECEIPT)?
         .map(|text| {
             let value: Value = serde_json::from_str(&text).map_err(|_| conflict(&path))?;
-            if value["schema"] != "merl.init-receipt/v1" {
-                return Err(conflict(&path));
-            }
+            receipt_version(&value, &path)?;
             Ok(value)
         })
         .transpose()
@@ -137,9 +232,10 @@ pub(super) fn changes(
     plan: &Plan<'_>,
     hosts: &[String],
 ) -> Result<Vec<super::FileChange>, SetupError> {
-    use super::{Change, FileChange};
+    use super::{Change, FileChange, Ownership};
     validate(plan)?;
     let receipt = load(plan)?;
+    let legacy = retained(plan, &receipt)?;
     let mut wanted = desired(plan);
     if plan.removing {
         wanted.retain(|path, _| {
@@ -154,44 +250,91 @@ pub(super) fn changes(
             wanted.insert(plan.config.clone(), remaining.bytes());
         }
     }
-    wanted
-        .into_iter()
-        .map(|(path, text)| {
-            let actual = read(&path)?;
-            let owned = receipt.entries.get(&path).is_some_and(|entry| entry.owned);
-            let removing = plan.removing && (path != plan.config || hosts.is_empty());
-            if !removing && actual.as_ref().is_some_and(|actual| actual != &text) && !owned {
-                return Err(conflict(&path));
-            }
-            let action = if removing {
-                if owned {
-                    Change::Remove
+    let ownership = |path: &Path| {
+        receipt
+            .entries
+            .get(path)
+            .map_or(Ownership::Unmanaged, |entry| {
+                if entry.pending.is_some() {
+                    Ownership::Pending
+                } else if entry.owned {
+                    Ownership::Owned
                 } else {
-                    Change::Retain
+                    Ownership::Borrowed
                 }
-            } else if actual.is_none() {
-                Change::Create
-            } else if actual.as_deref() != Some(&text) {
-                Change::Update
-            } else if owned {
-                Change::Unchanged
+            })
+    };
+    let mut changes = Vec::new();
+    for (path, text) in wanted {
+        let actual = read(&path)?;
+        let owned = receipt.entries.get(&path).is_some_and(|entry| entry.owned);
+        let removing = plan.removing && (path != plan.config || hosts.is_empty());
+        let action = if removing {
+            if owned {
+                Change::Remove
             } else {
-                Change::Borrowed
-            };
-            Ok(FileChange { path, action })
-        })
-        .collect()
+                Change::Retain
+            }
+        } else if actual.is_none() {
+            Change::Create
+        } else if actual.as_deref() != Some(&text) && !owned {
+            return Err(conflict(&path));
+        } else if actual.as_deref() != Some(&text) {
+            Change::Update
+        } else if owned {
+            Change::Unchanged
+        } else {
+            Change::Borrowed
+        };
+        let mut recorded_ownership = ownership(&path);
+        if action == Change::Borrowed && recorded_ownership == Ownership::Unmanaged {
+            recorded_ownership = Ownership::Borrowed;
+        }
+        let host = plan
+            .settings
+            .skills
+            .iter()
+            .find(|(_, target)| *target == &path)
+            .map(|(host, _)| host.clone());
+        changes.push(FileChange {
+            ownership: recorded_ownership,
+            path,
+            action,
+            host,
+            retained_legacy: false,
+        });
+    }
+    for (host, path) in legacy {
+        if plan.removing && !hosts.is_empty() && !hosts.contains(&host) {
+            continue;
+        }
+        let owner = ownership(&path);
+        let action = if plan.removing && owner == Ownership::Owned {
+            Change::Remove
+        } else {
+            Change::Retain
+        };
+        changes.push(FileChange {
+            path,
+            action,
+            host: Some(host),
+            retained_legacy: true,
+            ownership: owner,
+        });
+    }
+    Ok(changes)
 }
+
 fn load(plan: &Plan<'_>) -> Result<Receipt, SetupError> {
     let p = receipt_path(plan);
     let Some(text) = read_limit(&p, MAX_RECEIPT)? else {
         return Ok(Receipt::default());
     };
     let value: Value = serde_json::from_str(&text).map_err(|_| conflict(&p))?;
-    if value["schema"] != "merl.init-receipt/v1" {
-        return Err(conflict(&p));
-    }
+    receipt_version(&value, &p)?;
     let mut receipt = Receipt {
+        version: receipt_version(&value, &p)?,
+        legacy_skills: legacy_paths(&value, &p)?,
         complete: value["complete"] == true,
         ..Receipt::default()
     };
@@ -257,10 +400,11 @@ fn save(plan: &Plan<'_>, receipt: &Receipt) -> Result<(), SetupError> {
         .iter()
         .map(|(path, e)| json!({"path":path,"text":e.text,"owned":e.owned,"pending":e.pending}))
         .collect::<Vec<_>>();
-    let text = format!(
-        "{}\n",
-        json!({"schema":"merl.init-receipt/v1","version":plan.bundle.version,"complete":receipt.complete,"settings":plan.settings.value(),"files":files,"directories":receipt.directories.iter().map(|(path,id)|json!({"path":path,"identity":id})).collect::<Vec<_>>()})
-    );
+    let mut value = json!({"schema":if receipt.version == 1 {"merl.init-receipt/v1"}else{"merl.init-receipt/v2"},"version":plan.bundle.version,"complete":receipt.complete,"settings":plan.settings.value(),"files":files,"directories":receipt.directories.iter().map(|(path,id)|json!({"path":path,"identity":id})).collect::<Vec<_>>()});
+    if receipt.version == 2 {
+        value["legacy_skills"] = json!(receipt.legacy_skills);
+    }
+    let text = format!("{value}\n");
     if text.len() as u64 > MAX_RECEIPT {
         return Err(input("setup receipt exceeds its bounded capacity"));
     }
@@ -290,12 +434,43 @@ fn comparison_path(path: &Path) -> Result<PathBuf, SetupError> {
     ))
 }
 
+fn validate_transition(plan: &Plan<'_>, receipt: &Receipt) -> Result<(), SetupError> {
+    if !plan.removing
+        && receipt.version == 1
+        && (!receipt.complete || receipt.entries.values().any(|e| e.pending.is_some()))
+    {
+        let quoted = format!(
+            "'{}'",
+            plan.config.display().to_string().replace('\'', "'\\''")
+        );
+        return Err(input(&format!(
+            "Legacy setup is incomplete; no upgrade was written. Use merl init --config {quoted} --uninstall --yes, then retry init. Alternatively finish setup with the original compatible initializer."
+        )));
+    }
+    let recorded = recorded_settings(&plan.config)?;
+    if plan.settings.skills.iter().any(|(host, path)| {
+        recorded.as_ref().is_some_and(|old| {
+            old.skills.get(host).is_some_and(|old_path| {
+                old_path != path && (plan.removing || !known_transition(old_path, path))
+            })
+        })
+    }) {
+        return Err(input(
+            "uninstall a host before moving its recorded skill destination",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn validate(plan: &Plan<'_>) -> Result<(), SetupError> {
     absolute(&plan.settings.mail_home)?;
     check_path(&plan.settings.mail_home)?;
     if plan.settings.mail_home.exists() && !plan.settings.mail_home.is_dir() {
         return Err(conflict(&plan.settings.mail_home));
     }
+    let receipt = load(plan)?;
+    validate_transition(plan, &receipt)?;
+    let legacy = retained(plan, &receipt)?;
     let mut paths = vec![
         plan.config.clone(),
         receipt_path(plan),
@@ -309,6 +484,7 @@ pub(super) fn validate(plan: &Plan<'_>) -> Result<(), SetupError> {
         }
         paths.push(path.clone());
     }
+    paths.extend(legacy.values().cloned());
     let mail = comparison_path(&plan.settings.mail_home)?;
     for (index, path) in paths.iter().enumerate() {
         check_path(path)?;
@@ -325,7 +501,6 @@ pub(super) fn validate(plan: &Plan<'_>) -> Result<(), SetupError> {
             }
         }
     }
-    let receipt = load(plan)?;
     // Retained entries also participate in overlap and content checks.
     for path in receipt.entries.keys() {
         let resolved = comparison_path(path)?;
@@ -338,18 +513,6 @@ pub(super) fn validate(plan: &Plan<'_>) -> Result<(), SetupError> {
                 return Err(input("recorded setup destinations overlap"));
             }
         }
-    }
-    let recorded = recorded_settings(&plan.config)?;
-    if plan.settings.skills.iter().any(|(host, path)| {
-        recorded.as_ref().is_some_and(|old| {
-            old.skills
-                .get(host)
-                .is_some_and(|old_path| old_path != path)
-        })
-    }) {
-        return Err(input(
-            "uninstall a host before moving its recorded skill destination",
-        ));
     }
     for (path, entry) in &receipt.entries {
         let actual = read(path)?;
@@ -593,6 +756,8 @@ pub(super) fn apply(
     let _guard = lock(plan, &mut initial)?;
     validate(plan)?;
     let mut receipt = load(plan)?;
+    receipt.legacy_skills = retained(plan, &receipt)?;
+    receipt.version = 2;
     receipt.directories.extend(initial.directories);
     receipt.complete = false;
     save(plan, &receipt)?;
@@ -632,6 +797,9 @@ pub(super) fn uninstall(
     for (host, path) in &plan.settings.skills {
         if all || hosts.contains(host) {
             selected.push(path.clone());
+            if let Some(legacy) = receipt.legacy_skills.get(host) {
+                selected.push(legacy.clone());
+            }
         }
     }
     if all {
@@ -675,6 +843,9 @@ pub(super) fn uninstall(
             published,
         )?;
         receipt.complete = true;
+        receipt
+            .legacy_skills
+            .retain(|host, _| !hosts.contains(host));
         let remaining_plan = Plan {
             config: plan.config.clone(),
             settings: remaining,
@@ -682,6 +853,9 @@ pub(super) fn uninstall(
             removing: true,
         };
         save(&remaining_plan, &receipt)?;
+    }
+    if all {
+        receipt.legacy_skills.clear();
     }
     if all && receipt.entries.is_empty() {
         fs::remove_file(receipt_path(plan))?;

@@ -23,7 +23,7 @@ TARGETS = (
     "x86_64-apple-darwin", "aarch64-apple-darwin",
 )
 MEMBERS = {"merl/merl", "merl/VERSION", "merl/REVISION", "merl/LICENSE",
-           "merl/skills/merl-mail/SKILL.md"}
+           "merl/skills/merl-mail/SKILL.md", "merl/skills/merl/SKILL.md"}
 
 
 def require(condition, message):
@@ -67,6 +67,7 @@ def package(args):
         "merl/merl": binary.read_bytes(), "merl/VERSION": (args.tag[1:] + "\n").encode(),
         "merl/REVISION": (args.sha + "\n").encode(), "merl/LICENSE": Path("LICENSE").read_bytes(),
         "merl/skills/merl-mail/SKILL.md": Path("skills/merl-mail/SKILL.md").read_bytes(),
+        "merl/skills/merl/SKILL.md": Path("skills/merl/SKILL.md").read_bytes(),
     }
     directory = Path(args.output)
     directory.mkdir(parents=True, exist_ok=True)
@@ -94,7 +95,9 @@ def check_archive(path, tag, sha):
             require(member.size <= 128, "oversized archive metadata")
             require(archive.extractfile(member).read().decode() == value + "\n",
                     f"archive {name} differs from release: {path.name}")
-        for name, local in [("merl/LICENSE", "LICENSE"), ("merl/skills/merl-mail/SKILL.md", "skills/merl-mail/SKILL.md")]:
+        for name, local in [("merl/LICENSE", "LICENSE"),
+                            ("merl/skills/merl-mail/SKILL.md", "skills/merl-mail/SKILL.md"),
+                            ("merl/skills/merl/SKILL.md", "skills/merl/SKILL.md")]:
             require(archive.extractfile(name).read() == Path(local).read_bytes(),
                     f"archive {name} differs from frozen source")
 

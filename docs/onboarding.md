@@ -2,6 +2,10 @@
 
 This walkthrough uses a disposable directory and synthetic identities. It changes no real home configuration or startup service. The first binary release must finish before the public installer URL works; until then, maintainers use the local-artifact check below. See [installation](installation.md) for supported systems and exact-version downloads.
 
+## Existing-agent startup
+
+With a release containing #163, `merl usage` gives a short primer without reading setup/runtime state. Optional matching setup installs the short canonical skill: invoke `$merl scope/member starting guidance` in Codex or `/merl scope/member starting guidance` in Claude. Use a supplied mailbox home or an explicitly selected saved default. New members supply guidance once; resume loads it. Missing scope/access is requested rather than inferred. See [teams](teams.md) for arbitrary/roleless scopes and cross-scope handoffs, and [installation](installation.md#canonical-startup-and-legacy-recovery) for the retained `merl-mail` transition. V0.3.0 does not include this canonical startup.
+
 ## Install and send
 
 After a binary release is published, run in one shell:
@@ -42,7 +46,7 @@ Expect zero unreceipted messages and zero outstanding requests. These commands w
 
 ## Optional skill and wake
 
-The CLI works without a skill. If wanted, obtain and verify the archive for the installed version, then copy its matching `skills/merl-mail/SKILL.md` to an explicitly chosen supported host location. Inspect an existing destination before replacing it. The [manual installation steps](installation.md#manual-download-and-optional-skill) cover verification and setup. Keep project roles, checkpoints and lessons in [project guidance](agent-roles.md), outside that short skill.
+The CLI works without a skill. If wanted, obtain and verify the archive for the installed version, then copy its matching canonical `skills/merl/SKILL.md` (or legacy `merl-mail` in older archives) to an explicitly chosen supported host location. Inspect an existing destination before replacing it. The [manual installation steps](installation.md#manual-download-and-optional-skill) cover verification and setup. Keep project roles, checkpoints and lessons in [project guidance](agent-roles.md), outside that short skill.
 
 Automatic wake is currently verified with Codex CLI 0.164.0 and its existing local control socket. Other coding hosts can invoke the CLI, but automatic Claude-to-Codex or Codex-to-Claude wake/restart has not been established. This is local same-user messaging, not a remote transport or authentication boundary.
 

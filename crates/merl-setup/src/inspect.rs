@@ -88,6 +88,8 @@ pub struct SkillState {
     pub ownership: Ownership,
     /// Whether current bytes equal this binary's bundled skill.
     pub matches_bundle: bool,
+    /// Retained compatibility path, never a canonical publication target.
+    pub retained_legacy: bool,
 }
 /// Setup facts from one selected settings file and its bounded receipt.
 #[derive(Debug)]
@@ -135,6 +137,16 @@ pub fn inspect(config: &Path, bundle: Bundle<'_>) -> Result<Inspection, SetupErr
             pending |= !entry["pending"].is_null();
         }
     }
+    let legacy = receipt
+        .as_ref()
+        .map(|v| files::legacy_paths(v, config))
+        .transpose()?
+        .unwrap_or_default();
+    let skill_settings = if pending {
+        recorded_settings.clone().or_else(|| saved.clone())
+    } else {
+        saved.clone().or_else(|| recorded_settings.clone())
+    };
     let settings = saved.or(recorded_settings);
     let config_text = files::read(config)?;
     let config_state = if let Some(text) = &config_text {
@@ -160,11 +172,20 @@ pub fn inspect(config: &Path, bundle: Bundle<'_>) -> Result<Inspection, SetupErr
     if let Some(settings) = &settings {
         mailbox = Some(DirectoryState::inspect(&settings.mail_home)?);
         complete &= mailbox == Some(DirectoryState::Exists);
-        for (host, path) in &settings.skills {
-            let skill = observe_skill(host, path, recorded.get(path).copied(), bundle);
+    }
+    if let Some(skill_settings) = &skill_settings {
+        for (host, path) in &skill_settings.skills {
+            let skill = observe_skill(host, path, recorded.get(path).copied(), bundle, false);
             complete &= matches!(skill.state, FileState::Installed | FileState::Outdated);
             skills.push(skill);
         }
+    }
+    for (host, path) in legacy {
+        let skill = observe_skill(&host, &path, recorded.get(&path).copied(), bundle, true);
+        complete &= matches!(skill.state, FileState::Installed | FileState::Outdated)
+            || (skill.ownership == Ownership::Unmanaged
+                && matches!(skill.state, FileState::Different | FileState::Missing));
+        skills.push(skill);
     }
 
     let state = if settings.is_none() {
@@ -190,6 +211,7 @@ fn observe_skill(
     path: &Path,
     entry: Option<&serde_json::Value>,
     bundle: Bundle<'_>,
+    retained_legacy: bool,
 ) -> SkillState {
     let ownership = entry.map_or(Ownership::Unmanaged, |entry| {
         if !entry["pending"].is_null() {
@@ -207,13 +229,12 @@ fn observe_skill(
     };
     let matches_bundle = text.as_ref().ok().and_then(|text| text.as_deref()) == Some(bundle.skill);
     let state = match text {
+        Ok(_) if entry.is_some_and(|entry| !entry["pending"].is_null()) => FileState::Pending,
         Ok(None) => FileState::Missing,
         Ok(Some(text)) => {
             if let Some(entry) = entry {
-                if !entry["pending"].is_null() {
-                    FileState::Pending
-                } else if entry["text"].as_str() == Some(&text) {
-                    if matches_bundle {
+                if entry["text"].as_str() == Some(&text) {
+                    if matches_bundle || retained_legacy {
                         FileState::Installed
                     } else {
                         FileState::Outdated
@@ -235,5 +256,6 @@ fn observe_skill(
         state,
         ownership,
         matches_bundle,
+        retained_legacy,
     }
 }
