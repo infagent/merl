@@ -3,6 +3,7 @@
 use crate::{CliError, render_json};
 use merl_mail::{
     Key, MAX_BODY_BYTES, MailError, Mailbox,
+    announcement::{AnnouncementSpec, MAX_RECIPIENTS, MAX_ROLE_FILTERS, Selection},
     team::{MAX_REFS, MemberSpec, TeamSpec},
 };
 use serde_json::{Value, json};
@@ -30,9 +31,14 @@ pub(super) fn missing() -> CliError {
     clippy::too_many_lines,
     reason = "one bounded parser validates the team leaf contracts before I/O"
 )]
-pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, CliError> {
+pub(super) fn execute(
+    a: &[String],
+    json_output: &mut bool,
+    clock: &impl Fn() -> Result<i64, CliError>,
+) -> Result<String, CliError> {
     let mut options = BTreeMap::new();
     let mut refs = Vec::new();
+    let mut roles = Vec::new();
     let mut words = Vec::new();
     let mut help = a[0] == "help";
     let mut i = if help { 2 } else { 1 };
@@ -48,12 +54,23 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
                 };
             }
             "--help" | "-h" => help = true,
+            flag @ ("--all" | "--include-self") => {
+                if options.insert(flag, "").is_some() {
+                    return Err(input("duplicate option"));
+                }
+            }
             flag @ ("--home" | "--config" | "--name" | "--coordinator" | "--scope-file"
             | "--team" | "--member" | "--role" | "--description-file"
-            | "--guidance-ref" | "--after" | "--limit" | "--project") => {
+            | "--guidance-ref" | "--after" | "--limit" | "--project" | "--from"
+            | "--id" | "--body-file") => {
                 i += 1;
                 let value = a.get(i).ok_or_else(|| input("option requires a value"))?;
-                if flag == "--guidance-ref" {
+                if flag == "--role" {
+                    if roles.len() >= MAX_ROLE_FILTERS {
+                        return Err(input("at most 16 supplied roles"));
+                    }
+                    roles.push(value.clone());
+                } else if flag == "--guidance-ref" {
                     if refs.len() >= MAX_REFS {
                         return Err(input("at most 16 guidance references"));
                     }
@@ -83,6 +100,11 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
     }
     if !refs.is_empty() && !matches!(operation, "create" | "join") {
         return Err(input("guidance references apply only to create/join"));
+    }
+    if (!roles.is_empty() && !matches!(operation, "join" | "announce"))
+        || (operation == "join" && roles.len() > 1)
+    {
+        return Err(input("roles apply to join (one) or announce (up to 16)"));
     }
     let get = |flag: &str| {
         options
@@ -120,7 +142,7 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
     let join = if operation == "join" {
         Some(MemberSpec::new(
             key("--member")?,
-            options.get("--role").map(|r| (*r).to_owned()),
+            roles.first().cloned(),
             read_brief(get("--description-file")?)?,
             refs,
         )?)
@@ -131,6 +153,32 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
         None
     } else {
         Some(key("--team")?)
+    };
+    let id = if matches!(operation, "announce" | "announcement") {
+        Some(key("--id")?)
+    } else {
+        None
+    };
+    let announcement = if operation == "announce" {
+        let target = team.as_ref().ok_or_else(missing)?;
+        let from = get("--from")?;
+        let (author_team, author_member) = from.split_once('/').unwrap_or((target.as_str(), from));
+        let selection = match (options.contains_key("--all"), roles.is_empty()) {
+            (true, true) => Selection::all(),
+            (false, false) => Selection::roles(roles)?,
+            _ => return Err(input("select exactly one of --all or repeated --role")),
+        };
+        Some(AnnouncementSpec::new(
+            key("--id")?,
+            target.clone(),
+            author_team.parse()?,
+            author_member.parse()?,
+            read_body(get("--body-file")?)?,
+            selection,
+            options.contains_key("--include-self"),
+        )?)
+    } else {
+        None
     };
     let member = if operation == "member" {
         Some(key("--member")?)
@@ -152,7 +200,7 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
         options.get("--home").copied(),
         options.get("--config").copied(),
     )?;
-    let mut store = if matches!(operation, "create" | "join") {
+    let mut store = if matches!(operation, "create" | "join" | "announce") {
         Mailbox::open(&home)?
     } else {
         match Mailbox::open_existing(&home)? {
@@ -163,6 +211,12 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
                     operation,
                     *json_output,
                 );
+            }
+            None if operation == "announcement" => {
+                return Err(CliError {
+                    code: "TEAM_ANNOUNCEMENT_NOT_FOUND",
+                    message: "accepted announcement not found".into(),
+                });
             }
             None => return Err(missing()),
         }
@@ -177,6 +231,34 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
                 .ok_or_else(|| input("missing member guidance"))?,
             &fresh_key()?,
         )?,
+        "announce" => {
+            let id = id.as_ref().ok_or_else(|| input("missing ID"))?;
+            // Peek before OS randomness; the transaction authoritatively rechecks.
+            let exists = store.announcement(id)?.is_some();
+            let candidates = if exists {
+                Vec::new()
+            } else {
+                (0..MAX_RECIPIENTS)
+                    .map(|_| fresh_key())
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            store.announce(
+                announcement
+                    .as_ref()
+                    .ok_or_else(|| input("missing announcement"))?,
+                &candidates,
+                if exists { 0 } else { clock()? },
+            )?
+        }
+        "announcement" => {
+            let record = store
+                .announcement(id.as_ref().ok_or_else(|| input("missing ID"))?)?
+                .filter(|record| record["team"] == team.as_ref().map_or("", Key::as_str));
+            record.ok_or_else(|| CliError {
+                code: "TEAM_ANNOUNCEMENT_NOT_FOUND",
+                message: "accepted announcement not found in this scope".into(),
+            })?
+        }
         "list" => store.teams(project.as_ref(), after.as_ref(), limit)?,
         "show" => store.show_team(team.as_ref().ok_or_else(missing)?)?,
         "member" => store.team_member(
@@ -201,14 +283,28 @@ fn output(mut data: Value, operation: &str, json_output: bool) -> Result<String,
     }
 }
 
-fn read_brief(path: &str) -> Result<String, CliError> {
+fn read_bytes(path: &str) -> Result<Vec<u8>, CliError> {
     let mut bytes = Vec::new();
     File::open(path)
         .map_err(MailError::from)?
         .take((MAX_BODY_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(MailError::from)?;
-    String::from_utf8(bytes).map_err(|_| input("guidance must be UTF-8"))
+    Ok(bytes)
+}
+fn read_brief(path: &str) -> Result<String, CliError> {
+    String::from_utf8(read_bytes(path)?).map_err(|_| input("guidance must be UTF-8"))
+}
+fn read_body(path: &str) -> Result<String, CliError> {
+    let bytes = read_bytes(path)?;
+    let invalid = || CliError {
+        code: "MAIL_INPUT",
+        message: "body must be UTF-8 and at most 8192 bytes".into(),
+    };
+    if bytes.len() > MAX_BODY_BYTES {
+        return Err(invalid());
+    }
+    String::from_utf8(bytes).map_err(|_| invalid())
 }
 fn fresh_key() -> Result<Key, CliError> {
     // The supported Linux/macOS release targets provide OS randomness here.
@@ -226,7 +322,13 @@ fn fresh_key() -> Result<Key, CliError> {
 }
 
 fn human(data: &Value, operation: &str) -> Result<String, CliError> {
-    let outcome = data["outcome"].as_str().unwrap_or("saved");
+    let outcome = data["outcome"]
+        .as_str()
+        .unwrap_or(if operation == "announcement" {
+            "accepted"
+        } else {
+            "saved"
+        });
     let mut text = match operation {
         "create" | "show" => format!(
             "Team {} ({outcome}, generation {})\nCoordinator: {} (local convention)\nScope:\n{}\n",
@@ -244,6 +346,7 @@ fn human(data: &Value, operation: &str) -> Result<String, CliError> {
             data["team"].as_str().unwrap_or(""),
             data["member"].as_str().unwrap_or("")
         ),
+        "announce" | "announcement" => announcement_human(data, outcome)?,
         "list" => {
             let mut text = String::from("Scopes\n");
             if let Some(teams) = data["teams"].as_array() {
@@ -302,7 +405,38 @@ fn human(data: &Value, operation: &str) -> Result<String, CliError> {
     Ok(text)
 }
 
-const COMMANDS: &[&str] = &["create", "join", "show", "members", "member", "list"];
+fn announcement_human(data: &Value, outcome: &str) -> Result<String, CliError> {
+    let mut text = format!(
+        "Announcement {} in {} ({outcome})\nAuthor: {}\nRecipients: {} (durable notes; delivery and handling are separate)\n",
+        data["id"].as_str().unwrap_or(""),
+        data["team"].as_str().unwrap_or(""),
+        data["author"]["qualified"].as_str().unwrap_or(""),
+        data["recipient_count"]
+    );
+    if let Some(recipients) = data["recipients"].as_array() {
+        for recipient in recipients {
+            writeln!(
+                text,
+                "  {}  message: {}",
+                recipient["qualified"].as_str().unwrap_or(""),
+                recipient["message_id"].as_str().unwrap_or("")
+            )
+            .map_err(|_| input("cannot format announcement"))?;
+        }
+    }
+    Ok(text)
+}
+
+const COMMANDS: &[&str] = &[
+    "create",
+    "join",
+    "show",
+    "members",
+    "member",
+    "list",
+    "announce",
+    "announcement",
+];
 fn contract(op: &str) -> Option<(&'static str, &'static [&'static str], &'static str)> {
     Some(match op {
         "create" => (
@@ -326,6 +460,24 @@ fn contract(op: &str) -> Option<(&'static str, &'static [&'static str], &'static
                 "--guidance-ref",
             ],
             "--team alpha --member dev-a --role implementation --description-file /tmp/dev.txt",
+        ),
+        "announce" => (
+            "Atomically publish informational notes to 1..100 members of exactly one scope. Use --all OR up to 16 supplied exact --role filters (OR). Excludes the author unless --include-self retains an already matching member. Qualified authors may belong to another scope. Full identical retries return the frozen snapshot; changed inputs conflict. Body: nonblank UTF-8, at most 8192 bytes. Published means durable notes, not enqueue, receipt or completed work.",
+            &[
+                "--team",
+                "--from",
+                "--id",
+                "--all",
+                "--role",
+                "--include-self",
+                "--body-file",
+            ],
+            "--team alpha --from project/author --id notice-1 --all --body-file /tmp/notice.txt",
+        ),
+        "announcement" => (
+            "Read one accepted snapshot and at most 100 recipient/message-ID headers. No body or source reads, handling changes, host probes or state creation; missing IDs fail explicitly.",
+            &["--team", "--id"],
+            "--team alpha --id notice-1",
         ),
         "list" => (
             "Page shared scope headers with an optional exact project reference filter; no inherited authority or roles.",
@@ -368,7 +520,9 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
     let arguments = flags
         .iter()
         .map(|f| {
-            if matches!(
+            if matches!(*f, "--all" | "--include-self") {
+                format!("[{f}]")
+            } else if matches!(
                 *f,
                 "--role" | "--guidance-ref" | "--after" | "--limit" | "--project" | "--coordinator"
             ) {
@@ -402,6 +556,12 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
         "TEAM_CONFLICT",
         "TEAM_IDENTITY_CONFLICT",
         "TEAM_SCHEMA",
+        "TEAM_SELECTION",
+        "TEAM_MESSAGE_CONFLICT",
+        "TEAM_ANNOUNCEMENT_NOT_FOUND",
+        "MAIL_IDENTITY_MISSING",
+        "MAIL_ID_CONFLICT",
+        "MAIL_REPLY_MISMATCH",
         "MAIL_INPUT",
         "MAIL_IO",
         "MAIL_STORAGE",
@@ -409,7 +569,13 @@ fn help_record(op: &str, json_output: bool) -> Result<String, CliError> {
         "INIT_INPUT",
         "INIT_CONFIG",
     ];
-    let outcomes = ["created", "joined", "unchanged", "scope or roster metadata"];
+    let outcomes = [
+        "created",
+        "joined",
+        "published",
+        "unchanged",
+        "scope, roster or accepted snapshot metadata",
+    ];
     if json_output {
         render_json(
             &json!({"schema":"merl.help/v1","command":command,"kind":if op.is_empty(){"group"}else{"command"},"usage":usage,"summary":summary,"description":summary,"arguments":arguments,"children":children,"commands":if op.is_empty(){COMMANDS}else{&[]},"example":example,"examples":[example],"outcomes":outcomes,"errors":errors,"related":["team","mail send","mail status"]}),

@@ -7,6 +7,7 @@
 - [ADR 0006: Reusable user setup and opt-in mailbox defaults](0006-user-setup.md)
 - [ADR 0007: Persistent shared teams and qualified individual mail](0007-persistent-teams.md)
 - [ADR 0008: Short startup guidance and safe canonical skill setup](0008-usage-and-startup.md)
+- [ADR 0009: Atomic informational team announcements](0009-atomic-team-announcements.md)
 
 ## Superseded historical records
 

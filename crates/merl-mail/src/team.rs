@@ -134,7 +134,7 @@ fn schema_present(db: &Connection) -> Result<bool, MailError> {
     }
     Ok(true)
 }
-fn require_team(db: &Connection, team: &Key) -> Result<(), MailError> {
+pub(super) fn require_team(db: &Connection, team: &Key) -> Result<(), MailError> {
     if !schema_present(db)?
         || !db.query_row(
             "SELECT EXISTS(SELECT 1 FROM merl_teams WHERE name=?1)",

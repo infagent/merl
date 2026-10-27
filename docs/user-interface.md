@@ -49,6 +49,32 @@ Canonical setup uses receipt v2 and retains the known legacy skill association w
 
 Results use `merl.init/v1`; errors use the common envelope with `INIT_INPUT`, `INIT_CONFIG`, `INIT_CONFLICT`, `INIT_BUSY` or `INIT_IO`. Dispatcher state is `not_requested`, `not_started` or `missing_codex`. A start command is shown only for a detected real absolute Codex executable. Claude skill installation does not enable automatic Claude wake. See [installation](installation.md) for ownership, recovery and installer pipeline behavior.
 
+## Informational team announcements
+
+`team announce --team S --from MEMBER_OR_SCOPE_MEMBER --id ID --all|--role ROLE --body-file PATH`
+publishes fixed-kind ordinary notes to one frozen selection of 1..100 members.
+Use exactly one selector; repeat exact case-sensitive roles as an OR set, at most
+16 supplied occurrences before deduplication. All includes roleless members.
+The author is excluded unless `--include-self` retains an already matching member.
+Project references do not expand the target. Qualified authors resolve separately.
+
+The nonblank UTF-8 body is limited to 8192 bytes. Selection filters run before a
+SQL fetch of at most 101 headers. Zero/overflow selections fail with
+`TEAM_SELECTION`; a child-ID collision fails with `TEAM_MESSAGE_CONFLICT`. One
+transaction commits the snapshot, all notes, handling and notification intent.
+Any pre-commit failure rolls back all of them. `published` means durable notes,
+not enqueue, receipt or completed work. Exact full-input retries return
+`unchanged` with original recipients/IDs before considering current membership;
+changed immutable inputs return `TEAM_CONFLICT`.
+
+`team announcement --team S --id ID` reads only accepted metadata and bounded
+recipient/message-ID mappings, with no body/source reads, handling changes,
+host probes or state creation. Missing/wrong-target IDs return
+`TEAM_ANNOUNCEMENT_NOT_FOUND`. Use lookup/retry after a lost response or uncertain
+commit error. Both leaves use `merl.team/v1`, common errors exit 2, and individual
+mail handling remains separate. See [teams](teams.md#informational-announcements)
+for examples, fields and limits. No group assignment or completion is provided.
+
 ## Setup status
 
 `merl status` reads only bounded local setup metadata and selected skills. It creates no directory, lock, receipt, database or other file. It opens no mailbox store and probes no host, process or socket. This command differs from `mail status --agent NAME`, which reports one identity's mail/binding state.

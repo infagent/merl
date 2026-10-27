@@ -73,7 +73,7 @@ pub fn run_with_clock(
     } else if status::handles(arguments) {
         status::execute(arguments, &mut json_output)
     } else if team::handles(arguments) {
-        team::execute(arguments, &mut json_output)
+        team::execute(arguments, &mut json_output, clock)
     } else if mail::handles(arguments) {
         mail::execute(arguments, &mut json_output, clock)
     } else if lane::handles(arguments) {

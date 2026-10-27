@@ -6,6 +6,8 @@ Run `merl usage` for a short setup/join/resume/handoff primer, or start with the
 
 [Teams](docs/teams.md) save shared scope, a discoverable roster and durable member guidance, with individual mail addressed through an explicit team. This requires a release containing #161; v0.3.0 does not include team commands. CLI onboarding works without a skill. The usage primer and canonical `/merl` / `$merl` startup require a release containing #163; v0.3.0 still provides `merl-mail`.
 
+Informational [team announcements](docs/teams.md#informational-announcements), available in a release containing #165, publish ordinary notes atomically to one bounded roster snapshot. Exact retries retain the original recipients; receipt and work completion stay individual.
+
 A coordinator can hand work to a developer, a developer can request a review, and a reviewer can return findings. The project decides roles and merge authority. Merl records the messages and handling facts; a receipt alone never completes an assignment.
 
 ## Install and try it

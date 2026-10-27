@@ -79,6 +79,64 @@ An explicit `scope/member` resolves each `--from`, `--to` or `--agent` independe
 
 Receipt stops notification retries and does not complete work. A linked reply also completes nothing automatically. Review and build requests have different owners and require separate completion. Other members with the same role receive no implicit assignment. Follow every pending page before recording receipts. See [mail handling](agent-mail.md) for replies, filters and recovery.
 
+## Informational announcements
+
+This interface requires a release containing #165. Announce one bounded notice
+to the current members of exactly one scope:
+
+```sh
+merl team announce --home /tmp/example-mail --team epic-a \
+  --from project/manager --id epic-a-notice-1 --all \
+  --body-file /tmp/notice.txt
+merl team announce --home /tmp/example-mail --team epic-a \
+  --from planner --id epic-a-research-1 --role 'research and docs' --role planning \
+  --body-file /tmp/notice.txt --json
+merl team announcement --home /tmp/example-mail --team epic-a --id epic-a-notice-1 --json
+```
+
+Choose exactly one of `--all` or repeated `--role`. All includes roleless members;
+roles are case-sensitive exact labels combined with OR. At most 16 supplied role
+occurrences are allowed before sorting/deduplication, each with the existing
+128-byte limit. A project reference does not include child scopes. The qualified
+author resolves independently; a bare author belongs to the target scope.
+
+The author is excluded by default. `--include-self` retains the author only when
+already a matching member of that scope; it never joins an outside author or
+bypasses a role filter. Empty selection and more than 100 selected recipients
+return `TEAM_SELECTION` without accepting the announcement. SQL applies filters
+before fetching at most 101 member headers. Bodies are nonblank UTF-8, at most
+8192 bytes. Child kind is always `note`; this is not a group assignment.
+
+One transaction freezes the snapshot and publishes every ordinary note, handling
+row and notification intent. A later child-ID collision rolls back the entire
+batch. `published` means durable notes, not enqueue, reading, receipt or completed
+work. Each recipient handles its own note; one receipt changes no other recipient
+and completes no existing request. Existing dispatch handles offline recipients.
+
+Keep the announcement ID and full inputs for retry. IDs are global among
+announcements within the selected mailbox, separately from ordinary mail IDs.
+Identical retries return `unchanged` and the original recipient/message IDs even
+after later joins or binding changes. Role order/duplicates and different files
+containing the same body bytes are equivalent. Changed body, author, target,
+selector or self inclusion returns `TEAM_CONFLICT`. After pre-commit failure no
+snapshot exists, so a retry may select a newer roster. After a lost response or
+uncertain commit error, inspect or retry the same ID to determine acceptance.
+
+`team announcement` needs no body file. It opens existing state read-only and
+returns accepted metadata plus at most 100 member/message-ID mappings. It loads
+no body, alters no handling state and probes no host. A missing ID or wrong target
+returns `TEAM_ANNOUNCEMENT_NOT_FOUND`. There is no group receipt/completion view,
+partial progress state, resume-only command or group work claim.
+
+Both leaves use `merl.team/v1`. For example, selected result fields are
+`outcome: "published"`, `recipient_count: 2` and
+`recipients: [{"member":"planner","qualified":"epic-a/planner","mail_key":"t-...","message_id":"t-..."}, ...]`.
+JSON also includes the frozen author, selector, self-inclusion flag and creation
+time; it never echoes the body or its source path. `team announcement` omits a
+publication outcome because it only reads the accepted record. Relevant errors
+include `TEAM_SELECTION`, `TEAM_MESSAGE_CONFLICT`, `TEAM_CONFLICT`,
+`TEAM_ANNOUNCEMENT_NOT_FOUND` and existing input/team/storage errors; all exit 2.
+
 ## Restart and binding
 
 Read your saved starting guidance and work state without resupplying it:
@@ -100,4 +158,4 @@ Append `--json` for noninteractive `merl.team/v1` records. Leaf contracts load t
 
 Additive team tables share `mail-v1` so membership and identity can commit atomically. Mailbox schema version 1 and existing mail/lane behavior remain compatible. Team discovery opens existing state read-only. Top-level `merl status` remains a setup summary and does not inspect teams or runtime health. Same-user identity claims remain trusted, and mail remains plaintext.
 
-A release containing #163 adds `merl usage` and the short `/merl` / `$merl` startup with a safe canonical/legacy setup transition. Informational team notices and explicit new team-targeted PR lanes remain independent later work. Existing lane recipients are immutable and are not repointed. Team commands themselves change no installed skills, global setup, running dispatchers or existing bindings; initializer apply remains explicit.
+A release containing #163 adds `merl usage` and the short `/merl` / `$merl` startup with a safe canonical/legacy setup transition. Informational notices require a release containing #165. Explicit new team-targeted PR lanes remain later work. Existing lane recipients are immutable and are not repointed. Team commands themselves change no installed skills, global setup, running dispatchers or existing bindings; initializer apply remains explicit.
