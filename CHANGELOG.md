@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0](https://github.com/infagent/merl/compare/v0.5.0...v0.6.0) (2026-10-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* Codex notifications now use merl.notification/v1 JSON and may include mail bodies in the explicitly bound host context.
+
+### Features
+
+* deliver bounded inline mail and explicit handling ([#173](https://github.com/infagent/merl/issues/173)) ([2300ae6](https://github.com/infagent/merl/commit/2300ae65ee88603eeec3e999f911b94ebc896a0a))
+
 ## [0.5.0](https://github.com/infagent/merl/compare/v0.4.0...v0.5.0) (2026-10-27)
 
 
