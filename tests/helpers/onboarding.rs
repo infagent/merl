@@ -231,7 +231,7 @@ impl Onboarding {
             let status = user.status();
             let status_pure = before_status == snapshot(&user.root);
             let receipt = read_json(&user.receipt());
-            let legacy = fs::read_to_string(user.skill("codex", "merl-mail")).unwrap();
+            let legacy = fs::read_to_string(user.skill("codex", "merl-mail")).ok();
             let canonical = fs::read(user.skill("codex", "merl")).unwrap_or_default();
             let retry = user.init(&[]);
             let selected = user.init(&["--uninstall", "--host", "codex"]);
@@ -250,7 +250,11 @@ impl Onboarding {
                 assert_eq!(result[field]["success"], true, "{field}: {result}");
             }
             assert_eq!(result["receipt"]["schema"], "merl.init-receipt/v2");
-            assert_eq!(result["legacy"], LEGACY);
+            if user.kind == "owned" {
+                assert!(result["legacy"].is_null());
+            } else {
+                assert_eq!(result["legacy"], LEGACY);
+            }
             assert_eq!(result["status_pure"], true);
             if user.kind == "unmanaged" {
                 assert!(
@@ -268,10 +272,14 @@ impl Onboarding {
                 result["receipt"]["settings"]["skills"]["codex"],
                 user.skill("codex", "merl").to_str().unwrap()
             );
-            assert_eq!(
-                result["receipt"]["legacy_skills"]["codex"],
-                user.skill("codex", "merl-mail").to_str().unwrap()
-            );
+            if user.kind == "owned" {
+                assert!(result["receipt"]["legacy_skills"].get("codex").is_none());
+            } else {
+                assert_eq!(
+                    result["receipt"]["legacy_skills"]["codex"],
+                    user.skill("codex", "merl-mail").to_str().unwrap()
+                );
+            }
             assert_eq!(result["legacy_exists"], user.kind != "owned");
             assert_eq!(result["kept_claude"], true);
             assert_eq!(result["canonical_gone"], true);
@@ -280,18 +288,30 @@ impl Onboarding {
                     .get("codex")
                     .is_none()
             );
-            assert_eq!(
-                result["after_selected"]["legacy_skills"]["claude"],
-                user.skill("claude", "merl-mail").to_str().unwrap()
-            );
+            if user.kind == "owned" {
+                assert!(
+                    result["after_selected"]["legacy_skills"]
+                        .get("claude")
+                        .is_none()
+                );
+            } else {
+                assert_eq!(
+                    result["after_selected"]["legacy_skills"]["claude"],
+                    user.skill("claude", "merl-mail").to_str().unwrap()
+                );
+            }
             let skills = result["status"]["skills"].as_array().unwrap();
-            assert_eq!(skills.len(), 4);
+            assert_eq!(skills.len(), if user.kind == "owned" { 2 } else { 4 });
             let retained = skills
                 .iter()
-                .find(|s| s["host"] == "codex" && s["retained_legacy"] == true)
-                .unwrap();
-            assert_eq!(retained["matches_bundle"], false);
-            assert_eq!(retained["ownership"], user.kind);
+                .find(|s| s["host"] == "codex" && s["retained_legacy"] == true);
+            if user.kind == "owned" {
+                assert!(retained.is_none());
+            } else {
+                let retained = retained.unwrap();
+                assert_eq!(retained["matches_bundle"], false);
+                assert_eq!(retained["ownership"], user.kind);
+            }
             assert_eq!(result["mail"], "Synthetic durable mail.\n");
         }
     }
@@ -361,6 +381,8 @@ impl Onboarding {
             .unwrap_err();
         let pending = read_json(&user.receipt());
         let old_config = read_json(&user.config());
+        let aliases_before_resume =
+            user.skill("codex", "merl-mail").exists() && user.skill("claude", "merl-mail").exists();
         let resumed = user.init(&[]);
         let removal = Plan::removal(user.config(), settings, bundle).unwrap();
         let removal_error = removal
@@ -371,7 +393,7 @@ impl Onboarding {
         let interrupted = read_json(&user.receipt());
         let retry = user.init(&["--uninstall", "--host", "codex"]);
         let remaining = read_json(&user.receipt());
-        self.records.push(json!({"unavailable":unavailable.code,"before_publication":before_publication,"unpublished_status":unpublished_status,"canonical_absent":canonical_absent,"publication_error":error.code,"pending":pending,"old_config":old_config,"resumed":resumed,"removal_error":removal_error.code,"interrupted":interrupted,"retry":retry,"remaining":remaining,"claude_exists":user.skill("claude","merl").exists(),"codex_legacy_gone":!user.skill("codex","merl-mail").exists(),"mail":fs::read_to_string(user.mail().join("keep")).unwrap()}));
+        self.records.push(json!({"unavailable":unavailable.code,"before_publication":before_publication,"unpublished_status":unpublished_status,"canonical_absent":canonical_absent,"publication_error":error.code,"pending":pending,"old_config":old_config,"aliases_before_resume":aliases_before_resume,"resumed":resumed,"removal_error":removal_error.code,"interrupted":interrupted,"retry":retry,"remaining":remaining,"claude_exists":user.skill("claude","merl").exists(),"codex_legacy_gone":!user.skill("codex","merl-mail").exists(),"mail":fs::read_to_string(user.mail().join("keep")).unwrap()}));
         self
     }
     pub fn then_ownership_and_unselected_host_state_survive_recovery(self) {
@@ -399,12 +421,17 @@ impl Onboarding {
                 .unwrap()
                 .contains("merl-mail/")
         );
+        assert_eq!(r["aliases_before_resume"], true);
         assert_eq!(r["resumed"]["success"], true);
         assert_eq!(r["removal_error"], "INIT_IO");
-        assert!(r["interrupted"]["legacy_skills"].get("codex").is_some());
+        assert!(r["interrupted"]["legacy_skills"].get("codex").is_none());
         assert_eq!(r["retry"]["success"], true);
         assert!(r["remaining"]["legacy_skills"].get("codex").is_none());
-        assert!(r["remaining"]["legacy_skills"].get("claude").is_some());
+        assert!(r["remaining"]["legacy_skills"].get("claude").is_none());
+        assert_eq!(
+            r["remaining"]["settings"]["skills"]["claude"],
+            self.users[0].skill("claude", "merl").to_str().unwrap()
+        );
         assert_eq!(r["claude_exists"], true);
         assert_eq!(r["codex_legacy_gone"], true);
         assert_eq!(r["mail"], "Synthetic durable mail.\n");

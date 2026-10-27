@@ -54,7 +54,7 @@ fn parse(a: &[String], json_output: &mut bool) -> Result<Arguments, CliError> {
         match flag {
             "--json" => *json_output = true,
             "--help" | "-h" => args.help = true,
-            "--global" | "--yes" | "--dry-run" | "--show" | "--uninstall" => {
+            "--global" | "--yes" | "--dry-run" | "--show" | "--uninstall" | "--offer" => {
                 if !args.flags.insert(flag.into()) {
                     return Err(input("duplicate option"));
                 }
@@ -103,6 +103,15 @@ fn parse(a: &[String], json_output: &mut bool) -> Result<Arguments, CliError> {
     {
         return Err(input("show cannot be combined with dry-run or uninstall"));
     }
+    if args.flags.contains("--offer")
+        && ["--show", "--dry-run", "--uninstall"]
+            .iter()
+            .any(|flag| args.flags.contains(*flag))
+    {
+        return Err(input(
+            "offer cannot be combined with show, dry-run or uninstall",
+        ));
+    }
     Ok(args)
 }
 
@@ -144,11 +153,19 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
     if uninstall && saved.is_none() {
         return report(None, &config, "not_configured", *json_output);
     }
-    let mut terminal = if !yes && !preview && !*json_output {
+    let interactive = !yes && !preview && !*json_output;
+    let mut terminal = if interactive && saved.is_none() && !uninstall {
         Some(Terminal::open()?)
     } else {
         None
     };
+    if args.flags.contains("--offer")
+        && saved.is_none()
+        && let Some(terminal) = &mut terminal
+        && !terminal.confirm("Run guided setup now?", false)?
+    {
+        return report(None, &config, "not_configured", *json_output);
+    }
     let mut settings = saved.clone().unwrap_or(Settings {
         mail_home: locations.mail.clone(),
         skills: BTreeMap::new(),
@@ -241,7 +258,9 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
                 "none" => false,
                 _ => return Err(input("dispatcher must be foreground or none")),
             };
-        } else if let Some(terminal) = &mut terminal {
+        } else if saved.is_none()
+            && let Some(terminal) = &mut terminal
+        {
             settings.foreground = terminal.confirm(
                 "Show dispatcher start instructions? No process or service will start",
                 settings.foreground,
@@ -288,10 +307,19 @@ pub(super) fn execute(a: &[String], json_output: &mut bool) -> Result<String, Cl
             )?))
         };
     }
+    if !uninstall && !plan.needs_apply()? {
+        return report(Some(&settings), &config, "unchanged", *json_output);
+    }
+    if interactive && terminal.is_none() {
+        terminal = Some(Terminal::open()?);
+    }
     if !yes {
         let Some(terminal) = &mut terminal else {
             return Err(input("unattended apply/uninstall requires --yes"));
         };
+        if saved.is_some() && !merl_setup::setup_is_complete(&config)? {
+            terminal.write("Finish interrupted setup using saved choices.\n")?;
+        }
         terminal.write(&crate::status::summary(&crate::status::preview(
             &config,
             &settings,
@@ -476,7 +504,7 @@ fn canonical_path(path: &std::path::Path) -> PathBuf {
 }
 
 fn help(json_output: bool) -> Result<String, CliError> {
-    let value = json!({"schema":"merl.help/v1","command":"init","kind":"command","usage":"merl init [--global] [--host codex|claude|none] [--home <absolute-path>] [--config <absolute-path>] [--dispatcher foreground|none] [--codex-skills-dir <absolute-path>] [--claude-skills-dir <absolute-path>] [--yes] [--dry-run|--show|--uninstall] [--format human|json] [--json]","summary":"Set up matching user skills and a durable mailbox default; optionally show dispatcher start instructions.","description":"Interactive input uses the controlling terminal. JSON never prompts. Setup never binds sessions, starts services, or migrates mail. Canonical merl setup retains legacy bytes/ownership and custom roots. Changed files or settings that cannot be rewritten conflict before publication; preserve edits and reconcile the reported path before retrying. Incomplete legacy setup can be safely uninstalled using the selected config and then retried. Uninstall preserves all mail and borrowed/modified files.","children":[],"arguments":["--host (repeatable)","--home","--config","--dispatcher","--codex-skills-dir","--claude-skills-dir","--global","--yes","--dry-run","--show","--uninstall"],"outcomes":["preview","configured","not_configured","unchanged","uninstalled"],"errors":["INIT_INPUT","INIT_CONFIG","INIT_CONFLICT","INIT_BUSY","INIT_IO"],"related":["mail bind","mail watch"],"example":"merl init --global --host codex --home /absolute/durable-mail --dispatcher foreground --yes --json","examples":["merl init","merl init --show --json","merl init --uninstall --yes"]});
+    let value = json!({"schema":"merl.help/v1","command":"init","kind":"command","usage":"merl init [--global] [--host codex|claude|none] [--home <absolute-path>] [--config <absolute-path>] [--dispatcher foreground|none] [--codex-skills-dir <absolute-path>] [--claude-skills-dir <absolute-path>] [--yes] [--offer|--dry-run|--show|--uninstall] [--format human|json] [--json]","summary":"Set up matching user skills and a durable mailbox default; optionally show dispatcher start instructions.","description":"Interactive input uses the controlling terminal. --offer asks optional first setup only when choices are absent; saved choices are reused. Current setup returns unchanged without prompts or writes; actual updates/owned legacy retirement have one concrete preview and apply confirmation. JSON never prompts. Setup never binds sessions, starts services, or migrates mail. Canonical merl setup preserves custom roots and retires only unchanged receipt-owned legacy aliases after canonical skills and settings are published. Borrowed/unmanaged legacy stays retained; edited recorded content conflicts before writes. Changed files or settings that cannot be rewritten conflict before publication; preserve edits and reconcile the reported path before retrying. Incomplete legacy setup can be safely uninstalled using the selected config and then retried. Uninstall preserves all mail and borrowed/modified files.","children":[],"arguments":["--host (repeatable)","--home","--config","--dispatcher","--codex-skills-dir","--claude-skills-dir","--global","--yes","--offer","--dry-run","--show","--uninstall"],"outcomes":["preview","configured","not_configured","unchanged","uninstalled"],"errors":["INIT_INPUT","INIT_CONFIG","INIT_CONFLICT","INIT_BUSY","INIT_IO"],"related":["mail bind","mail watch"],"example":"merl init --global --host codex --home /absolute/durable-mail --dispatcher foreground --yes --json","examples":["merl init","merl init --show --json","merl init --uninstall --yes"]});
     if json_output {
         render_json(&value)
     } else {

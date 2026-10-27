@@ -11,7 +11,7 @@ fn the_usage_primer_needs_no_user_setup_or_runtime_access() {
 }
 
 #[test]
-fn canonical_setup_retains_legacy_bytes_roots_and_ownership() {
+fn canonical_setup_preserves_roots_and_retires_only_owned_legacy_aliases() {
     Onboarding::given_completed_legacy_setups()
         .when_setup_is_upgraded_retried_and_uninstalled()
         .then_canonical_setup_works_and_only_owned_files_are_removed();

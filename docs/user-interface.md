@@ -45,7 +45,7 @@ Team results use `merl.team/v1`. Existing mail identity/handling/binding command
 
 Human init preview/results/show and top-level status share one summary layout: setup state, selected host skills, mailbox, settings and dispatcher. Preview says **will install/create/save/remove**; it does not present proposed files as already installed. Unchanged/borrowed files and retained mail are explicit. Apply confirmation remains separate; cancellation creates nothing. Paths beneath the user home display with `~`, while Enter keeps the underlying absolute default. The short next step loads relevant help instead of printing unresolved binding templates. Explicit `init --json` preserves its full existing record and remains noninteractive.
 
-Canonical setup uses receipt v2 and retains the known legacy skill association without rewriting its bytes; config v1 and explicit `merl.init/v1` output remain compatible. Incomplete v1 setup rejects migration without writes and offers safe new-binary uninstall/retry. Retained legacy status has `retained_legacy=true`; content/ownership/matches_bundle remain independent. See [canonical startup and recovery](installation.md#canonical-startup-and-legacy-recovery).
+Canonical setup uses receipt v2. Through v0.4.0 it retains the known legacy association; the later #169 retirement rule below removes only verified owned aliases after consent. Config v1 and explicit `merl.init/v1` output remain compatible. Incomplete v1 setup rejects migration without writes and offers safe new-binary uninstall/retry. Retained legacy status has `retained_legacy=true`; content/ownership/matches_bundle remain independent. See [canonical startup and recovery](installation.md#canonical-startup-and-legacy-recovery).
 
 Results use `merl.init/v1`; errors use the common envelope with `INIT_INPUT`, `INIT_CONFIG`, `INIT_CONFLICT`, `INIT_BUSY` or `INIT_IO`. Dispatcher state is `not_requested`, `not_started` or `missing_codex`. A start command is shown only for a detected real absolute Codex executable. Claude skill installation does not enable automatic Claude wake. See [installation](installation.md) for ownership, recovery and installer pipeline behavior.
 
@@ -74,6 +74,23 @@ host probes or state creation. Missing/wrong-target IDs return
 commit error. Both leaves use `merl.team/v1`, common errors exit 2, and individual
 mail handling remains separate. See [teams](teams.md#informational-announcements)
 for examples, fields and limits. No group assignment or completion is provided.
+
+A release containing #169 reuses saved init choices and adds `init --offer` for
+the installer's optional first-setup entry. Current validated plans return
+`unchanged` without questions, locks or receipt/file writes; a version difference
+alone is insufficient. Actual effects or pending intent get one concrete preview
+and apply confirmation. Saved dispatcher guidance is not asked again. Read-only
+modes never clean aliases, JSON never prompts, and `--offer` is not consent or
+compatible with show/dry-run/uninstall.
+
+After canonical skills and settings are safely published, consented init retires
+only unchanged receipt-owned known legacy aliases and eligible owned empty
+legacy directories. Receipt v2 removal intent survives unlink/rmdir before
+acknowledging file, association and directory records together. Borrowed/unmanaged
+aliases stay retained; recorded edits/unsafe paths conflict before writes. This
+exception supersedes the original blanket retention rule. Configured next-step
+guidance is `merl usage`; runtime remains `not_checked`, with no claim binding is
+missing. See [reuse and retirement](adr/0011-reuse-setup-and-retire-owned-aliases.md).
 
 ## Setup status
 

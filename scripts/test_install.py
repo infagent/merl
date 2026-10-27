@@ -70,6 +70,8 @@ else:
         binary = ("#!/usr/bin/env python3\nimport json, os, pathlib, sys\n"
                   f"version = {binary_version or version!r}\n"
                   "if sys.argv[1:] == ['--version']: print('merl '+version)\n"
+                  "elif sys.argv[1:] == ['init', '--offer', '--help']:\n"
+                  "    sys.exit(0 if os.environ.get('SETUP_OFFER_PROTOCOL') == '1' else 2)\n"
                   "elif sys.argv[1:2] == ['init']:\n"
                   "    pathlib.Path(os.environ['SETUP_ARGS']).write_text(json.dumps(sys.argv[1:]))\n"
                   "    sys.exit(int(os.environ.get('SETUP_FAILURE', '0')))\n"
@@ -120,6 +122,15 @@ else:
         self.assertTrue((self.bin_dir / "merl").is_file())
         self.assertFalse((ROOT / "SHOULD_NOT_EXIST").exists())
 
+    def test_offer_flag_is_not_unattended_consent(self):
+        for forwarded in [["--offer"], ["--offer", "--home", "--yes", "--json"]]:
+            with self.subTest(forwarded=forwarded):
+                result = self.install("--setup", "--", *forwarded)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unattended setup requires", result.stderr)
+                self.assertFalse(Path(self.env["SETUP_ARGS"]).exists())
+                self.assertTrue((self.bin_dir / "merl").is_file())
+
     def test_piped_script_without_a_terminal_installs_binary_only(self):
         result = subprocess.run(["sh", "-s", "--", "--bin-dir", str(self.bin_dir)],
                                 input=(ROOT / "install.sh").read_text(), env=self.env,
@@ -128,7 +139,13 @@ else:
         self.assertIn("no controlling terminal", result.stdout.lower())
         self.assertFalse(Path(self.env["SETUP_ARGS"]).exists())
 
-    def test_piped_script_offers_setup_through_the_controlling_terminal(self):
+    def test_piped_script_delegates_current_setup_or_falls_back_for_older_binaries(self):
+        for supported, failure in [(False, "0"), (True, "0"), (True, "2")]:
+            with self.subTest(supported=supported, failure=failure):
+                self.env.update(SETUP_OFFER_PROTOCOL="1" if supported else "0", SETUP_FAILURE=failure)
+                self.terminal_setup(supported, failure)
+
+    def terminal_setup(self, supported, failure):
         master, slave = pty.openpty()
         self.addCleanup(os.close, master)
         def terminal_session():
@@ -160,9 +177,11 @@ else:
                     answered = True
             if process.poll() is not None:
                 break
-        self.assertTrue(answered, output.decode(errors="replace"))
-        self.assertEqual(process.wait(timeout=2), 0, output.decode(errors="replace"))
-        self.assertEqual(json.loads(Path(self.env["SETUP_ARGS"]).read_text()), ["init"])
+        transcript = output.decode(errors="replace")
+        self.assertEqual(answered, not supported, transcript)
+        self.assertEqual(process.wait(timeout=2), 0 if failure == "0" else 1, transcript)
+        self.assertEqual(json.loads(Path(self.env["SETUP_ARGS"]).read_text()), ["init", "--offer"] if supported else ["init"])
+        self.assertTrue((self.bin_dir / "merl").is_file())
 
     def test_each_supported_platform_installs_the_exact_tag_with_spaces_in_paths(self):
         for (system, arch), target in TARGETS.items():

@@ -309,7 +309,7 @@ pub(super) fn changes(
             continue;
         }
         let owner = ownership(&path);
-        let action = if plan.removing && owner == Ownership::Owned {
+        let action = if receipt.entries.get(&path).is_some_and(|entry| entry.owned) {
             Change::Remove
         } else {
             Change::Retain
@@ -379,11 +379,10 @@ fn load(plan: &Plan<'_>) -> Result<Receipt, SetupError> {
         let entry = receipt.entries.get_mut(&path).expect("loaded entry");
         if let Some(pending) = &entry.pending {
             let current = read(&path)?;
-            if pending["remove"] == true {
-                if current.is_none() {
-                    receipt.entries.remove(&path);
-                }
-            } else if current.as_deref() == pending["text"].as_str()
+            // Removal proof must survive every intervening save until the
+            // file entry and its alias association are acknowledged together.
+            if pending["remove"] != true
+                && current.as_deref() == pending["text"].as_str()
                 && identity(&path)?.as_ref() == pending.get("identity")
                 && !pending["identity"].is_null()
             {
@@ -518,6 +517,14 @@ pub(super) fn validate(plan: &Plan<'_>) -> Result<(), SetupError> {
         let actual = read(path)?;
         if let Some(pending) = &entry.pending {
             validate_stage(path, pending)?;
+            if pending["remove"] == true {
+                if !entry.owned {
+                    return Err(conflict(path));
+                }
+                if actual.is_none() {
+                    continue;
+                }
+            }
             // An absent new file is retryable; a foreign identical publication
             // remains borrowed rather than inheriting interrupted ownership.
             if actual.is_none() && entry.text.is_empty() {
@@ -747,11 +754,124 @@ fn publish(
     save(plan, receipt)?;
     Ok(true)
 }
+pub(super) fn needed(plan: &Plan<'_>) -> Result<bool, SetupError> {
+    if plan.removing {
+        return Err(input("removal plans do not describe setup currency"));
+    }
+    let changes = changes(plan, &[])?;
+    Ok(!is_complete(&plan.config)?
+        || !plan.settings.mail_home.is_dir()
+        || changes.iter().any(|change| {
+            matches!(
+                change.action,
+                super::Change::Create | super::Change::Update | super::Change::Remove
+            )
+        }))
+}
+
+fn removal_intent(
+    plan: &Plan<'_>,
+    receipt: &mut Receipt,
+    path: &Path,
+) -> Result<Option<String>, SetupError> {
+    let entry = receipt
+        .entries
+        .get_mut(path)
+        .ok_or_else(|| conflict(path))?;
+    let actual = read(path)?;
+    let removed = actual.is_none() && entry.pending.as_ref().is_some_and(|p| p["remove"] == true);
+    if !entry.owned || (!removed && actual.as_deref() != Some(&entry.text)) {
+        return Err(conflict(path));
+    }
+    entry.pending = Some(json!({"remove":true}));
+    save(plan, receipt)?;
+    Ok(actual)
+}
+fn unlink_unchanged(path: &Path, actual: Option<&str>) -> Result<bool, SetupError> {
+    if read(path)?.as_deref() != actual {
+        return Err(conflict(path));
+    }
+    if actual.is_some() {
+        fs::remove_file(path)?;
+        sync_parent(path)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn retire_legacy(
+    plan: &Plan<'_>,
+    receipt: &mut Receipt,
+    published: &mut impl FnMut(&Path) -> std::io::Result<()>,
+) -> Result<bool, SetupError> {
+    let aliases = receipt.legacy_skills.clone();
+    let mut changed = false;
+    for (host, path) in aliases {
+        if !receipt.entries.get(&path).is_some_and(|entry| entry.owned) {
+            continue;
+        }
+        let canonical = plan
+            .settings
+            .skills
+            .get(&host)
+            .ok_or_else(|| conflict(&path))?;
+        if !known_transition(&path, canonical)
+            || read(canonical)?.as_deref() != Some(plan.bundle.skill)
+            || read(&plan.config)?.as_deref() != Some(&plan.settings.bytes())
+        {
+            return Err(conflict(canonical));
+        }
+        let actual = removal_intent(plan, receipt, &path)?;
+        // Recheck the active destination after recording intent, immediately
+        // before unlinking the obsolete alias. Settings must already be canonical.
+        if read(canonical)?.as_deref() != Some(plan.bundle.skill)
+            || read(&plan.config)?.as_deref() != Some(&plan.settings.bytes())
+        {
+            return Err(conflict(canonical));
+        }
+        if unlink_unchanged(&path, actual.as_deref())? {
+            published(&path)?;
+        }
+        let parent = path.parent().ok_or_else(|| input("skill needs a parent"))?;
+        if let Some((_, recorded)) = receipt.directories.iter().find(|(dir, _)| dir == parent) {
+            let current = identity(parent)?;
+            let mut pruned = current.is_none();
+            if current.as_ref() == Some(recorded) {
+                match fs::remove_dir(parent) {
+                    Ok(()) => {
+                        sync_parent(parent)?;
+                        published(parent)?;
+                        pruned = true;
+                    }
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                        ) => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            if pruned {
+                receipt.directories.retain(|(dir, _)| dir != parent);
+            }
+        }
+        // Keep the owned remove intent durable through directory cleanup. A
+        // retry can recognize both unlink and rmdir before either acknowledgment.
+        receipt.entries.remove(&path);
+        receipt.legacy_skills.remove(&host);
+        save(plan, receipt)?;
+        changed = true;
+    }
+    Ok(changed)
+}
+
 pub(super) fn apply(
     plan: &Plan<'_>,
     published: &mut impl FnMut(&Path) -> std::io::Result<()>,
 ) -> Result<bool, SetupError> {
-    validate(plan)?;
+    if !needed(plan)? {
+        return Ok(false);
+    }
     let mut initial = Receipt::default();
     let _guard = lock(plan, &mut initial)?;
     validate(plan)?;
@@ -761,8 +881,8 @@ pub(super) fn apply(
     receipt.directories.extend(initial.directories);
     receipt.complete = false;
     save(plan, &receipt)?;
+    let mut changed = !plan.settings.mail_home.exists();
     create_directories(&plan.settings.mail_home, &mut Receipt::default())?;
-    let mut changed = false;
     // Skills first: configured defaults are published only after skill setup succeeds.
     let mut files = desired(plan);
     let config = files.remove(&plan.config).expect("config generated");
@@ -774,6 +894,7 @@ pub(super) fn apply(
             changed = true;
         }
     }
+    changed |= retire_legacy(plan, &mut receipt, published)?;
     receipt.complete = true;
     save(plan, &receipt)?;
     Ok(changed)
@@ -820,13 +941,8 @@ pub(super) fn uninstall(
     for path in selected {
         if let Some(entry) = receipt.entries.get_mut(&path) {
             if entry.owned {
-                if read(&path)?.as_deref() != Some(&entry.text) {
-                    return Err(conflict(&path));
-                }
-                entry.pending = Some(json!({"remove":true}));
-                save(plan, &receipt)?;
-                fs::remove_file(&path)?;
-                sync_parent(&path)?;
+                let actual = removal_intent(plan, &mut receipt, &path)?;
+                unlink_unchanged(&path, actual.as_deref())?;
                 changed = true;
             }
             receipt.entries.remove(&path);
