@@ -1,6 +1,53 @@
 # Reviewer-lane PR activity
 
-A lane is a durable subscription for a named reviewer, one GitHub repository and required labels. It discovers and follows many PRs over time. The subscription belongs to the reviewer identity, not one PR or one Codex session. GitHub authors do not identify lanes: this team can share an account, so Merl leaves all authors' activity visible.
+A lane is a durable PR activity subscription for one explicitly named recipient,
+one GitHub repository and required labels. It discovers and follows many PRs over
+time. The subscription belongs to the recipient identity, not one PR or one
+Codex session. Any registered identity or existing team member can receive it;
+roles are optional metadata and confer no routing policy or authority. GitHub
+authors do not identify lanes: this team can share an account, so Merl leaves all
+authors' activity visible. Notifications retain the existing `review` request
+kind; generic recipients do not generalize the source or notification kind.
+
+## Team-qualified recipients
+
+A release containing #167 supports new subscriptions for existing team members:
+
+```sh
+merl lane start --home /absolute/team-mail --name epic-a-activity \
+  --repo example/widgets --agent epic-a/member-a --label activity-ready --json
+merl lane start --home /absolute/team-mail --name epic-b-activity \
+  --repo example/widgets --team epic-b --agent member-a --label activity-ready --json
+```
+
+The recipient may have any role or none. `--team` qualifies only a bare `--agent`;
+an explicit scope/member wins even when the supplied default names a different
+or nonexistent team. Both names must have valid syntax; only the selected actor
+is looked up. Without `--team`, bare actors retain legacy identity semantics.
+Missing teams/members fail without raw-name fallback, registration or creation
+of a mail/lane store. Prepare membership separately using [teams](teams.md).
+
+Creation and full active retries add `resolved["--agent"]` with `team`, `member`,
+`qualified` and `mail_key` to `merl.lane/v1`. Equivalent explicit/shorthand forms
+return `unchanged` under existing retry rules. The raw key is the durable
+recipient. Another member or scope under the old subscription name returns
+`LANE_CONFLICT`; create a new named lane instead. Existing raw recipients, source
+checkpoints and frozen batches are never repointed or adopted after joins.
+
+Resume uses only `--name` and `--expected-generation`. `--team` is valid only with
+full creation inputs; other lane operations gain no team default. Missing actors
+return existing `TEAM_NOT_FOUND` or `TEAM_MEMBER_MISSING`; malformed names, missing
+identities and schema failures retain their existing typed errors. Incomplete actor/default forms reject before creating runtime state and preserve
+requested JSON/human error routing. Selected actor lookup uses existing mail
+state read-only.
+
+Human `lane status` optionally adds `qualified_agent` to each mapped record and
+keeps raw `agent` visible. This is a best-effort read-only lookup of at most 16
+saved keys, with no guidance or host reads. Missing mappings leave the key shown;
+unavailable/unsupported metadata stops further optional lookups and never fails
+status or creates mail state. JSON status retains its existing fields/raw keys
+and does not access this optional metadata. Resume and dispatch use saved keys
+without team resolution. Binding a replacement session remains explicit.
 
 ## Configure and run
 

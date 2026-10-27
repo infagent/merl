@@ -101,7 +101,7 @@ All lane commands use the same mailbox selection and output-format options. Lane
 
 | Command | Observable behavior |
 | --- | --- |
-| `lane start --name NAME --repo OWNER/REPO --agent NAME --label LABEL ...` | Create a durable multi-PR subscription; exact active creation retries are unchanged |
+| `lane start --name NAME --repo OWNER/REPO --agent NAME_OR_SCOPE_MEMBER [--team S] --label LABEL ...` | Create a durable multi-PR subscription; exact active creation retries are unchanged |
 | `lane start --name NAME --expected-generation N` | Resume saved configuration without changing recipient binding |
 | `lane update --name NAME --expected-generation N --label LABEL ...` | Replace labels, restart membership discovery and retain prior intent/cursors |
 | `lane stop --name NAME --expected-generation N` | Pause scans and unclaimed publication; retain all state |
@@ -109,6 +109,23 @@ All lane commands use the same mailbox selection and output-format options. Lane
 | `lane queue --name NAME [--after PR_NUMBER] [--limit N]` | Page per-PR state/cursors/gaps, with `next_after` |
 | `lane scan --gh PATH [--max-requests N]` | Read bounded metadata and publish durable mail; no host dispatch |
 | `lane watch --gh PATH --codex PATH [--max-requests N]` | Run due scans and the existing dispatcher in one foreground process |
+
+New named subscriptions can target any existing qualified member, including a
+roleless member. `--team` qualifies only a bare `--agent`; explicit scope/member
+overrides even a nonexistent valid default, and only the selected actor is
+looked up. Bare names without a team remain legacy mail identities. Missing
+qualified actors fail without fallback or runtime creation. Equivalent
+qualified/shorthand full retries preserve the stored key; another recipient
+requires a new lane name. Full scoped creation adds `resolved["--agent"]` with
+team/member/qualified/mail_key; legacy creation keeps its shape.
+
+`--team` is limited to full creation. Resume uses only name and generation;
+existing recipients, checkpoints and batches are never rewritten after joins or
+binding changes. JSON status keeps raw keys and existing fields without optional
+mail lookup. Human status may add `qualified_agent` via at most 16 read-only
+header lookups; absent/unavailable metadata retains raw keys without failing
+status or creating mail state. The source and `review` request kind remain
+unchanged for every recipient role. See [qualified recipients](reviewer-lanes.md#team-qualified-recipients).
 
 Lane results use `merl.lane/v1` with `lane.OPERATION` actions. Help uses `merl.help/v1`; errors retain `merl.error/v1` and exit 2. Provider/rate/protocol/cursor errors are explicit and leave checkpoints intact. Status distinguishes a completed discovery sweep from pending PR baselines/pages, and a frozen batch from receipt/review completion. The foreground watcher reports changing failures without creating a mail acknowledgment loop and continues bounded retry/dispatch.
 

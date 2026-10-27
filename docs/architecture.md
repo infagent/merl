@@ -57,6 +57,16 @@ Mail labels identify coordination requests or information. They do not confer pr
 
 Qualified mail resolves each explicit scope/member endpoint independently. An optional --team supplies the scope for unqualified actors; other unqualified actors keep legacy semantics. The opaque mail key remains stable across session replacement; local names from other teams or legacy mail are never adopted. IDs remain global per mailbox home. Scope/member guidance is bounded and references are inert. Optional coordinator/role labels are descriptive. An optional immutable reference to an existing project scope enables bounded header discovery and exact filtering without recursive traversal or authority inheritance. Existing discovery opens read-only and absent discovery creates nothing. Role/coordinator labels confer no permissions; host bindings and completion stay separate. See [teams](teams.md) for the first workflow and deferred lifecycle.
 
+[ADR 0010](adr/0010-qualified-subscription-recipients.md) resolves qualified
+recipients for new named PR subscriptions before lane creation. The CLI passes
+the existing stable mail key to unchanged lane configuration/outbox boundaries;
+no schema or recipient migration is involved. Full creation adds bounded
+resolved-actor metadata. JSON status keeps raw keys and no optional mail access;
+human status can label at most 16 recipients through best-effort read-only
+header lookup, stopping on metadata errors without failing status. Resume and
+dispatch use saved keys independently of display or team metadata. Existing
+review-labelled requests still carry no role or merge authority.
+
 ## Handling and pagination
 
 [ADR 0009](adr/0009-atomic-team-announcements.md) adds bounded informational

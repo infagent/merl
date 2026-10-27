@@ -8,6 +8,7 @@
 - [ADR 0007: Persistent shared teams and qualified individual mail](0007-persistent-teams.md)
 - [ADR 0008: Short startup guidance and safe canonical skill setup](0008-usage-and-startup.md)
 - [ADR 0009: Atomic informational team announcements](0009-atomic-team-announcements.md)
+- [ADR 0010: Qualified recipients for new PR subscriptions](0010-qualified-subscription-recipients.md)
 
 ## Superseded historical records
 

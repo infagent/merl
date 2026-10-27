@@ -1,8 +1,8 @@
-//! Named reviewer-lane configuration, bounded scans and the combined foreground watch.
+//! Named PR subscriptions, bounded scans and the combined foreground watch.
 
 use crate::{CliError, render_json};
 use merl_lane::{Configuration, Gh, Labels, LaneError, Name, Store};
-use merl_mail::{MailError, Mailbox};
+use merl_mail::{Key, MailError, Mailbox};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, io::Write, path::Path, thread, time::Duration};
 
@@ -56,6 +56,7 @@ fn parse<'a>(args: &'a [String], json_output: &mut bool) -> Result<Arguments<'a>
         labels: Vec::new(),
         help: args[0] == "help",
     };
+    let mut duplicate_team = false;
     let mut index = if result.help { 2 } else { 1 };
     while index < args.len() {
         let argument = args[index].as_str();
@@ -75,6 +76,7 @@ fn parse<'a>(args: &'a [String], json_output: &mut bool) -> Result<Arguments<'a>
             | "--name"
             | "--repo"
             | "--agent"
+            | "--team"
             | "--label"
             | "--expected-generation"
             | "--gh"
@@ -90,7 +92,11 @@ fn parse<'a>(args: &'a [String], json_output: &mut bool) -> Result<Arguments<'a>
                 if argument == "--label" {
                     result.labels.push(value.into());
                 } else if result.values.insert(argument, value).is_some() {
-                    return Err(input("duplicate option"));
+                    if argument == "--team" {
+                        duplicate_team = true;
+                    } else {
+                        return Err(input("duplicate option"));
+                    }
                 }
             }
             flag if flag.starts_with('-') => return Err(input("unknown lane option")),
@@ -98,6 +104,9 @@ fn parse<'a>(args: &'a [String], json_output: &mut bool) -> Result<Arguments<'a>
             _ => return Err(input("load one lane operation at a time")),
         }
         index += 1;
+    }
+    if duplicate_team {
+        return Err(input("duplicate option"));
     }
     Ok(result)
 }
@@ -125,10 +134,18 @@ pub(super) fn execute(
         args.values.get("--home").copied(),
         args.values.get("--config").copied(),
     )?;
+    // Recipient resolution must not create a mail/lane store or sample time
+    // when a qualified actor or creation form is invalid.
+    let mut resolved = serde_json::Map::new();
+    let configuration = if args.operation == "start" {
+        configuration(&home, &args, &mut resolved)?
+    } else {
+        None
+    };
     let now = clock()?;
     let mut store = Store::open(&home)?;
-    let value = match args.operation {
-        "start" => start(&mut store, &args, now)?,
+    let mut value = match args.operation {
+        "start" => store.start(&args.name()?, configuration, args.generation()?, now)?,
         "update" => store.update(
             &args.name()?,
             &Labels::new(args.labels.clone())?,
@@ -190,25 +207,94 @@ pub(super) fn execute(
         }
         _ => return Err(input("unknown lane operation")),
     };
+    if !resolved.is_empty() {
+        value["resolved"] = Value::Object(resolved);
+    }
+    if args.operation == "status" && !*json_output {
+        human_recipient_names(&mut value, &home);
+    }
     render(value, args.operation, *json_output)
 }
 
-fn start(store: &mut Store, args: &Arguments<'_>, now: i64) -> Result<Value, CliError> {
-    let config = if args.values.contains_key("--repo")
-        || args.values.contains_key("--agent")
-        || !args.labels.is_empty()
+fn configuration(
+    home: &Path,
+    args: &Arguments<'_>,
+    resolved: &mut serde_json::Map<String, Value>,
+) -> Result<Option<Configuration>, CliError> {
+    if !args.values.contains_key("--repo")
+        && !args.values.contains_key("--agent")
+        && !args.values.contains_key("--team")
+        && args.labels.is_empty()
     {
-        let config = Configuration {
-            repository: args.get("--repo")?.parse()?,
-            agent: args.get("--agent")?.parse()?,
-            labels: Labels::new(args.labels.clone())?,
-        };
-        Mailbox::open(store.home())?.status(&config.agent)?;
-        Some(config)
+        return Ok(None);
+    }
+    let repository = args.get("--repo")?.parse()?;
+    let actor = args.get("--agent")?;
+    let labels = Labels::new(args.labels.clone())?;
+    let default_team = args
+        .values
+        .get("--team")
+        .map(|s| s.parse::<Key>())
+        .transpose()?;
+    let (team, member) = if let Some((scope, member)) = actor.split_once('/') {
+        (Some(scope.parse::<Key>()?), member.parse::<Key>()?)
     } else {
-        None
+        (default_team, actor.parse::<Key>()?)
     };
-    Ok(store.start(&args.name()?, config, args.generation()?, now)?)
+    let mail = Mailbox::open_existing(home)?.ok_or_else(|| {
+        if team.is_some() {
+            crate::team::missing()
+        } else {
+            CliError {
+                code: "MAIL_IDENTITY_MISSING",
+                message: "register the explicit identity first".into(),
+            }
+        }
+    })?;
+    let agent = if let Some(team) = team {
+        let record = mail.team_member(&team, &member)?;
+        let key: Key = record["mail_key"]
+            .as_str()
+            .ok_or_else(|| input("member identity is missing"))?
+            .parse()?;
+        resolved.insert("--agent".into(), json!({"team":team.as_str(),"member":member.as_str(),"qualified":format!("{team}/{member}"),"mail_key":key.as_str()}));
+        key
+    } else {
+        member
+    };
+    mail.status(&agent)?;
+    Ok(Some(Configuration {
+        repository,
+        agent,
+        labels,
+    }))
+}
+
+// Match the bounded lane registry; optional display never enumerates beyond it.
+const MAX_RECIPIENT_NAMES: usize = 16;
+
+fn human_recipient_names(value: &mut Value, home: &Path) {
+    // Optional display metadata never becomes a dependency of saved delivery or
+    // machine-readable status. Stop on the first read/schema failure.
+    let Ok(Some(mail)) = Mailbox::open_existing(home) else {
+        return;
+    };
+    let Some(lanes) = value["lanes"].as_array_mut() else {
+        return;
+    };
+    for lane in lanes.iter_mut().take(MAX_RECIPIENT_NAMES) {
+        let Some(raw) = lane["agent"].as_str() else {
+            return;
+        };
+        let Ok(key) = raw.parse() else {
+            return;
+        };
+        match mail.qualified_member(&key) {
+            Ok(Some(qualified)) => lane["qualified_agent"] = json!(qualified),
+            Ok(None) => (),
+            Err(_) => return,
+        }
+    }
 }
 
 fn watch(
@@ -319,15 +405,16 @@ const COMMANDS: &[&str] = &[
 fn contract(operation: &str) -> Option<(&'static str, &'static [&'static str], &'static str)> {
     Some(match operation {
         "start" => (
-            "Create a durable repository/required-label-AND subscription, or resume by name and expected generation. Recipient session binding remains separate.",
+            "Create a NEW named repository/required-label-AND subscription for one registered identity or scope/member. --team qualifies a bare --agent; explicit scope/member wins. Roles confer no routing or authority. Existing recipients stay immutable. Resume using only name and expected generation; binding remains separate. Notifications retain the existing review request kind.",
             &[
                 "--name",
                 "--repo",
                 "--agent",
+                "--team",
                 "--label",
                 "--expected-generation",
             ],
-            "--name backend --repo example/widgets --agent reviewer --label review-ready --label backend",
+            "--name activity --repo example/widgets --team alpha --agent member-a --label activity-ready",
         ),
         "update" => (
             "Replace required labels under a generation guard; preserve still-matching PR cursors and all durable delivery intent.",
@@ -340,7 +427,7 @@ fn contract(operation: &str) -> Option<(&'static str, &'static [&'static str], &
             "--name backend --expected-generation 1",
         ),
         "status" => (
-            "Inspect bounded lane health, last complete discovery, initializations, failures and provider cooldown. Use queue for independent PR progress.",
+            "Inspect bounded subscription health and provider cooldown. Human output optionally identifies a team member using read-only name metadata; unavailable metadata leaves the stored key visible. JSON retains raw keys and does not access optional mail metadata. Use queue for PR progress.",
             &["--name"],
             "--name backend",
         ),
@@ -370,7 +457,7 @@ fn help(operation: &str, json_output: bool) -> Result<String, CliError> {
     };
     let (summary, flags, example) = if operation.is_empty() {
         (
-            "Durable named reviewer lanes discover and follow many PRs; session binding, receipt and review completion remain separate.",
+            "Durable named PR subscriptions for explicit recipients; roles confer no authority. Session binding, receipt and request completion remain separate. Notifications retain the review kind.",
             &[][..],
             "",
         )
@@ -456,6 +543,9 @@ fn errors(operation: &str) -> Vec<&'static str> {
             "MAIL_STORAGE",
             "MAIL_SCHEMA",
             "MAIL_IDENTITY_MISSING",
+            "TEAM_NOT_FOUND",
+            "TEAM_MEMBER_MISSING",
+            "TEAM_SCHEMA",
         ]),
         "update" | "stop" => errors.push("LANE_CONFLICT"),
         "status" | "queue" => errors.push("LANE_NOT_FOUND"),
