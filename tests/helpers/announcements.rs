@@ -584,7 +584,6 @@ impl Announcements {
         let body = self.input("notice");
         let mut args = vec![
             "team",
-            "--json",
             "announce",
             "--team",
             "epic",
@@ -600,6 +599,7 @@ impl Announcements {
         }
         self.results
             .insert("too_many_roles".into(), self.call(&args));
+        self.record_overflow_formats();
         for (label, text) in [("oversized", "é".repeat(4097)), ("blank", " \n".into())] {
             let body = self.input(&text);
             self.results.insert(
@@ -646,6 +646,55 @@ impl Announcements {
             .insert("read_created_state".into(), json!(absent.exists()));
     }
 
+    fn record_overflow_formats(&mut self) {
+        let absent = self.home.join("overflow-must-not-create");
+        let mut args = vec![
+            "team",
+            "--json",
+            "announce",
+            "--team",
+            "epic",
+            "--from",
+            "author",
+            "--id",
+            "overflow-format",
+            "--body-file",
+            "/nonexistent-synthetic-notice",
+        ];
+        args.extend(["--home", absent.to_str().unwrap()]);
+        let roles = (0..17)
+            .flat_map(|_| ["--role", "selected"])
+            .collect::<Vec<_>>();
+        let mut results = Vec::new();
+        for selectors in [
+            roles,
+            vec!["--all", "--all"],
+            vec!["--include-self", "--include-self"],
+        ] {
+            for tail in [
+                &["--format", "human"][..],
+                &["--format", "human", "--json"],
+                &["--format", "json"],
+            ] {
+                let words = args
+                    .iter()
+                    .chain(selectors.iter())
+                    .chain(tail.iter())
+                    .map(|s| (*s).to_owned())
+                    .collect::<Vec<_>>();
+                let output = std::process::Command::new(env!("CARGO_BIN_EXE_merl"))
+                    .args(&words)
+                    .output()
+                    .unwrap();
+                results.push(json!({"exit":output.status.code(),"stdout":String::from_utf8(output.stdout).unwrap(),"stderr":String::from_utf8(output.stderr).unwrap()}));
+            }
+        }
+        self.results
+            .insert("overflow_formats".into(), json!(results));
+        self.results
+            .insert("overflow_created_state".into(), json!(absent.exists()));
+    }
+
     pub fn then_only_bounded_complete_snapshots_exist_and_detail_reads_are_pure(self) {
         assert_eq!(self.results["maximum"]["recipient_count"], 100);
         assert_eq!(
@@ -665,6 +714,25 @@ impl Announcements {
             "member-100"
         );
         assert_eq!(self.results["too_many_roles"]["code"], "TEAM_INPUT");
+        for (index, output) in self.results["overflow_formats"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(output["exit"], 2);
+            if index % 3 == 0 {
+                assert_eq!(output["stdout"], "");
+                assert!(output["stderr"].as_str().unwrap().contains("TEAM_INPUT"));
+            } else {
+                assert_eq!(output["stderr"], "");
+                let error: Value =
+                    serde_json::from_str(output["stdout"].as_str().unwrap()).unwrap();
+                assert_eq!(error["schema"], "merl.error/v1");
+                assert_eq!(error["code"], "TEAM_INPUT");
+            }
+        }
+        assert_eq!(self.results["overflow_created_state"], false);
         for label in ["oversized", "blank"] {
             assert_eq!(self.results[label]["code"], "MAIL_INPUT");
         }

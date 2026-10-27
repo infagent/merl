@@ -39,6 +39,8 @@ pub(super) fn execute(
     let mut options = BTreeMap::new();
     let mut refs = Vec::new();
     let mut roles = Vec::new();
+    let mut role_overflow = false;
+    let mut duplicate_selector = false;
     let mut words = Vec::new();
     let mut help = a[0] == "help";
     let mut i = if help { 2 } else { 1 };
@@ -56,7 +58,7 @@ pub(super) fn execute(
             "--help" | "-h" => help = true,
             flag @ ("--all" | "--include-self") => {
                 if options.insert(flag, "").is_some() {
-                    return Err(input("duplicate option"));
+                    duplicate_selector = true;
                 }
             }
             flag @ ("--home" | "--config" | "--name" | "--coordinator" | "--scope-file"
@@ -67,9 +69,10 @@ pub(super) fn execute(
                 let value = a.get(i).ok_or_else(|| input("option requires a value"))?;
                 if flag == "--role" {
                     if roles.len() >= MAX_ROLE_FILTERS {
-                        return Err(input("at most 16 supplied roles"));
+                        role_overflow = true;
+                    } else {
+                        roles.push(value.clone());
                     }
-                    roles.push(value.clone());
                 } else if flag == "--guidance-ref" {
                     if refs.len() >= MAX_REFS {
                         return Err(input("at most 16 guidance references"));
@@ -83,6 +86,14 @@ pub(super) fn execute(
             word => words.push(word),
         }
         i += 1;
+    }
+    // Keep collection bounded, but finish parsing output flags before reporting
+    // overflow. No resource access occurs before this raw-occurrence check.
+    if duplicate_selector {
+        return Err(input("duplicate option"));
+    }
+    if role_overflow {
+        return Err(input("at most 16 supplied roles"));
     }
     if words.len() > 1 {
         return Err(input("load one team operation at a time"));
