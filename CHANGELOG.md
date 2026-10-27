@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/infagent/merl/compare/v0.3.0...v0.4.0) (2026-10-27)
+
+
+### Features
+
+* add persistent teams and cross-scope mail ([#162](https://github.com/infagent/merl/issues/162)) ([e84a35c](https://github.com/infagent/merl/commit/e84a35c37693c584babdac7f717dbebd39dee299))
+* add shared setup summaries and read-only status ([#159](https://github.com/infagent/merl/issues/159)) ([0e19161](https://github.com/infagent/merl/commit/0e19161839bba143412c5fb627f9c2b8b2614379))
+* add usage primer and canonical merl startup skill ([#164](https://github.com/infagent/merl/issues/164)) ([4ca17bc](https://github.com/infagent/merl/commit/4ca17bc9856255ab6c4d7fdc69e4359405653665))
+* publish atomic team announcements ([#166](https://github.com/infagent/merl/issues/166)) ([ebae102](https://github.com/infagent/merl/commit/ebae1028077daaefbcbd91c227bcecb9c6a30e78))
+* support qualified PR subscription recipients ([#168](https://github.com/infagent/merl/issues/168)) ([17aa24d](https://github.com/infagent/merl/commit/17aa24d182d5dbf2f9309293c6fe681d21f86eaf))
+
 ## [0.3.0](https://github.com/infagent/merl/compare/v0.2.0...v0.3.0) (2026-10-26)
 
 
