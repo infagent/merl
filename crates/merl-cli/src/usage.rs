@@ -26,7 +26,8 @@ const PRIMER: &str = "Merl: start an existing agent and hand work to one owner.\
    merl mail status --agent SCOPE/NAME\n\
    merl mail list --agent SCOPE/NAME --pending\n\
    merl mail list --agent SCOPE/NAME --outstanding\n\
-   Drain pending pages, read each ID, persist a checkpoint, then receipt.\n\
+   Use inline bodies; fetch overflow. Otherwise drain/read pending mail.\n\
+   Checkpoint, then merl mail handle --agent SCOPE/NAME --ids ID,ID --read --receipt\n\
    Receipt and replies do not complete work; use explicit mail complete.\n\n\
 5. Optional host delivery\n\
    merl help mail bind               Existing UUID/socket and current generation required.\n\

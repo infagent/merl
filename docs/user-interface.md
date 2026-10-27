@@ -22,6 +22,7 @@ Mail and lane commands require an absolute mailbox home, supplied with `--home` 
 | `mail show --agent NAME --id ID` | Inspect one addressed body without marking it read |
 | `mail read --agent NAME --id ID` | Read and idempotently mark it read |
 | `mail receipt --agent NAME --id ID` | Record application receipt and stop retries; no reply or completion |
+| `mail handle --agent NAME --ids ID,ID --read --receipt` | Atomically record explicitly selected facts for consumed/checkpointed content; no bodies or acknowledgment mail |
 | `mail complete --agent NAME --id ID [--reply ID]` | Explicitly complete one addressed coordination request |
 | `mail status --agent NAME` | Report binding, unread, unreceipted, outstanding and last notification independently |
 | `mail dispatch --codex PATH` | Perform one bounded due-notification pass |
@@ -30,6 +31,14 @@ Mail and lane commands require an absolute mailbox home, supplied with `--home` 
 `send` labels are `assign`, `ready`, `review`, `blocked`, `question`, `reply` and `note`. The first five are coordination requests. A reply requires `--in-reply-to ID`, reverses the original endpoints and closes nothing by itself. Completion may link a matching reply. An exact send retry is `unchanged`; altered content under the same ID conflicts.
 
 Lists accept at most one of `--unread`, `--pending` or `--outstanding`. Without a filter they show all addressed headers. `--limit` is 1..100. Follow `next_after` with `--after`; a cursor from another recipient is invalid. Pending includes interrupted reads without receipt, and outstanding includes receipted unfinished requests. Read and receipt timestamps preserve their first values on retry.
+
+`handle` accepts 1..100 unique comma-separated IDs and at least one independent `--read`, `--receipt` or `--complete`. Empty segments, duplicate/excess IDs, foreign/missing deliveries, nonrequest completion and invalid completion replies fail the whole transaction without partial handling. `--reply` requires explicit `--complete` and exactly one ID; it links an already published reply, with the same immutable-retry rules as `complete`. Reply publication remains `send`. Output uses `merl.mail/v1`, action `mail.handle`, outcome `handled`, recipient and per-ID first timestamps, without bodies. Existing handling APIs stay unchanged.
+
+## Inline host mail
+
+The supported Codex adapter sends `merl.notification/v1` JSON: `home`, stable `agent`, `binding_generation`, ordered `messages`, `handle`, `more` and instructions. At most eight messages and 16 KiB cover the entire serialized UTF-8 wake, including escaping/paths/references. Each message has its ID, sender, kind, reply link and creation time, with either an exact complete `body` or a `fetch` argv array for `show`. Recipient is inherited from `agent`; volatile handling timestamps remain in explicit CLI results. `more` is a pending-list argv array after the last selected ID, or null. Ordered IDs identify this selection; retries rebuild a fresh bounded snapshot, not necessarily identical notice bytes.
+
+Use complete bodies directly, fetch actual overflow, and checkpoint before explicit receipt. Suggested `handle` selects only complete inline bodies and is null when none fit. Notice construction/enqueue never records read/receipt/completion. Do not receipt omitted content from its header. The body-free wake contract is deliberately superseded: inline content reaches the selected host's context/retention. [ADR 0012](adr/0012-bounded-inline-mail.md) defines bounds, plaintext exposure and recovery. Existing list/show/read remain usable; a full short notice requires no mandatory fetch.
 
 ## Teams
 
@@ -156,7 +165,7 @@ Important errors include missing identity, incorrect recipient, changed immutabl
 
 ## Notification and lifecycle
 
-Notification states include `pending`, `dispatching`, `offline`, `failed`, `stale_binding`, `pointer_limit` and `enqueued`. A superseded host attempt reports its host outcome while preserving a new pending batch. These are transport facts. Receipt and completed work remain separate.
+Notification states include `pending`, `dispatching`, `offline`, `failed`, `stale_binding`, `pointer_limit` and `enqueued`. A dispatch selection that became fully receipted returns `obsolete` without claiming or contacting the host; it does not rewrite historical notification state. A superseded host attempt reports its host outcome while preserving a new pending batch. These are transport facts. Receipt and completed work remain separate. Already host-accepted queued events cannot be retracted through the supported queue interface; reconcile stale IDs with checkpoints rather than repeat work/fetches or routine acknowledgment narration.
 
 Use an absolute Codex executable and an explicitly supplied existing session UUID/socket. A host restart or socket replacement requires explicit rebinding. No substitute context is started. The watcher prints startup status, reports transient contention and resumes, and leaves durable work for restart. Stop only the foreground process you started with Ctrl-C or SIGTERM. No service is installed and no unrelated watcher is stopped.
 

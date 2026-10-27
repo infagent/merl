@@ -3,6 +3,74 @@ mod mail;
 
 use mail::Mailbox;
 
+#[cfg(unix)]
+#[test]
+fn a_short_assignment_arrives_inline_without_implicitly_handling_the_work() {
+    Mailbox::given_three_named_agents("inline-short")
+        .given_a_bound_recipient_and_unavailable_host()
+        .when_a_short_assignment_is_delivered()
+        .then_its_complete_content_is_available_without_an_inbox_read();
+}
+
+#[test]
+fn compact_handling_is_explicit_atomic_and_keeps_completion_separate() {
+    Mailbox::given_three_named_agents("compact-handling")
+        .when_inline_messages_are_handled_together_and_retried()
+        .then_only_the_selected_handling_facts_change_atomically();
+}
+
+#[test]
+fn compact_completion_preserves_reply_retries_and_rejects_invalid_mixed_selections() {
+    Mailbox::given_three_named_agents("compact-replies")
+        .when_compact_completion_is_retried_with_valid_and_invalid_selections()
+        .then_retries_keep_the_original_link_and_failed_batches_change_nothing();
+}
+
+#[cfg(unix)]
+#[test]
+fn inline_notices_bound_escaped_bytes_and_leave_omitted_content_fetchable() {
+    Mailbox::given_three_named_agents("inline-overflow")
+        .given_a_bound_recipient_and_unavailable_host()
+        .when_large_unicode_and_escaped_messages_exceed_one_notice()
+        .then_complete_bodies_and_exact_fetch_references_cover_the_bounded_selection();
+}
+
+#[cfg(unix)]
+#[test]
+fn receipt_stops_new_dispatches_but_cannot_retract_host_accepted_duplicates() {
+    Mailbox::given_three_named_agents("accepted-duplicates")
+        .given_a_bound_recipient_and_unavailable_host()
+        .when_a_busy_host_accepts_duplicates_before_receipt()
+        .then_accepted_events_can_be_obsolete_without_a_new_dispatch();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_selected_recipient_receipted_during_another_host_call_is_skipped() {
+    Mailbox::given_three_named_agents("obsolete-selection")
+        .given_a_bound_recipient_and_unavailable_host()
+        .when_a_later_recipient_receipts_mail_during_host_io()
+        .then_that_obsolete_selection_creates_no_host_event();
+}
+
+#[cfg(unix)]
+#[test]
+fn handling_an_inline_selection_does_not_receipt_mail_that_arrives_later() {
+    Mailbox::given_three_named_agents("selected-new-mail")
+        .given_a_bound_recipient_and_unavailable_host()
+        .when_more_mail_arrives_before_the_inline_selection_is_handled()
+        .then_only_consumed_ids_are_receipted_and_later_content_is_delivered();
+}
+
+#[cfg(unix)]
+#[test]
+fn an_oversized_minimal_fetch_reference_remains_pending_without_a_host_call() {
+    Mailbox::given_three_named_agents("reference-limit")
+        .given_a_bound_recipient_and_unavailable_host()
+        .when_even_a_fetch_reference_exceeds_the_notice_budget()
+        .then_the_limit_is_reported_without_discarding_or_handling_mail();
+}
+
 #[test]
 fn receipt_and_reply_do_not_complete_an_assignment() {
     Mailbox::given_three_named_agents("lifecycle")
