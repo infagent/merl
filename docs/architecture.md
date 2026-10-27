@@ -59,6 +59,16 @@ Qualified mail resolves each explicit scope/member endpoint independently. An op
 
 ## Handling and pagination
 
+[ADR 0009](adr/0009-atomic-team-announcements.md) adds bounded informational
+announcements in mail-v1. A filtered snapshot of 1..100 recipients, strictly fresh
+ordinary notes, handling rows and coalesced notification intents commit in one
+immediate transaction. Body-file reads and candidate acquisition occur outside
+it. Any pre-commit failure rolls back the entire publication. Accepted-ID retries
+compare immutable inputs before roster expansion and retain original child IDs;
+concurrent exact callers observe one accepted snapshot. Read-only lookup exposes
+accepted metadata and mappings without body or group handling state. Existing
+message retry, receipt, completion and dispatch semantics remain unchanged.
+
 Reading sets an idempotent timestamp. Receipt records application handling and stops notification retries for that ID, without creating reply mail. Completion is an explicit operation on an addressed request; a supplied completion reply must match that delivery. Reply linkage alone completes nothing.
 
 Lists return at most 100 headers in commit order with a continuation cursor. Bodies are loaded individually and limited to 8192 UTF-8 bytes. `--pending` includes read-but-unreceipted mail; `--outstanding` includes receipted unfinished requests. A wake instructs the agent to drain all pending pages and persist its own work checkpoints before relying on receipt.

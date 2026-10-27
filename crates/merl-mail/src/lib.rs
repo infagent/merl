@@ -4,6 +4,7 @@
 //! identity claims are audit labels, not authentication against same-user code.
 //! Message bytes commit atomically with notification intent; host I/O is separate.
 
+pub mod announcement;
 mod delivery;
 pub mod team;
 
@@ -259,59 +260,9 @@ impl Mailbox {
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        for agent in [&draft.from, &draft.to] {
-            require_identity(&tx, agent)?;
-        }
-        let existing: Option<(String, String, String, String, Option<String>)> = tx
-            .query_row(
-                "SELECT sender,recipient,kind,body,reply FROM messages WHERE id=?1",
-                [draft.id.as_str()],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-            )
-            .optional()?;
-        if let Some(old) = existing {
-            if old
-                != (
-                    draft.from.0.clone(),
-                    draft.to.0.clone(),
-                    draft.kind.clone(),
-                    draft.body.clone(),
-                    draft.reply.as_ref().map(|k| k.0.clone()),
-                )
-            {
-                return Err(failure(
-                    "MAIL_ID_CONFLICT",
-                    "message ID already names different immutable content",
-                ));
-            }
-            return Ok(json!({"outcome":"unchanged","id":draft.id.as_str()}));
-        }
-        if let Some(reply) = &draft.reply {
-            let endpoints: Option<(String, String)> = tx
-                .query_row(
-                    "SELECT sender,recipient FROM messages WHERE id=?1",
-                    [reply.as_str()],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?;
-            if endpoints != Some((draft.to.0.clone(), draft.from.0.clone())) {
-                return Err(failure(
-                    "MAIL_REPLY_MISMATCH",
-                    "reply must return to the author of a message addressed to this sender",
-                ));
-            }
-        }
-        let already_pending:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM messages m JOIN handling h ON h.message=m.id WHERE m.recipient=?1 AND h.received_at IS NULL)",[draft.to.as_str()],|r|r.get(0))?;
-        tx.execute("INSERT INTO messages(id,sender,recipient,kind,body,reply,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![draft.id.as_str(),draft.from.as_str(),draft.to.as_str(),draft.kind,draft.body,draft.reply.as_ref().map(Key::as_str),now])?;
-        tx.execute(
-            "INSERT INTO handling(message) VALUES(?1)",
-            [draft.id.as_str()],
-        )?;
-        // New mail joins an existing pending notification window. Once every
-        // earlier delivery is receipted, a new batch must become due immediately.
-        tx.execute("INSERT INTO notifications(agent,state,next_at) VALUES(?1,'pending',?2) ON CONFLICT(agent) DO UPDATE SET state=CASE WHEN ?3 THEN state ELSE 'pending' END,next_at=CASE WHEN ?3 THEN next_at ELSE excluded.next_at END,attempts=CASE WHEN ?3 THEN attempts ELSE 0 END",params![draft.to.as_str(),now,already_pending])?;
+        let result = publish(&tx, draft, now, false)?;
         tx.commit()?;
-        Ok(json!({"outcome":"sent","id":draft.id.as_str()}))
+        Ok(result)
     }
 
     /// Lists bounded headers in commit order without marking them read.
@@ -524,4 +475,70 @@ fn private_directory(path: &Path) -> Result<(), MailError> {
     }
     builder.create(path)?;
     Ok(())
+}
+
+fn publish(
+    tx: &rusqlite::Transaction<'_>,
+    draft: &Draft,
+    now: i64,
+    fresh: bool,
+) -> Result<Value, MailError> {
+    for agent in [&draft.from, &draft.to] {
+        require_identity(tx, agent)?;
+    }
+    let existing: Option<(String, String, String, String, Option<String>)> = tx
+        .query_row(
+            "SELECT sender,recipient,kind,body,reply FROM messages WHERE id=?1",
+            [draft.id.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?;
+    if let Some(old) = existing {
+        if fresh {
+            return Err(failure(
+                "TEAM_MESSAGE_CONFLICT",
+                "candidate message ID already exists",
+            ));
+        }
+        if old
+            != (
+                draft.from.0.clone(),
+                draft.to.0.clone(),
+                draft.kind.clone(),
+                draft.body.clone(),
+                draft.reply.as_ref().map(|k| k.0.clone()),
+            )
+        {
+            return Err(failure(
+                "MAIL_ID_CONFLICT",
+                "message ID already names different immutable content",
+            ));
+        }
+        return Ok(json!({"outcome":"unchanged","id":draft.id.as_str()}));
+    }
+    if let Some(reply) = &draft.reply {
+        let endpoints: Option<(String, String)> = tx
+            .query_row(
+                "SELECT sender,recipient FROM messages WHERE id=?1",
+                [reply.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        if endpoints != Some((draft.to.0.clone(), draft.from.0.clone())) {
+            return Err(failure(
+                "MAIL_REPLY_MISMATCH",
+                "reply must return to the author of a message addressed to this sender",
+            ));
+        }
+    }
+    let already_pending:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM messages m JOIN handling h ON h.message=m.id WHERE m.recipient=?1 AND h.received_at IS NULL)",[draft.to.as_str()],|r|r.get(0))?;
+    tx.execute("INSERT INTO messages(id,sender,recipient,kind,body,reply,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![draft.id.as_str(),draft.from.as_str(),draft.to.as_str(),draft.kind,draft.body,draft.reply.as_ref().map(Key::as_str),now])?;
+    tx.execute(
+        "INSERT INTO handling(message) VALUES(?1)",
+        [draft.id.as_str()],
+    )?;
+    // New mail joins an existing pending notification window. Once every
+    // earlier delivery is receipted, a new batch must become due immediately.
+    tx.execute("INSERT INTO notifications(agent,state,next_at) VALUES(?1,'pending',?2) ON CONFLICT(agent) DO UPDATE SET state=CASE WHEN ?3 THEN state ELSE 'pending' END,next_at=CASE WHEN ?3 THEN next_at ELSE excluded.next_at END,attempts=CASE WHEN ?3 THEN attempts ELSE 0 END",params![draft.to.as_str(),now,already_pending])?;
+    Ok(json!({"outcome":"sent","id":draft.id.as_str()}))
 }

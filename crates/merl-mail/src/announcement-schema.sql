@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS merl_announcement_meta(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL);
+INSERT OR IGNORE INTO merl_announcement_meta(id,version) VALUES(1,1);
+CREATE TABLE IF NOT EXISTS merl_announcements(id TEXT PRIMARY KEY,team TEXT NOT NULL REFERENCES merl_teams(name),author_team TEXT NOT NULL,author_member TEXT NOT NULL,author_key TEXT NOT NULL REFERENCES identities(name),body TEXT NOT NULL,selector TEXT NOT NULL,include_self INTEGER NOT NULL,created_at INTEGER NOT NULL,FOREIGN KEY(author_team,author_member) REFERENCES merl_team_members(team,member));
+CREATE TABLE IF NOT EXISTS merl_announcement_recipients(announcement TEXT NOT NULL REFERENCES merl_announcements(id),member TEXT NOT NULL,mail_key TEXT NOT NULL REFERENCES identities(name),message TEXT NOT NULL UNIQUE REFERENCES messages(id),PRIMARY KEY(announcement,member));

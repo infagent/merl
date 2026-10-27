@@ -26,7 +26,7 @@ Release distribution provides version-bound Linux/macOS binaries and an optional
 
 [#161](https://github.com/infagent/merl/issues/161) adds shared scope, durable member guidance, paged scope/roster discovery, optional project references and independently qualified individual mail. A project-wide member can coordinate several epic scopes without duplicate membership; roles and coordinator metadata stay optional. Atomic membership/fresh-identity creation preserves legacy mail compatibility and rejects foreign identity adoption. The CLI onboarding is usable without a skill. General edit/removal lifecycle is deferred.
 
-Next, [#163](https://github.com/infagent/merl/issues/163) adds pure `merl usage` and the short `/merl` / `$merl` startup with its bounded canonical/retained-legacy setup transition. This uses the merged scope/mail foundation and is independent of the remaining informational snapshot notices and explicit new team-targeted PR lanes; existing lane recipients remain immutable. These follow-ups remain product commitments, not automatic authorization for a release, global setup or runtime migration.
+Merged [#163](https://github.com/infagent/merl/issues/163) adds pure `merl usage` and the short `/merl` / `$merl` startup with its bounded canonical/retained-legacy setup transition. This uses the merged scope/mail foundation. [#165](https://github.com/infagent/merl/issues/165) adds atomic informational snapshot notices and read-only accepted-snapshot inspection. Explicit new team-targeted PR lanes remain later work; existing lane recipients remain immutable. These follow-ups remain product commitments, not automatic authorization for a release, global setup or runtime migration.
 
 ## Later decisions
 

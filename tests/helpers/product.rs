@@ -51,8 +51,8 @@ impl Product {
         );
         assert_eq!(
             self.help.len(),
-            32,
-            "root, three groups, twenty-five operations, init, status, and usage"
+            34,
+            "root, three groups, twenty-seven operations, init, status, and usage"
         );
         for (topic, value, human) in &self.help {
             assert_eq!(value["schema"], "merl.help/v1");

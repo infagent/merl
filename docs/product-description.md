@@ -20,6 +20,12 @@ The recipient can page through unreceipted messages, unread messages, or unfinis
 
 [Teams](teams.md) persist user-chosen shared scope and a roster with optional free-form roles, saved starting guidance and inert document pointers. Explicitly qualified members have distinct stable mail identities across teams and host-session replacement. Optional project references support multi-scope discovery; a project-wide member can contact epic members without joining those scopes. Coordinator and role metadata are optional, with no fixed role list or required organization. Handoffs keep one named recipient; receipt and replies never complete another member's request. The coordinator label follows local project convention and adds no authentication or merge authority. See [ADR 0007](adr/0007-persistent-teams.md).
 
+Informational announcements select 1..100 members of one scope and publish an
+immutable snapshot of individually addressed notes atomically. Exact retries
+retain original recipients and child IDs after later joins. Receipt and work
+completion remain individual; no group assignment or group completion is added.
+See [announcements](teams.md#informational-announcements).
+
 ## Notification
 
 The operator supplies an existing Codex session UUID and local Unix control socket. A generation guard rejects stale binding changes, and a socket fingerprint prevents a replaced host endpoint from silently inheriting a registration. Only the configured exact session is targeted.
