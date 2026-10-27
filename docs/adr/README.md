@@ -9,6 +9,7 @@
 - [ADR 0008: Short startup guidance and safe canonical skill setup](0008-usage-and-startup.md)
 - [ADR 0009: Atomic informational team announcements](0009-atomic-team-announcements.md)
 - [ADR 0010: Qualified recipients for new PR subscriptions](0010-qualified-subscription-recipients.md)
+- [ADR 0011: Reuse setup and retire owned legacy aliases](0011-reuse-setup-and-retire-owned-aliases.md)
 
 ## Superseded historical records
 

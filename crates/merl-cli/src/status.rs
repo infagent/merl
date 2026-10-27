@@ -97,13 +97,7 @@ pub(super) fn observe(config: &Path, source: &str) -> Result<Value, CliError> {
     let next = match observed.state {
         SetupState::NotConfigured => "merl init",
         SetupState::Incomplete => "merl help init",
-        SetupState::Configured => {
-            if guidance == "foreground" {
-                "merl help mail bind"
-            } else {
-                "merl help mail"
-            }
-        }
+        SetupState::Configured => "merl usage",
     };
     let mut issues = Vec::new();
     if observed.pending {
@@ -170,7 +164,7 @@ pub(super) fn preview(
     removing: bool,
 ) -> Result<Value, CliError> {
     let changes = plan.changes(hosts)?;
-    let skills = changes.iter().filter_map(|change|change.host.as_ref().map(|host|json!({"host":host,"path":change.path,"state":"proposed","action":action_name(change.action,false),"retained_legacy":change.retained_legacy,"ownership":ownership_name(change.ownership)}))).collect::<Vec<_>>();
+    let skills = changes.iter().filter_map(|change|change.host.as_ref().map(|host|json!({"host":host,"path":change.path,"state":"proposed","action":if change.action==Change::Remove && change.ownership==Ownership::Pending {"will finish removal"} else {action_name(change.action,false)},"retained_legacy":change.retained_legacy,"ownership":ownership_name(change.ownership)}))).collect::<Vec<_>>();
     let config_action = changes
         .iter()
         .find(|change| change.path == config)

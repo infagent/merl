@@ -20,7 +20,7 @@ merl --version
 merl help
 ```
 
-The installer uses `~/.local/bin`, verifies the archive checksum and version before replacing a regular file, and prints PATH guidance. It then offers reusable `merl init` setup through the controlling terminal: matching Codex/Claude skills, a durable mailbox default, and optional dispatcher start instructions. Use `--no-setup` for binary-only installation. Setup never starts a service or guesses a session. Guided setup requires a release containing #155; v0.2.0 and earlier installers are binary-only. See [installation](docs/installation.md) for exact versions, supported Linux/macOS baselines, manual downloads, optional skill setup and uninstall.
+The installer uses `~/.local/bin`, verifies the archive checksum and version before replacing a regular file, and prints PATH guidance. Supporting releases then reuse current setup or offer first-time `merl init` through the controlling terminal: matching Codex/Claude skills, a durable mailbox default, and optional dispatcher start instructions. Use `--no-setup` for binary-only installation. Setup never starts a service or guesses a session. Guided setup requires a release containing #155; v0.2.0 and earlier installers are binary-only. A release containing #169 reuses saved choices, skips questions for current setup and previews removal of verified owned legacy skill aliases before one apply confirmation. See [installation](docs/installation.md) for exact versions, supported Linux/macOS baselines, manual downloads, optional skill setup and uninstall.
 
 To build from source, install the toolchain in `rust-toolchain.toml`:
 

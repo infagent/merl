@@ -49,7 +49,18 @@ Mail labels identify coordination requests or information. They do not confer pr
 
 ## Usage and canonical startup
 
-[ADR 0008](adr/0008-usage-and-startup.md) adds pure usage documentation and a short canonical skill. Both route to existing CLI contracts; no startup action infers roles, scope or sessions. Canonical publication reuses the settings lock and file journal, with receipt v2 adding a bounded retained-legacy association. Intent commits before canonical files and config last. Unmanaged legacy content is not journaled; unchanged owned/borrowed legacy entries keep their ownership and bytes. Config v1 remains readable by old mail tools, while old initializers reject v2. Incomplete v1 migration fails before writes; safe v1 uninstall keeps its version. Shared status rendering distinguishes both skill paths without runtime probes.
+[ADR 0008](adr/0008-usage-and-startup.md) adds pure usage documentation and a short canonical skill. Both route to existing CLI contracts; no startup action infers roles, scope or sessions. Canonical publication reuses the settings lock and file journal, with receipt v2 adding a bounded retained-legacy association. Intent commits before canonical files, followed by config publication and then any consented alias retirement under ADR 0011. Unmanaged legacy content is not journaled; borrowed/unmanaged aliases remain retained. Config v1 remains readable by old mail tools, while initializers through v0.3.0 reject v2. Incomplete v1 migration fails before writes; safe v1 uninstall keeps its version. Shared status rendering distinguishes both skill paths without runtime probes.
+
+[ADR 0011](adr/0011-reuse-setup-and-retire-owned-aliases.md) adds effect-based
+setup reuse and consented retirement of unchanged owned legacy aliases. A current
+plan skips locks and journal writes, independent of binary version. Existing
+choices feed a specific preview and one apply decision; the installer delegates
+optional first entry through `init --offer`, with a pure older-binary capability
+fallback. Canonical files and saved settings precede alias removal. Existing v2
+owned remove intent stays durable through unlink and owned empty-directory
+removal; file/alias/directory acknowledgment precedes the completion marker.
+Borrowed/unmanaged aliases are retained, recorded edits still fail closed, and
+runtime state remains unobserved. Configured guidance points to `merl usage`.
 
 ## Shared teams
 

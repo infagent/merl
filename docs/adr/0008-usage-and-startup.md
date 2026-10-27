@@ -2,6 +2,10 @@
 
 Status: accepted scope for #163
 
+The later [ADR 0011](0011-reuse-setup-and-retire-owned-aliases.md) supersedes
+blanket retention for unchanged receipt-owned installed aliases after a concrete
+preview and consent. Borrowed/unmanaged retention and edit protection remain.
+
 Date: 2026-10-27
 
 ## Decision

@@ -247,7 +247,7 @@ pub fn resolve_home(home: Option<&str>, config: Option<&str>) -> Result<PathBuf,
 /// Version-bound generated skill used for installation and safe upgrades.
 #[derive(Clone, Copy, Debug)]
 pub struct Bundle<'a> {
-    /// Application version used in the receipt.
+    /// Application version recorded when a real setup change is applied.
     pub version: &'a str,
     /// Exact bundled skill bytes, as UTF-8.
     pub skill: &'a str,
@@ -271,7 +271,7 @@ pub struct FileChange {
     pub action: Change,
     /// Selected host, or `None` for settings.
     pub host: Option<String>,
-    /// True when retaining the known legacy skill beside the primary skill.
+    /// True for a known legacy alias, including proposed retirement.
     pub retained_legacy: bool,
     /// Existing ownership, independent of the proposed action.
     pub ownership: Ownership,
@@ -338,10 +338,21 @@ impl<'a> Plan<'a> {
         files::validate(&plan)?;
         Ok(plan)
     }
-    /// Applies the plan, reporting each durable file publication to the caller.
+    /// Reports actual setup effects or unfinished intent without taking a lock.
+    ///
+    /// A release version alone does not require setup when files are current.
+    ///
+    /// # Errors
+    /// Returns preflight errors, or `INIT_INPUT` for a removal plan.
+    pub fn needs_apply(&self) -> Result<bool, SetupError> {
+        files::needed(self)
+    }
+
+    /// Applies the plan, reporting durable file and retired-directory changes.
     ///
     /// The callback supports progress and cancellation. Its error stops setup;
     /// retrying this plan resumes recorded intent without adopting borrowed files.
+    /// An already-current plan returns `false` without locks or receipt writes.
     /// No mailbox contents or host executables are accessed.
     ///
     /// # Errors

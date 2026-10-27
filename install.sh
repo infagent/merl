@@ -36,7 +36,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         --help|-h)
             printf '%s\n' 'Usage: sh install.sh [--version vMAJOR.MINOR.PATCH] [--bin-dir /absolute/directory] [--setup|--no-setup] [--unattended] [-- INIT_ARGS...]' \
-                'Default: latest release into ~/.local/bin, then offer user setup on the controlling terminal.' \
+                'Default: latest release into ~/.local/bin, then reuse saved setup or offer first setup on the controlling terminal.' \
                 'Without a terminal, or with --unattended, default to binary-only. --setup explicitly invokes merl init.' \
                 'Unattended setup needs --yes (or --show/--dry-run); forward choices after --. No sudo or service installation.'
             exit 0
@@ -128,7 +128,11 @@ printf '%s\n' 'Verify: merl --version; merl help' \
 terminal=no
 if [ "$unattended" = no ] && ( : < /dev/tty ) 2>/dev/null; then terminal=yes; fi
 if [ "$setup_mode" = offer ]; then
-    if [ "$terminal" = yes ]; then
+    if [ "$terminal" = yes ] && "$destination" init --offer --help >/dev/null 2>&1; then
+        # The initializer owns saved-state assessment and the one apply decision.
+        "$destination" init --offer || fail "verified binary remains installed at $destination; setup incomplete. Retry $destination init with the same choices."
+        setup_mode=no
+    elif [ "$terminal" = yes ]; then
         printf 'Run guided setup now? [y/N]: ' > /dev/tty
         answer=
         IFS= read -r answer < /dev/tty || answer=
@@ -150,7 +154,7 @@ if [ "$setup_mode" = yes ]; then
             case $argument in
                 --home|--config|--host|--dispatcher|--codex-skills-dir|--claude-skills-dir|--format) needs_value=yes;;
                 --yes|--show|--dry-run) safe_input=yes;;
-                --global|--uninstall|--json|--help|-h) ;;
+                --global|--uninstall|--offer|--json|--help|-h) ;;
                 *) fail "verified binary remains installed at $destination; setup incomplete: unrecognized unattended init argument";;
             esac
         done
